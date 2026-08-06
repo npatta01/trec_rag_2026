@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import io
 import json
+import multiprocessing
 from pathlib import Path
+import queue
 import tarfile
 from types import SimpleNamespace
 
@@ -112,6 +115,40 @@ def _pretty_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _multiprocess_merge_worker(
+    cache_root: str,
+    outputs_root: str,
+    bundle: str,
+    start: object,
+    results: object,
+    pause_after_score_import: object | None = None,
+    release_after_score_import: object | None = None,
+) -> None:
+    """Run one real process-level merge for the WAL publication regression."""
+    try:
+        if not start.wait(10):
+            raise RuntimeError("multiprocess merge start barrier timed out")
+
+        def publication_hook(phase: str) -> None:
+            if not phase.startswith("score-imported:"):
+                return
+            if pause_after_score_import is None or release_after_score_import is None:
+                return
+            pause_after_score_import.set()
+            if not release_after_score_import.wait(10):
+                raise RuntimeError("score-import release barrier timed out")
+
+        receipt = merge_bundles(
+            cache_root=Path(cache_root),
+            outputs_root=Path(outputs_root),
+            bundle_dirs=(Path(bundle),),
+            publication_hook=publication_hook,
+        )
+        results.put(("ok", receipt.merge_id))
+    except BaseException as exc:  # pragma: no cover - asserted in the parent
+        results.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
 def _online_cache_operation_receipt_bytes(
     *,
     config_sha256: str,
@@ -148,6 +185,11 @@ def _use_synthetic_checkpoint_validator(
     monkeypatch.setattr(
         bundle_module,
         "_validate_production_topic_checkpoint",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        bundle_module,
+        "_validate_extracted_offline_replay",
         lambda *_args, **_kwargs: None,
     )
 
@@ -267,7 +309,11 @@ nuggets:
                         if phase == "retrieval"
                         else {}
                     ),
-                    "phase": "retrieve" if phase == "retrieval" else phase,
+                    "phase": {
+                        "retrieval": "retrieve",
+                        "scoring": "score",
+                        "canonical": "canonical",
+                    }[phase],
                     "topic_id": "rag2026-0",
                 }
             )
@@ -563,6 +609,28 @@ def test_pack_is_byte_reproducible_and_verify_is_manifest_driven(
     assert "outputs/shard-fixture/rag2026-0/retrieval/complete.json" in {
         member.path for member in verified.members
     }
+
+
+def test_pack_publishes_nothing_when_offline_replay_validation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    destination = (tmp_path / "bundle").resolve()
+
+    def reject_replay(*_args, **_kwargs):
+        raise CacheBundleIntegrityError("offline replay fixture rejected")
+
+    monkeypatch.setattr(
+        bundle_module,
+        "_validate_extracted_offline_replay",
+        reject_replay,
+    )
+
+    with pytest.raises(CacheBundleIntegrityError, match="offline replay"):
+        pack_bundle(config, "rag2026-0", destination)
+
+    assert tuple(destination.iterdir()) == ()
 
 
 def test_pack_includes_online_operation_receipt_but_not_root_exports(
@@ -1063,6 +1131,26 @@ def test_verify_enforces_member_and_decompression_bounds(
         verify_bundle(empty)
 
 
+def test_verify_rejects_compressed_portable_score_above_parser_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b"x" * 4096
+    path = f"portable-scores/{'a' * 64}.jsonl"
+    bundle = _write_manual_bundle(
+        tmp_path / "portable-score",
+        declarations=[_declaration(path, body, kind="score")],
+        entries=[(_tar_entry(path, body), body)],
+    )
+    monkeypatch.setattr(bundle_module, "MAX_PORTABLE_SCORE_BYTES", 1024)
+
+    with pytest.raises(
+        CacheBundleIntegrityError,
+        match="portable score member size limit",
+    ):
+        verify_bundle(bundle)
+
+
 def test_verify_rejects_prohibited_cache_member_even_when_self_declared(
     tmp_path: Path,
 ) -> None:
@@ -1319,7 +1407,7 @@ def test_merge_retry_converges_from_durable_prepare_journal(tmp_path: Path) -> N
     assert_no_incomplete_cache_bundle_merge(cache_root)
 
 
-def test_concurrent_identical_merge_adopts_authenticated_completion_winner(
+def test_identical_merge_retry_adopts_authenticated_completion(
     tmp_path: Path,
 ) -> None:
     config = _write_fixture(tmp_path / "repo")
@@ -1327,35 +1415,170 @@ def test_concurrent_identical_merge_adopts_authenticated_completion_winner(
     pack_bundle(config, "rag2026-0", bundle)
     cache_root = (tmp_path / "merged-cache").resolve()
     outputs_root = (tmp_path / "merged-outputs").resolve()
-    competing_receipts = []
-    winning_completion_bytes = []
-
-    def complete_competing_merge(phase: str) -> None:
-        if phase != "prepare":
-            return
-        receipt = merge_bundles(
-            cache_root=cache_root,
-            outputs_root=outputs_root,
-            bundle_dirs=(bundle,),
-        )
-        competing_receipts.append(receipt)
-        winning_completion_bytes.append(receipt.completion_path.read_bytes())
-
-    resumed = merge_bundles(
+    first = merge_bundles(
         cache_root=cache_root,
         outputs_root=outputs_root,
         bundle_dirs=(bundle,),
-        publication_hook=complete_competing_merge,
     )
+    completion_bytes = first.completion_path.read_bytes()
     retried = merge_bundles(
         cache_root=cache_root,
         outputs_root=outputs_root,
         bundle_dirs=(bundle,),
     )
 
-    assert len(competing_receipts) == 1
-    assert resumed == competing_receipts[0] == retried
-    assert resumed.completion_path.read_bytes() == winning_completion_bytes[0]
+    assert first == retried
+    assert first.completion_path.read_bytes() == completion_bytes
+    assert_no_incomplete_cache_bundle_merge(cache_root)
+
+
+def test_merge_verifies_bundles_before_acquiring_the_destination_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    events: list[str] = []
+    original_verify = bundle_module.verify_bundle
+    original_serialized = bundle_module._serialized_merge
+
+    def traced_verify(path):
+        events.append("verify")
+        return original_verify(path)
+
+    @contextmanager
+    def traced_serialized(cache_root):
+        events.append("lock")
+        with original_serialized(cache_root):
+            yield
+
+    monkeypatch.setattr(bundle_module, "verify_bundle", traced_verify)
+    monkeypatch.setattr(bundle_module, "_serialized_merge", traced_serialized)
+
+    merge_bundles(
+        cache_root=(tmp_path / "cache").resolve(),
+        outputs_root=(tmp_path / "outputs").resolve(),
+        bundle_dirs=(bundle,),
+    )
+
+    assert events[:2] == ["verify", "lock"]
+
+
+def test_merge_lock_rejects_same_thread_reentry_without_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_root = (tmp_path / "cache").resolve()
+    monkeypatch.setattr(bundle_module.fcntl, "flock", lambda *_args: None)
+
+    with bundle_module._serialized_merge(cache_root):
+        with pytest.raises(CacheBundleIntegrityError, match="not reentrant"):
+            with bundle_module._serialized_merge(cache_root):
+                pytest.fail("same-thread nested merge acquired its own lock")
+
+
+def test_invalid_bundle_creates_no_destination_or_merge_lock(
+    tmp_path: Path,
+) -> None:
+    destination_parent = tmp_path / "destinations"
+
+    with pytest.raises(CacheBundleIntegrityError):
+        merge_bundles(
+            cache_root=(destination_parent / "cache").resolve(),
+            outputs_root=(destination_parent / "outputs").resolve(),
+            bundle_dirs=(tmp_path / "missing-bundle",),
+        )
+
+    assert not destination_parent.exists()
+
+
+def test_concurrent_score_merge_cannot_publish_while_first_merge_is_midflight(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    context = ScoreCacheContext(
+        backend="fixture-backend",
+        model="fixture-model",
+        max_length=128,
+        score_kind="passage",
+        model_revision="fixture-revision",
+        backend_version="1.0",
+        score_representation="raw_logits",
+        inference_dtype="float32",
+        input_policy="trec_rag_whitespace_v1",
+    )
+    source = GlobalScoreCache(config.parent / "cache/reranker", context)
+    source.seed_many(
+        [("query", "passage", 1.25)],
+        source_path="multiprocess-source",
+        source_sha256="1" * 64,
+    )
+    source.close()
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "merged-cache").resolve()
+    outputs_root = (tmp_path / "merged-outputs").resolve()
+    process_context = multiprocessing.get_context("fork")
+    first_start = process_context.Event()
+    second_start = process_context.Event()
+    paused = process_context.Event()
+    release = process_context.Event()
+    results = process_context.Queue()
+    first = process_context.Process(
+        target=_multiprocess_merge_worker,
+        args=(
+            str(cache_root),
+            str(outputs_root),
+            str(bundle),
+            first_start,
+            results,
+            paused,
+            release,
+        ),
+    )
+    second = process_context.Process(
+        target=_multiprocess_merge_worker,
+        args=(
+            str(cache_root),
+            str(outputs_root),
+            str(bundle),
+            second_start,
+            results,
+        ),
+    )
+    processes = (first, second)
+    first.start()
+    first_start.set()
+    assert paused.wait(10), "first merge never reached its score-import boundary"
+    second.start()
+    second_start.set()
+    try:
+        early = results.get(timeout=0.5)
+    except queue.Empty:
+        early = None
+    finally:
+        release.set()
+    for process in processes:
+        process.join(30)
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+            pytest.fail("multiprocess merge worker timed out")
+        assert process.exitcode == 0
+    assert early is None, f"a competing merge published while midflight: {early}"
+    outcomes = tuple(results.get(timeout=5) for _ in processes)
+    assert {status for status, _payload in outcomes} == {"ok"}
+    assert len({payload for _status, payload in outcomes}) == 1
+
+    imported = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
+    try:
+        assert imported.get(query_text="query", text="passage") == 1.25
+        database = imported.path
+    finally:
+        imported.close()
+    assert not Path(f"{database}-wal").exists()
+    assert not Path(f"{database}-shm").exists()
     assert_no_incomplete_cache_bundle_merge(cache_root)
 
 

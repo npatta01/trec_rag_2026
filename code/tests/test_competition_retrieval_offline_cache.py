@@ -134,7 +134,9 @@ def test_runner_refuses_incomplete_merge_before_dependency_construction(
 ) -> None:
     """Catches a partially merged cache reaching client or model factories."""
     config = _config(tmp_path)
-    monkeypatch.setattr(competition_retrieval, "load_facet_pilot_config", lambda *_a, **_k: config)
+    monkeypatch.setattr(
+        competition_retrieval, "load_facet_pilot_config", lambda *_a, **_k: config
+    )
 
     def reject_merge(_cache_root):
         raise RuntimeError("incomplete cache bundle merge")
@@ -217,8 +219,12 @@ def test_offline_production_worker_constructs_only_read_only_dependencies(
     )
 
     passage = SimpleNamespace(identity={"passage": "identity"}, stats={})
-    sentence = SimpleNamespace(identity={"sentence": "identity"}, accounting=SimpleNamespace())
-    similarity = SimpleNamespace(identity={"similarity": "identity"}, accounting=SimpleNamespace())
+    sentence = SimpleNamespace(
+        identity={"sentence": "identity"}, accounting=SimpleNamespace()
+    )
+    similarity = SimpleNamespace(
+        identity={"similarity": "identity"}, accounting=SimpleNamespace()
+    )
 
     def passage_factory(*_args, **kwargs):
         calls["passage"] = kwargs
@@ -232,7 +238,9 @@ def test_offline_production_worker_constructs_only_read_only_dependencies(
         calls["similarity"] = kwargs
         return similarity
 
-    monkeypatch.setattr(competition_retrieval, "MixedbreadPassageScorer", passage_factory)
+    monkeypatch.setattr(
+        competition_retrieval, "MixedbreadPassageScorer", passage_factory
+    )
     monkeypatch.setattr(
         competition_retrieval,
         "MixedbreadSentencePairScorer",
@@ -290,7 +298,9 @@ def test_offline_production_worker_constructs_only_read_only_dependencies(
     assert calls["sentence"]["read_only"] is True
     assert calls["similarity"]["cache_only"] is True
     assert calls["similarity"]["cache_root"] == tmp_path / "cache"
-    assert (job.topic_root / "canonical" / "retrieval-projection-manifest.json").is_file()
+    assert (
+        job.topic_root / "canonical" / "retrieval-projection-manifest.json"
+    ).is_file()
 
 
 def test_offline_decomposition_requires_the_planning_cache_without_a_backend(
@@ -405,9 +415,10 @@ def test_offline_topic_and_root_receipts_authenticate_zero_work_and_order(
     }
     content = dict(manifest)
     digest = content.pop("receipt_content_sha256")
-    assert digest == sha256(
-        competition_retrieval._json_bytes(content, pretty=False)
-    ).hexdigest()
+    assert (
+        digest
+        == sha256(competition_retrieval._json_bytes(content, pretty=False)).hexdigest()
+    )
 
     bad_stages = {name: dict(values) for name, values in stages_a.items()}
     bad_stages["retrieval"]["network_calls"] = 1
@@ -426,9 +437,7 @@ def test_offline_topic_and_root_receipts_authenticate_zero_work_and_order(
             },
             stages=bad_stages,
         )
-    assert not (
-        config.output_dir / "topic-c" / "cache-operation-receipt.json"
-    ).exists()
+    assert not (config.output_dir / "topic-c" / "cache-operation-receipt.json").exists()
 
 
 def test_offline_document_admission_writes_only_to_the_private_stage(
@@ -475,7 +484,7 @@ def test_offline_stage_uses_versioned_source_cas_and_bypasses_cache_override(
     topic = Topic("topic-a", "", "cache replay narrative")
     job = _job(config)
     shared_cache = tmp_path / "merged-cache"
-    monkeypatch.setenv("TREC_RAG_CACHE_ROOT", str(shared_cache))
+    monkeypatch.setenv("TREC_RAG_CACHE_ROOT", str(tmp_path / "poison-cache"))
     source_store = DocumentStore(shared_cache / "documents" / "v1")
     source_text = "cached source document"
     source_receipt = source_store.admit_text(source_text)
@@ -486,8 +495,11 @@ def test_offline_stage_uses_versioned_source_cas_and_bypasses_cache_override(
             shared_cache / "documents" / "v1"
         )
         stage_document_root = kwargs["offline_stage_document_store_root"]
-        assert stage_document_root == staged_config.root_dir / "cache" / "documents" / "v1"
+        assert (
+            stage_document_root == staged_config.root_dir / "cache" / "documents" / "v1"
+        )
         assert not stage_document_root.is_relative_to(shared_cache)
+        assert kwargs["runtime_cache_root"] == staged_config.root_dir / "cache"
         store = competition_retrieval._OfflineStagingDocumentStore(
             source_root=kwargs["offline_source_document_store_root"],
             stage_root=stage_document_root,
@@ -516,6 +528,7 @@ def test_offline_stage_uses_versioned_source_cas_and_bypasses_cache_override(
             dependencies,
             config_sha256=job.config_sha256,
             expected_retriever_identity={"type": "test"},
+            source_cache_root=shared_cache,
         )
         assert outcome.topic_id == topic.id
         assert job.topic_root.is_dir()
@@ -529,6 +542,7 @@ def test_offline_stage_uses_versioned_source_cas_and_bypasses_cache_override(
                 dependencies,
                 config_sha256=job.config_sha256,
                 expected_retriever_identity={"type": "test"},
+                source_cache_root=shared_cache,
             )
         assert not job.topic_root.exists()
 
@@ -571,7 +585,9 @@ def test_offline_stage_rejects_a_shared_cache_that_contains_its_output_root(
         )
 
     assert not job.topic_root.exists()
-    assert not any(path.name.startswith(".offline-cache-") for path in tmp_path.iterdir())
+    assert not any(
+        path.name.startswith(".offline-cache-") for path in tmp_path.iterdir()
+    )
 
 
 def test_offline_stage_recovers_a_fully_validated_published_topic(
@@ -982,7 +998,9 @@ def test_offline_publication_exdev_leaves_no_topic_or_private_stage(
 
     assert caught.value.errno == errno.EXDEV
     assert not job.topic_root.exists()
-    assert not any(path.name.startswith(".offline-cache-") for path in tmp_path.iterdir())
+    assert not any(
+        path.name.startswith(".offline-cache-") for path in tmp_path.iterdir()
+    )
 
 
 def test_offline_publication_without_renameat2_preserves_the_private_tree(

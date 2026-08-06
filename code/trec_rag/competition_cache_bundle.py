@@ -9,7 +9,9 @@ as a separate canonical receipt.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+import fcntl
 import gzip
 import hashlib
 import io
@@ -21,6 +23,7 @@ import sqlite3
 import stat
 import tarfile
 import tempfile
+import threading
 from typing import Any, BinaryIO, Callable, Sequence
 import unicodedata
 from urllib.parse import quote
@@ -51,6 +54,13 @@ MERGE_CONFLICTS_NAME = "conflicts.json"
 MAX_COMPRESSED_BYTES = 8 * 1024 * 1024 * 1024
 MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024 * 1024
 MAX_MEMBER_BYTES = 4 * 1024 * 1024 * 1024
+# Portable score exports are parsed into authenticated Python records before a
+# transactional SQLite import.  Keep their independent ceiling far below the
+# generic archive-member limit so a highly compressible JSONL member cannot
+# turn verification into unbounded memory growth.
+MAX_PORTABLE_SCORE_BYTES = 256 * 1024 * 1024
+MAX_PORTABLE_SCORE_LINE_BYTES = 1024 * 1024
+MAX_PORTABLE_SCORE_ROWS = 1_000_000
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 MAX_MEMBERS = 1_000_000
 MAX_ZSTD_WINDOW_BYTES = 128 * 1024 * 1024
@@ -87,6 +97,7 @@ _FORBIDDEN_PARTS = frozenset(
         "raw",
         "responses",
         "provider-responses",
+        "topic-state",
         "work",
     }
 )
@@ -157,6 +168,7 @@ _LIVE_DECOMPOSITION_RESULT = "decomposition/result.json"
 _LIVE_DECOMPOSITION_MANIFEST = "decomposition/manifest.json"
 _SEED_DECOMPOSITION_MANIFEST = "planning-seed-manifest.json"
 _SEED_DECOMPOSITION_RECEIPT = "planning-seed-receipt.json"
+_MERGE_LOCK_STATE = threading.local()
 
 
 class CacheBundleError(RuntimeError):
@@ -444,13 +456,15 @@ def _validate_archive_path(name: str, seen: dict[str, str]) -> str:
 
 def _is_forbidden(relative: PurePosixPath) -> bool:
     folded = tuple(part.casefold() for part in relative.parts)
+    if any(part.startswith(".") for part in folded):
+        return True
     if any(
         part in _FORBIDDEN_PARTS or PurePosixPath(part).stem in _FORBIDDEN_PARTS
         for part in folded
     ):
         return True
     name = relative.name.casefold()
-    return name.startswith(".") or name.endswith(_FORBIDDEN_SUFFIXES)
+    return name.endswith(_FORBIDDEN_SUFFIXES)
 
 
 def _require_regular_source(path: Path, root: Path) -> None:
@@ -498,7 +512,10 @@ def _checkpoint_manifest_sources(topic_root: Path, phase: str) -> tuple[Path, ..
         not isinstance(value, dict)
         or not _canonical_or_pretty_json(value, body)
         or value.get("topic_id") != topic_root.name
-        or value.get("phase") != ("retrieve" if phase == "retrieval" else phase)
+        or value.get("phase")
+        != {"retrieval": "retrieve", "scoring": "score", "canonical": "canonical"}[
+            phase
+        ]
     ):
         raise CacheBundleIntegrityError(
             f"selected topic {phase} checkpoint manifest is invalid"
@@ -1503,6 +1520,19 @@ def _pack_validated_sources(
                 "topic_id": receipt.topic_id,
             }
         )
+        (
+            verified_experiment_id,
+            verified_config_sha256,
+            verified_members,
+        ) = _verify_receipted_archive(temporary_archive, receipt)
+        if (
+            verified_experiment_id != config.experiment.id
+            or verified_config_sha256 != config_sha256
+            or verified_members != tuple(source.public for source in sources)
+        ):
+            raise CacheBundleIntegrityError(
+                "packed bundle differs from its authenticated source closure"
+            )
         _publish_immutable(temporary_archive, bundle_dir / BUNDLE_ARCHIVE_NAME)
         marker_tmp = bundle_dir / f".{BUNDLE_COMPLETE_NAME}.{os.getpid()}.tmp"
         try:
@@ -1619,6 +1649,8 @@ def _parse_manifest(
         size = _require_nonnegative_int(row["size"], "bundle member size")
         if size > MAX_MEMBER_BYTES:
             raise CacheBundleIntegrityError("bundle member size limit exceeded")
+        if kind == "score" and size > MAX_PORTABLE_SCORE_BYTES:
+            raise CacheBundleIntegrityError("portable score member size limit exceeded")
         if row["mode"] != 0o600:
             raise CacheBundleIntegrityError("bundle member mode is not canonical")
         members.append(
@@ -2143,6 +2175,258 @@ def _validate_extracted_checkpoint(
         raise CacheBundleIntegrityError("checkpoint dispatch receipt is missing")
 
 
+def _import_extracted_score_members(
+    extraction_root: Path,
+    members: Sequence[BundleMember],
+) -> tuple[_ScoreOperation, ...]:
+    """Reconstitute portable score rows inside the isolated verifier cache."""
+    operations = tuple(
+        _ScoreOperation(
+            member=member,
+            staged_path=extraction_root.joinpath(*PurePosixPath(member.path).parts),
+        )
+        for member in members
+        if member.kind == "score"
+    )
+    try:
+        for operation in operations:
+            _import_score_operation(
+                operation,
+                cache_root=extraction_root / "cache",
+                conflict_policy="strict",
+            )
+        _checkpoint_score_operations(
+            operations,
+            cache_root=extraction_root / "cache",
+        )
+    except CacheBundleError:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError, RuntimeError) as exc:
+        raise CacheBundleIntegrityError(
+            "portable score members could not be reconstructed"
+        ) from exc
+    return operations
+
+
+def _offline_replay_topic(
+    config: FacetPilotConfig,
+    topic_id: str,
+):
+    """Recover and revalidate the exact topic identity from the sealed plan."""
+    from trec_rag.competition_retrieval import load_validated_decomposition
+    from trec_rag.topics import Topic
+
+    result_path = config.output_dir / topic_id / _LIVE_DECOMPOSITION_RESULT
+    result = _strict_json(result_path.read_bytes(), "live decomposition result")
+    if not isinstance(result, dict) or not isinstance(result.get("topic"), dict):
+        raise CacheBundleIntegrityError("live decomposition topic is invalid")
+    topic_value = result["topic"]
+    if set(topic_value) != {"id", "narrative"}:
+        raise CacheBundleIntegrityError("live decomposition topic is invalid")
+    narrative = topic_value.get("narrative")
+    if (
+        topic_value.get("id") != topic_id
+        or not isinstance(narrative, str)
+        or not narrative.strip()
+    ):
+        raise CacheBundleIntegrityError("live decomposition topic is invalid")
+    if any(character in narrative for character in "\t\r\n"):
+        raise CacheBundleIntegrityError(
+            "live decomposition narrative contains TSV control characters"
+        )
+    topic = Topic(topic_id, "", narrative)
+    try:
+        load_validated_decomposition(topic, result_path)
+    except (OSError, TypeError, ValueError) as exc:
+        raise CacheBundleIntegrityError(
+            "live decomposition cannot recover the official topic"
+        ) from exc
+    return topic
+
+
+def _validate_extracted_offline_replay(
+    extraction_root: Path,
+    *,
+    config: FacetPilotConfig,
+    config_bytes: bytes,
+    topic_id: str,
+    members: Sequence[BundleMember],
+) -> None:
+    """Prove that this shard alone can execute a fresh cache-only topic run."""
+    from trec_rag import competition_retrieval
+    from trec_rag.evidence_local import (
+        LocalMiniLMSimilarity,
+        MixedbreadSentencePairScorer,
+    )
+    from trec_rag.mixedbread_passage_scorer import MixedbreadPassageScorer
+
+    _import_extracted_score_members(extraction_root, members)
+    topic = _offline_replay_topic(config, topic_id)
+    topic_root = config.output_dir / topic_id
+    canonical = _strict_json(
+        (topic_root / "canonical/complete.json").read_bytes(),
+        "canonical checkpoint manifest",
+    )
+    retrieval = _strict_json(
+        (topic_root / "retrieval/complete.json").read_bytes(),
+        "retrieval checkpoint manifest",
+    )
+    if not isinstance(canonical, dict) or not isinstance(retrieval, dict):
+        raise CacheBundleIntegrityError("topic checkpoint identity is invalid")
+    official_topics_sha256 = canonical.get("official_topics_sha256")
+    code_commit = canonical.get("code_commit")
+    expected_retriever_identity = retrieval.get("retriever")
+    if (
+        not isinstance(official_topics_sha256, str)
+        or len(official_topics_sha256) != _HEX_DIGEST_LENGTH
+        or any(
+            character not in "0123456789abcdef" for character in official_topics_sha256
+        )
+        or not isinstance(code_commit, str)
+        or len(code_commit) != 40
+        or any(character not in "0123456789abcdef" for character in code_commit)
+        or not isinstance(expected_retriever_identity, dict)
+        or not isinstance(expected_retriever_identity.get("index_url"), str)
+        or not expected_retriever_identity["index_url"]
+    ):
+        raise CacheBundleIntegrityError("topic checkpoint identity is invalid")
+
+    replay_root = extraction_root / ".offline-replay-validation"
+    replay_root.mkdir()
+    source_cache = extraction_root / "cache"
+    try:
+        topics_relative = config.topics_path.relative_to(extraction_root)
+    except ValueError as exc:
+        raise CacheBundleIntegrityError("source topic path is not portable") from exc
+    replay_topics = replay_root / topics_relative
+    replay_topics.parent.mkdir(parents=True, exist_ok=True)
+    if replay_topics.suffix.casefold() == ".tsv":
+        replay_topics.write_text(
+            f"{topic.id}\t{topic.narrative}\n",
+            encoding="utf-8",
+        )
+    else:
+        replay_topics.write_bytes(
+            _canonical_json({"id": topic.id, "narrative": topic.narrative})
+        )
+    retrieval_relative = config.retrieval.cache_dir.relative_to(source_cache)
+    score_relative = config.passage.score_cache_dir.relative_to(source_cache)
+    replay_config = replace(
+        config,
+        root_dir=replay_root,
+        topics_path=replay_topics,
+        retrieval=replace(
+            config.retrieval,
+            cache_dir=source_cache / retrieval_relative,
+        ),
+        passage=replace(
+            config.passage,
+            score_cache_dir=source_cache / score_relative,
+        ),
+    )
+
+    class _ForbiddenTransportClient:
+        def __init__(self, index_url: str) -> None:
+            self.config = type(
+                "_IdentityConfig",
+                (),
+                {"index_url": index_url},
+            )()
+
+        def search_raw(self, *_args: object, **_kwargs: object) -> object:
+            raise CacheBundleIntegrityError(
+                "bundle cache replay attempted a network request"
+            )
+
+    def reject_model_load(*_args: object, **_kwargs: object) -> object:
+        raise CacheBundleIntegrityError("bundle cache replay attempted to load a model")
+
+    passage_scorer = None
+    candidate_scorer = None
+    try:
+        retriever = competition_retrieval.build_pyserini_retriever(
+            replay_config.retrieval.cache_dir,
+            index=replay_config.retrieval.index,
+            hits=replay_config.retrieval.documents_per_query,
+            corpus_epoch=replay_config.retrieval.corpus_epoch,
+            client=_ForbiddenTransportClient(expected_retriever_identity["index_url"]),
+            cache_only=True,
+        )
+        actual_retriever_identity = competition_retrieval._retriever_identity(
+            retriever,
+            retrieval_depth=replay_config.retrieval.documents_per_query,
+        )
+        if actual_retriever_identity != expected_retriever_identity:
+            raise CacheBundleIntegrityError(
+                "cache-only retriever identity differs from the sealed checkpoint"
+            )
+        passage_scorer = MixedbreadPassageScorer(
+            replay_config.passage.score_cache_dir,
+            device=replay_config.passage.device,
+            model_loader=reject_model_load,
+            read_only=True,
+        )
+        candidate_scorer = MixedbreadSentencePairScorer(
+            score_cache_root=replay_config.passage.score_cache_dir,
+            device=replay_config.passage.device,
+            model_loader=reject_model_load,
+            read_only=True,
+        )
+        similarity = LocalMiniLMSimilarity(
+            device=replay_config.passage.device,
+            loader=reject_model_load,
+            cache_root=source_cache,
+            cache_only=True,
+        )
+        dependencies = competition_retrieval._RuntimeDependencies(
+            code_commit=code_commit,
+            document_scorer=passage_scorer,
+            candidate_scorer=candidate_scorer,
+            similarity=similarity,
+            cache_ignore_checker=None,
+            planning_backend=None,
+            retriever=retriever,
+            canonical_backend_factory=None,
+        )
+        from trec_rag.topic_dispatch import TopicJob
+
+        job = TopicJob(
+            topic_id=topic_id,
+            run_id=replay_config.run_id,
+            config_path=(extraction_root / "source-config/config.yaml").resolve(),
+            config_bytes=config_bytes,
+            config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+            topic_root=(replay_config.output_dir / topic_id).resolve(),
+            offline_cache_only=True,
+        )
+        outcome = competition_retrieval._run_offline_topic_staged(
+            job,
+            topic,
+            replay_config,
+            official_topics_sha256,
+            dependencies,
+            config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+            expected_retriever_identity=expected_retriever_identity,
+            source_cache_root=source_cache,
+        )
+        if outcome.topic_id != topic_id:
+            raise CacheBundleIntegrityError(
+                "bundle cache replay produced a different topic"
+            )
+    except CacheBundleError:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError, RuntimeError) as exc:
+        raise CacheBundleIntegrityError(
+            "bundle is incomplete for a fresh offline cache replay"
+        ) from exc
+    finally:
+        for scorer in (passage_scorer, candidate_scorer):
+            score_cache = getattr(scorer, "score_cache", None)
+            close = getattr(score_cache, "close", None)
+            if callable(close):
+                close()
+
+
 def _validate_extracted_semantics(
     extraction_root: Path,
     *,
@@ -2164,31 +2448,28 @@ def _validate_extracted_semantics(
         topic_id=topic_id,
         members=members,
     )
-
-
-def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
-    """Authenticate structurally, then semantically stage in isolation."""
-    root = Path(bundle_dir)
-    if root.is_symlink() or not root.is_dir():
-        raise CacheBundleIntegrityError("bundle directory is missing or unsafe")
-    actual_names = {entry.name for entry in root.iterdir()}
-    expected_names = {BUNDLE_ARCHIVE_NAME, BUNDLE_COMPLETE_NAME}
-    if actual_names != expected_names:
-        raise CacheBundleIntegrityError(
-            "bundle directory contains undeclared files: "
-            f"{sorted(actual_names - expected_names)!r}"
-        )
-    receipt = _parse_complete(root)
-    experiment_id, source_config_sha256, members = _verify_archive(
-        root / BUNDLE_ARCHIVE_NAME, receipt
+    _validate_extracted_offline_replay(
+        extraction_root,
+        config=config,
+        config_bytes=config_bytes,
+        topic_id=topic_id,
+        members=members,
     )
-    # Hostile input completes an extraction-free pass first.  Only then is the
-    # same authenticated stream staged under an isolated temporary directory
-    # for cache/checkpoint semantic validation.
+
+
+def _verify_receipted_archive(
+    archive_path: Path,
+    receipt: BundleReceipt,
+) -> tuple[str, str, tuple[BundleMember, ...]]:
+    """Run both hostile-stream passes and the isolated semantic replay."""
+    experiment_id, source_config_sha256, members = _verify_archive(
+        archive_path,
+        receipt,
+    )
     with tempfile.TemporaryDirectory(prefix="trec-rag-bundle-verify-") as temporary:
         extraction_root = Path(temporary)
         staged_experiment, staged_config_sha256, staged_members = _verify_archive(
-            root / BUNDLE_ARCHIVE_NAME,
+            archive_path,
             receipt,
             extraction_root=extraction_root,
         )
@@ -2206,6 +2487,26 @@ def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
             experiment_id=experiment_id,
             members=members,
         )
+    return experiment_id, source_config_sha256, members
+
+
+def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
+    """Authenticate structurally, then semantically stage in isolation."""
+    root = Path(bundle_dir)
+    if root.is_symlink() or not root.is_dir():
+        raise CacheBundleIntegrityError("bundle directory is missing or unsafe")
+    actual_names = {entry.name for entry in root.iterdir()}
+    expected_names = {BUNDLE_ARCHIVE_NAME, BUNDLE_COMPLETE_NAME}
+    if actual_names != expected_names:
+        raise CacheBundleIntegrityError(
+            "bundle directory contains undeclared files: "
+            f"{sorted(actual_names - expected_names)!r}"
+        )
+    receipt = _parse_complete(root)
+    experiment_id, source_config_sha256, members = _verify_receipted_archive(
+        root / BUNDLE_ARCHIVE_NAME,
+        receipt,
+    )
     return VerifiedBundle(
         bundle_dir=root.resolve(),
         topic_id=receipt.topic_id,
@@ -2686,12 +2987,28 @@ def _portable_score_context_and_rows(source: Path):
         ScoreCacheContext,
     )
 
+    try:
+        size = source.stat().st_size
+    except OSError as exc:
+        raise CacheBundleIntegrityError(
+            "portable score JSONL could not be inspected"
+        ) from exc
+    if size > MAX_PORTABLE_SCORE_BYTES:
+        raise CacheBundleIntegrityError("portable score member size limit exceeded")
     raw = source.read_bytes()
+    if len(raw) != size:
+        raise CacheBundleIntegrityError(
+            "portable score JSONL changed while it was read"
+        )
     lines = raw.splitlines()
     if not lines or raw != b"\n".join(lines) + b"\n":
         raise CacheBundleIntegrityError(
             "portable score JSONL is not newline terminated"
         )
+    if len(lines) - 1 > MAX_PORTABLE_SCORE_ROWS:
+        raise CacheBundleIntegrityError("portable score row limit exceeded")
+    if any(len(line) > MAX_PORTABLE_SCORE_LINE_BYTES for line in lines):
+        raise CacheBundleIntegrityError("portable score line size limit exceeded")
     metadata = _require_exact_fields(
         _strict_json(lines[0], "portable score metadata"),
         {"context", "context_sha256", "portable_schema_version", "type"},
@@ -2902,6 +3219,56 @@ def _import_score_operation(
         cache.close()
 
 
+def _checkpoint_score_operations(
+    operations: Sequence[_ScoreOperation],
+    *,
+    cache_root: Path,
+) -> None:
+    """Make imported score databases self-contained for immutable readers."""
+    from trec_rag.rerank_score_cache import GlobalScoreCache
+
+    contexts: dict[str, object] = {}
+    for operation in operations:
+        context, _rows = _portable_score_context_and_rows(operation.staged_path)
+        contexts.setdefault(context.context_sha256, context)
+    for context in contexts.values():
+        try:
+            database = (cache_root / "reranker").joinpath(*context.path_parts)
+            uri = f"file:{quote(str(database.resolve()), safe='/')}?mode=rw"
+            connection = sqlite3.connect(uri, uri=True, isolation_level=None)
+            try:
+                result = connection.execute(
+                    "PRAGMA wal_checkpoint(TRUNCATE)"
+                ).fetchone()
+                if result is None or int(result[0]) != 0:
+                    raise CacheBundleIntegrityError(
+                        "score cache WAL checkpoint remained busy"
+                    )
+            finally:
+                connection.close()
+            sidecars = tuple(
+                Path(f"{database}{suffix}")
+                for suffix in ("-wal", "-shm")
+                if Path(f"{database}{suffix}").exists()
+            )
+            if sidecars:
+                raise CacheBundleIntegrityError(
+                    "score cache WAL sidecars remain before merge completion"
+                )
+            immutable = GlobalScoreCache(
+                cache_root / "reranker",
+                context,
+                read_only=True,
+            )
+            immutable.close()
+        except CacheBundleError:
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+            raise CacheBundleIntegrityError(
+                "score cache could not be checkpointed for immutable readers"
+            ) from exc
+
+
 def _reconcile_completed_score_operation(
     operation: _ScoreOperation,
     *,
@@ -2925,6 +3292,7 @@ def _reconcile_completed_score_operation(
             raise CacheBundleConflictError(
                 "completed merge score conflicts differ from authenticated audit"
             )
+        _checkpoint_score_operations((operation,), cache_root=cache_root)
         cache = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
         try:
             found = cache.lookup_many(
@@ -3101,6 +3469,46 @@ def _authenticate_completed_merge(
     return receipt
 
 
+@contextmanager
+def _serialized_merge(cache_root: Path):
+    """Serialize all bundle publications that can touch one score-cache root."""
+    active_roots = getattr(_MERGE_LOCK_STATE, "active_roots", None)
+    if active_roots is None:
+        active_roots = set()
+        _MERGE_LOCK_STATE.active_roots = active_roots
+    root_identity = str(cache_root)
+    if root_identity in active_roots:
+        raise CacheBundleIntegrityError("cache bundle merge is not reentrant")
+    active_roots.add(root_identity)
+    descriptor = None
+    try:
+        _secure_mkdir(cache_root)
+        lock_path = cache_root / ".cache-bundle-merge.lock"
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(lock_path, flags, 0o600)
+        except OSError as exc:
+            raise CacheBundleIntegrityError(
+                "cache bundle merge lock could not be opened safely"
+            ) from exc
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+            raise CacheBundleIntegrityError(
+                "cache bundle merge lock is not a user-owned regular file"
+            )
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        if descriptor is not None:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+        active_roots.remove(root_identity)
+
+
 def merge_bundles(
     *,
     cache_root: str | Path,
@@ -3109,16 +3517,20 @@ def merge_bundles(
     score_conflicts: str = "strict",
     publication_hook: Callable[[str], None] | None = None,
 ) -> MergeReceipt:
-    """Stage and converge verified bundle files under durable merge state."""
+    """Serialize and converge verified bundle files under durable merge state."""
     if score_conflicts not in {"strict", "keep-existing"}:
         raise ValueError("score_conflicts must be strict or keep-existing")
     if not bundle_dirs:
         raise ValueError("at least one bundle directory is required")
     cache_destination = _validate_destination_root(cache_root, "cache-root")
     outputs_destination = _validate_destination_root(outputs_root, "outputs-root")
+    active_roots = getattr(_MERGE_LOCK_STATE, "active_roots", set())
+    if str(cache_destination) in active_roots:
+        raise CacheBundleIntegrityError("cache bundle merge is not reentrant")
 
-    # No destination path is created until every hostile archive has completed
-    # a bounded, extraction-free validation pass.
+    # Fully verify every hostile archive before creating destination state or
+    # waiting on the destination publication lock. Staging re-authenticates the
+    # same archive bytes under the lock to close the mutation window.
     unique: dict[str, VerifiedBundle] = {}
     for raw_bundle in bundle_dirs:
         verified = verify_bundle(raw_bundle)
@@ -3131,6 +3543,27 @@ def merge_bundles(
     bundles = tuple(
         sorted(unique.values(), key=lambda item: (item.topic_id, item.archive_sha256))
     )
+    with _serialized_merge(cache_destination):
+        return _merge_bundles_under_lock(
+            cache_root=cache_destination,
+            outputs_root=outputs_destination,
+            bundles=bundles,
+            score_conflicts=score_conflicts,
+            publication_hook=publication_hook,
+        )
+
+
+def _merge_bundles_under_lock(
+    *,
+    cache_root: Path,
+    outputs_root: Path,
+    bundles: Sequence[VerifiedBundle],
+    score_conflicts: str = "strict",
+    publication_hook: Callable[[str], None] | None = None,
+) -> MergeReceipt:
+    """Stage and converge verified bundle files under durable merge state."""
+    cache_destination = cache_root
+    outputs_destination = outputs_root
     merge_id = _merge_id(
         bundles,
         cache_root=cache_destination,
@@ -3323,6 +3756,10 @@ def merge_bundles(
             score_import_count += 1
             if publication_hook is not None:
                 publication_hook(f"score-imported:{operation.member.sha256}")
+        _checkpoint_score_operations(
+            score_operations,
+            cache_root=cache_destination,
+        )
 
         installed = 0
         for operation in missing:

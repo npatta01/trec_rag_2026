@@ -293,7 +293,9 @@ class _DepthBoundExternalRetriever:
                 allow_nan=False,
             )
         except (TypeError, ValueError) as exc:
-            raise ValueError("external retriever identity must be canonical JSON") from exc
+            raise ValueError(
+                "external retriever identity must be canonical JSON"
+            ) from exc
         if json.loads(canonical_identity) != identity:
             raise ValueError("external retriever identity must be immutable JSON data")
         self._retriever = retriever
@@ -316,7 +318,9 @@ class _DepthBoundExternalRetriever:
                 allow_nan=False,
             )
         except (TypeError, ValueError) as exc:
-            raise ValueError("external retriever identity must be canonical JSON") from exc
+            raise ValueError(
+                "external retriever identity must be canonical JSON"
+            ) from exc
         if canonical != self._canonical_identity:
             raise ValueError("external retriever identity changed after construction")
 
@@ -324,7 +328,9 @@ class _DepthBoundExternalRetriever:
         self, query: QueryVariant, *, depth: int
     ) -> Sequence[RetrievedCandidate]:
         if depth != self._depth:
-            raise ValueError("shared passage search requested an unbound retrieval depth")
+            raise ValueError(
+                "shared passage search requested an unbound retrieval depth"
+            )
         self._validate_current_identity()
         if self._continuation_required:
             raise OrganizerRequestTerminal(
@@ -348,7 +354,9 @@ class _DepthBoundExternalRetriever:
 class _SealedPassageSearchAdapter:
     """Pure score-phase adapter that only returns decoded checkpoint rows."""
 
-    def __init__(self, results: Sequence[PassageSearchResult], document_store: DocumentStore):
+    def __init__(
+        self, results: Sequence[PassageSearchResult], document_store: DocumentStore
+    ):
         self._results = {result.query.query_id: result for result in results}
         self._document_store = document_store
 
@@ -396,7 +404,9 @@ def load_validated_decomposition(
         or saved_topic.get("narrative") != topic.narrative
         or root["narrative_sha256"] != digest
     ):
-        raise ValueError("saved decomposition differs from the exact official narrative")
+        raise ValueError(
+            "saved decomposition differs from the exact official narrative"
+        )
     original = QueryVariant(topic.id, "original", topic.narrative, "original_topic")
     if root["used_fallback"] is True:
         error = root["error"]
@@ -426,10 +436,9 @@ def load_validated_decomposition(
         raise ValueError("saved decomposition failed deterministic plan validation")
     if root["queries"] != jsonable(rendered.queries):
         raise ValueError("saved rendered queries differ from deterministic rendering")
-    if (
-        root["subnarratives"] != jsonable(rendered.subnarratives)
-        or root["plan"] != _plan_payload(rendered.plan)
-    ):
+    if root["subnarratives"] != jsonable(rendered.subnarratives) or root[
+        "plan"
+    ] != _plan_payload(rendered.plan):
         raise ValueError("saved plan records differ from deterministic rendering")
     return ValidatedDecomposition(topic.id, digest, _hash(source), rendered)
 
@@ -445,8 +454,14 @@ def decode_retrieval_decomposition(
         raise ValueError("receipted decomposition size is invalid")
     root = _loads(source, "receipted decomposition")
     fields = {
-        "schema_version", "topic_id", "narrative", "narrative_sha256",
-        "source_sha256", "queries", "plan", "subnarratives",
+        "schema_version",
+        "topic_id",
+        "narrative",
+        "narrative_sha256",
+        "source_sha256",
+        "queries",
+        "plan",
+        "subnarratives",
     }
     narrative_sha256 = _hash(topic.narrative.encode("utf-8"))
     if (
@@ -491,12 +506,20 @@ def decode_retrieval_audit(
     requested_depth: int,
 ) -> tuple[ValidatedRetrievalAuditLane, ...]:
     """Strictly decode retrieval audit rows against canonical plan lanes."""
-    if isinstance(requested_depth, bool) or not isinstance(requested_depth, int) or requested_depth <= 0:
+    if (
+        isinstance(requested_depth, bool)
+        or not isinstance(requested_depth, int)
+        or requested_depth <= 0
+    ):
         raise ValueError("retrieval audit requested depth is invalid")
     root = _loads(source, "retrieval audit")
     expected_fields = {
-        "schema_version", "topic_id", "narrative_sha256",
-        "decomposition_source_sha256", "requested_depth", "lanes",
+        "schema_version",
+        "topic_id",
+        "narrative_sha256",
+        "decomposition_source_sha256",
+        "requested_depth",
+        "lanes",
         "passage_search_results",
     }
     expected_lanes = build_retrieval_lanes(
@@ -519,8 +542,13 @@ def decode_retrieval_audit(
         raise ValueError("retrieval audit identity or lane set changed")
     decoded: list[ValidatedRetrievalAuditLane] = []
     lane_fields = {
-        "lane_name", "subnarrative_id", "bm25_query_sha256",
-        "semantic_query_sha256", "returned_count", "retained_count", "candidates",
+        "lane_name",
+        "subnarrative_id",
+        "bm25_query_sha256",
+        "semantic_query_sha256",
+        "returned_count",
+        "retained_count",
+        "candidates",
     }
     candidate_fields = {"docid", "bm25_rank", "bm25_score", "text_sha256"}
     for raw, lane, passage_raw in zip(
@@ -551,10 +579,13 @@ def decode_retrieval_audit(
             score = value.get("bm25_score")
             text_sha256 = value.get("text_sha256")
             if (
-                not isinstance(docid, str) or not docid or docid in seen
+                not isinstance(docid, str)
+                or not docid
+                or docid in seen
                 or type(value.get("bm25_rank")) is not int
                 or value["bm25_rank"] != rank
-                or isinstance(score, bool) or not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not isinstance(score, (int, float))
                 or not math.isfinite(score)
                 or not isinstance(text_sha256, str)
                 or not re.fullmatch(r"[0-9a-f]{64}", text_sha256)
@@ -563,9 +594,7 @@ def decode_retrieval_audit(
                     "duplicate or invalid retrieval audit topic-document candidate"
                 )
             seen.add(docid)
-            candidates.append(
-                RetrievalAuditCandidate(docid, rank, score, text_sha256)
-            )
+            candidates.append(RetrievalAuditCandidate(docid, rank, score, text_sha256))
         passage_result = _decode_passage_result(passage_raw)
         if (
             passage_result.query.query_id != lane.retrieval_query.variant_name
@@ -647,15 +676,26 @@ def _decode_passage_result(value: object) -> PassageSearchResult:
     if not isinstance(value, dict):
         raise ValueError("passage search result must be an object")
     expected = {
-        "query", "status", "stopping_reason", "requested_documents",
-        "returned_documents", "scored_documents", "scored_passages",
-        "documents", "passages", "attempt_count", "source_exhausted",
+        "query",
+        "status",
+        "stopping_reason",
+        "requested_documents",
+        "returned_documents",
+        "scored_documents",
+        "scored_passages",
+        "documents",
+        "passages",
+        "attempt_count",
+        "source_exhausted",
     }
     if set(value) != expected or not isinstance(value.get("query"), dict):
         raise ValueError("passage search result fields changed")
     query = value["query"]
     if set(query) != {
-        "query_id", "text", "primary_subnarrative_id", "supporting_subnarrative_ids"
+        "query_id",
+        "text",
+        "primary_subnarrative_id",
+        "supporting_subnarrative_ids",
     }:
         raise ValueError("passage search query fields changed")
     documents_raw = value["documents"]
@@ -664,46 +704,86 @@ def _decode_passage_result(value: object) -> PassageSearchResult:
         raise ValueError("passage search rows must be lists")
     documents = tuple(
         SourceDocument(
-            row["docid"], row["content_sha256"], row["source_rank"],
-            row["source_score"], row["best_passage_id"],
+            row["docid"],
+            row["content_sha256"],
+            row["source_rank"],
+            row["source_score"],
+            row["best_passage_id"],
             row["best_passage_raw_logit"],
         )
         for row in documents_raw
         if isinstance(row, dict)
-        and set(row) == {
-            "docid", "content_sha256", "source_rank", "source_score",
-            "best_passage_id", "best_passage_raw_logit",
+        and set(row)
+        == {
+            "docid",
+            "content_sha256",
+            "source_rank",
+            "source_score",
+            "best_passage_id",
+            "best_passage_raw_logit",
         }
     )
     if len(documents) != len(documents_raw):
         raise ValueError("passage search document fields changed")
     passages: list[SourcePassage] = []
     passage_fields = {
-        "passage_id", "docid", "content_sha256", "source_rank", "source_score",
-        "start_char", "end_char", "start_byte", "end_byte", "text_sha256", "text",
-        "raw_logit", "rank", "score_cache_key", "scoring_text_sha256", "chunker_identity",
+        "passage_id",
+        "docid",
+        "content_sha256",
+        "source_rank",
+        "source_score",
+        "start_char",
+        "end_char",
+        "start_byte",
+        "end_byte",
+        "text_sha256",
+        "text",
+        "raw_logit",
+        "rank",
+        "score_cache_key",
+        "scoring_text_sha256",
+        "chunker_identity",
     }
     for row in passages_raw:
         if not isinstance(row, dict) or set(row) != passage_fields:
             raise ValueError("passage search passage fields changed")
         passages.append(
             SourcePassage(
-                row["passage_id"], row["docid"], row["content_sha256"],
-                row["source_rank"], row["source_score"], row["start_char"],
-                row["end_char"], row["start_byte"], row["end_byte"],
-                row["text_sha256"], row["text"], row["raw_logit"], row["rank"],
-                row["score_cache_key"], row["scoring_text_sha256"],
+                row["passage_id"],
+                row["docid"],
+                row["content_sha256"],
+                row["source_rank"],
+                row["source_score"],
+                row["start_char"],
+                row["end_char"],
+                row["start_byte"],
+                row["end_byte"],
+                row["text_sha256"],
+                row["text"],
+                row["raw_logit"],
+                row["rank"],
+                row["score_cache_key"],
+                row["scoring_text_sha256"],
                 row["chunker_identity"],
             )
         )
     return PassageSearchResult(
         FocusedQuery(
-            query["query_id"], query["text"], query["primary_subnarrative_id"],
+            query["query_id"],
+            query["text"],
+            query["primary_subnarrative_id"],
             tuple(query["supporting_subnarrative_ids"]),
         ),
-        value["status"], value["stopping_reason"], value["requested_documents"],
-        value["returned_documents"], value["scored_documents"], value["scored_passages"],
-        documents, tuple(passages), value["attempt_count"], value["source_exhausted"],
+        value["status"],
+        value["stopping_reason"],
+        value["requested_documents"],
+        value["returned_documents"],
+        value["scored_documents"],
+        value["scored_passages"],
+        documents,
+        tuple(passages),
+        value["attempt_count"],
+        value["source_exhausted"],
     )
 
 
@@ -722,9 +802,17 @@ def validate_scoring_selection(
     if not isinstance(value, dict):
         raise ValueError("selection checkpoint must be an object")
     requested_count = value.get("requested_count")
-    if isinstance(requested_count, bool) or not isinstance(requested_count, int) or requested_count <= 0:
+    if (
+        isinstance(requested_count, bool)
+        or not isinstance(requested_count, int)
+        or requested_count <= 0
+    ):
         raise ValueError("selection requested count must be a positive integer")
-    if isinstance(rerank_depth, bool) or not isinstance(rerank_depth, int) or rerank_depth <= 0:
+    if (
+        isinstance(rerank_depth, bool)
+        or not isinstance(rerank_depth, int)
+        or rerank_depth <= 0
+    ):
         raise ValueError("selection rerank depth is invalid")
     scores_by_lane: dict[str, list[Mapping[str, object]]] = {}
     for row in lane_score_rows:
@@ -737,7 +825,9 @@ def validate_scoring_selection(
         lane_name = audited.lane.retrieval_query.variant_name
         score_rows = scores_by_lane.pop(lane_name, [])
         passage_result = audited.passage_result
-        if passage_result is None or len(passage_result.documents) != len(audited.candidates):
+        if passage_result is None or len(passage_result.documents) != len(
+            audited.candidates
+        ):
             raise ValueError("selection passage binding differs from retrieval audit")
         eligible = tuple(
             candidate
@@ -782,9 +872,9 @@ def validate_scoring_selection(
                 or row.get("bm25_score") != audit.bm25_score
                 or row.get("text_sha256") != audit.text_sha256
                 or row.get("bm25_query_sha256") != audited.lane.bm25_query_sha256
-                or row.get("semantic_query_sha256") != audited.lane.semantic_query_sha256
-                or row.get("aggregate_score")
-                != source_document.best_passage_raw_logit
+                or row.get("semantic_query_sha256")
+                != audited.lane.semantic_query_sha256
+                or row.get("aggregate_score") != source_document.best_passage_raw_logit
                 or row.get("long_document_raw_logit")
                 != source_document.best_passage_raw_logit
                 or row.get("weighted_passage_raw_logit")
@@ -797,8 +887,10 @@ def validate_scoring_selection(
                 )
             passages = tuple(
                 PassageScore(
-                    passage["chunk_index"], passage["start_char"],
-                    passage["end_char"], passage["raw_logit"],
+                    passage["chunk_index"],
+                    passage["start_char"],
+                    passage["end_char"],
+                    passage["raw_logit"],
                     passage["weighted_rank"],
                 )
                 for passage in row["winning_passages"]
@@ -852,7 +944,9 @@ def validate_scoring_selection(
             != selected.get("selected_from_lane_rank")
             or replayed_row.text != selected.get("text_sha256")
         ):
-            raise ValueError("selection replay differs from selected document provenance")
+            raise ValueError(
+                "selection replay differs from selected document provenance"
+            )
     result = FacetRetrievalResult(
         topic_id=topic_id,
         lanes=tuple(rankings),
@@ -992,7 +1086,9 @@ def _retrieve_topic(
                 "documents": [
                     jsonable(document)
                     for document in lane_result.passage_result.documents
-                ] if lane_result.passage_result is not None else [],
+                ]
+                if lane_result.passage_result is not None
+                else [],
                 "passages": (
                     _passage_result_json(lane_result.passage_result)["passages"]
                     if lane_result.passage_result is not None
@@ -1109,7 +1205,9 @@ def _score_topic(
         retrieval_depth=retrieval_depth,
         selection_k=selection_k,
     )
-    if _loads(audit_bytes, "retrieval audit") != _result_audit(topic, decomposition, result):
+    if _loads(audit_bytes, "retrieval audit") != _result_audit(
+        topic, decomposition, result
+    ):
         raise ValueError("scoring retrieval differs from the completed retrieval audit")
     lane_rows = [_score_row(row) for lane in result.lanes for row in lane.documents]
     selected = [
@@ -1157,6 +1255,7 @@ def _run_topic(
     offline_cache_only: bool = False,
     offline_source_document_store_root: Path | None = None,
     offline_stage_document_store_root: Path | None = None,
+    runtime_cache_root: Path | None = None,
 ) -> _TopicTaskOutcome:
     """Run one configured topic through the private checkpointed workflow."""
     if not isinstance(config, FacetPilotConfig):
@@ -1169,11 +1268,18 @@ def _run_topic(
         offline_source_document_store_root is None
         or offline_stage_document_store_root is None
     ):
-        raise ValueError("offline cache replay requires source and stage document roots")
+        raise ValueError(
+            "offline cache replay requires source and stage document roots"
+        )
     active_document_store_root = (
         Path(offline_stage_document_store_root)
         if offline_cache_only
         else document_store_dir(config.root_dir)
+    )
+    active_cache_root = (
+        repo_cache_root(config.root_dir)
+        if runtime_cache_root is None
+        else Path(runtime_cache_root)
     )
     runtime_topic = _runtime_topic(topic)
     before_accounting = _runtime_cache_accounting(dependencies)
@@ -1183,7 +1289,7 @@ def _run_topic(
         runtime_topic,
         config.output_dir,
         dependencies.planning_backend,
-        planning_cache_root=repo_cache_root(config.root_dir),
+        planning_cache_root=active_cache_root,
         cache_only=offline_cache_only,
         cache_stats=planning_cache_stats,
     )
@@ -1260,6 +1366,7 @@ def _run_topic(
         offline_cache_only=offline_cache_only,
         cache_stats=canonical_cache_stats,
         document_store_root=active_document_store_root,
+        cache_root=active_cache_root,
     )
     topic_root = config.output_dir / runtime_topic.id
     with TopicRecords.open(
@@ -1415,7 +1522,10 @@ def _decompose_topic(
             )
             if cached != result.result:
                 raise ValueError("planning cache differs from decomposition checkpoint")
-        if _decomposition_producer_sha256(topic, output_dir, backend) != producer_sha256:
+        if (
+            _decomposition_producer_sha256(topic, output_dir, backend)
+            != producer_sha256
+        ):
             raise ValueError("decomposition producer changed during validation")
         return result, True
     if (
@@ -1434,7 +1544,9 @@ def _decompose_topic(
             topic,
             backend,
             planning_cache_root=planning_cache_root,
-            backend_factory=(OpenRouterDeepSeekFacetBackend if backend is None else None),
+            backend_factory=(
+                OpenRouterDeepSeekFacetBackend if backend is None else None
+            ),
             cache_only=cache_only,
             cache_stats=cache_stats,
         )
@@ -1636,8 +1748,7 @@ def _seeded_decomposition_producer_sha256(
         or receipt.get("validator_identity") != manifest.get("validator_identity")
         or receipt.get("lane_projector_module_sha256")
         != manifest.get("lane_projector_module_sha256")
-        or receipt.get("lane_projector_module_sha256")
-        != current_projector_sha256
+        or receipt.get("lane_projector_module_sha256") != current_projector_sha256
         or receipt.get("lane_projector_identity")
         != manifest.get("lane_projector_identity")
         or receipt.get("lane_projector_version")
@@ -1659,9 +1770,7 @@ def _seeded_decomposition_producer_sha256(
 def _planner_identity(backend: Any | None) -> dict[str, object]:
     if backend is None or isinstance(backend, OpenRouterDeepSeekFacetBackend):
         identity: object = {
-            "backend": (
-                "trec_rag.facet_extraction.OpenRouterDeepSeekFacetBackend"
-            ),
+            "backend": ("trec_rag.facet_extraction.OpenRouterDeepSeekFacetBackend"),
             "model": OPENROUTER_DEEPSEEK_MODEL,
             "prompt_version": FACET_PROMPT_VERSION,
             "response_schema": FACET_SCHEMA_VERSION,
@@ -1730,6 +1839,7 @@ def _canonical_topic(
     offline_cache_only: bool = False,
     cache_stats: dict[str, int] | None = None,
     document_store_root: Path | None = None,
+    cache_root: Path | None = None,
 ) -> _CanonicalPhaseResult:
     """Run the local evidence tail and canonical stage for one topic."""
     root = config.output_dir / topic.id
@@ -1840,7 +1950,11 @@ def _canonical_topic(
         ),
         output_path=canonical_root / "canonical-nuggets.jsonl",
         manifest_path=canonical_root / "canonical-nugget-manifest.json",
-        cache_dir=canonical_response_cache_dir(config.root_dir),
+        cache_dir=(
+            canonical_response_cache_dir(config.root_dir)
+            if cache_root is None
+            else Path(cache_root) / "canonical" / PROMPT_VERSION
+        ),
         backend_factory=dependencies.canonical_backend_factory,
         cache_ignore_checker=dependencies.cache_ignore_checker,
         cache_only=offline_cache_only,
@@ -1859,10 +1973,7 @@ def _canonical_topic(
 def _topics_sha256(topics: Sequence[Topic]) -> str:
     return _hash(
         json.dumps(
-            [
-                {"id": topic.id, "narrative": topic.narrative}
-                for topic in topics
-            ],
+            [{"id": topic.id, "narrative": topic.narrative} for topic in topics],
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -1949,7 +2060,9 @@ def _candidates(
     if [row.rank for row in rows] != list(range(1, len(rows) + 1)) or len(
         {row.docid for row in rows}
     ) != len(rows):
-        raise ValueError("retrieval ranks and document IDs must be unique and contiguous")
+        raise ValueError(
+            "retrieval ranks and document IDs must be unique and contiguous"
+        )
     return rows
 
 
@@ -2047,7 +2160,10 @@ def _validate_passage_result_identity(
     expected_chunker = expected.get("chunker")
     if not isinstance(expected_chunker, Mapping):
         raise ValueError("passage search chunker identity is invalid")
-    if any(dict(passage.chunker_identity) != dict(expected_chunker) for passage in result.passages):
+    if any(
+        dict(passage.chunker_identity) != dict(expected_chunker)
+        for passage in result.passages
+    ):
         raise ValueError("passage search chunker identity changed")
 
 
@@ -2077,9 +2193,8 @@ def _inputs(
     commit: str,
 ) -> None:
     _runtime_topic(topic)
-    if (
-        decomposition.topic_id != topic.id
-        or decomposition.narrative_sha256 != _hash(topic.narrative.encode())
+    if decomposition.topic_id != topic.id or decomposition.narrative_sha256 != _hash(
+        topic.narrative.encode()
     ):
         raise ValueError("decomposition differs from the exact official narrative")
     if not _COMMIT.fullmatch(commit):
@@ -2141,9 +2256,7 @@ def _result_audit(
         ]
         lanes.append(_audit_lane(lane.lane, lane.retrieval_returned_count, candidates))
     passage_results = tuple(
-        lane.passage_result
-        for lane in result.lanes
-        if lane.passage_result is not None
+        lane.passage_result for lane in result.lanes if lane.passage_result is not None
     )
     if len(passage_results) != len(result.lanes):
         raise ValueError("fixed retrieval result is missing a sealed passage result")
@@ -2270,11 +2383,9 @@ def _resume(
     ):
         raise ValueError("checkpoint input identity changed")
     receipts = value.get("artifacts")
-    if (
-        not isinstance(receipts, list)
-        or [row.get("relative_path") for row in receipts if isinstance(row, dict)]
-        != list(artifacts)
-    ):
+    if not isinstance(receipts, list) or [
+        row.get("relative_path") for row in receipts if isinstance(row, dict)
+    ] != list(artifacts):
         raise ValueError("checkpoint artifacts changed")
     for receipt in receipts:
         if not isinstance(receipt, dict) or set(receipt) != {
@@ -2414,7 +2525,9 @@ def _file_receipt(path: Path) -> tuple[int, str]:
 def _validated_cache_operation_stages(
     stages: Mapping[str, Mapping[str, int]],
 ) -> dict[str, dict[str, int]]:
-    if not isinstance(stages, Mapping) or set(stages) != set(CACHE_OPERATION_STAGE_NAMES):
+    if not isinstance(stages, Mapping) or set(stages) != set(
+        CACHE_OPERATION_STAGE_NAMES
+    ):
         raise ValueError("cache operation stages changed")
     validated: dict[str, dict[str, int]] = {}
     for stage_name in CACHE_OPERATION_STAGE_NAMES:
@@ -2427,7 +2540,9 @@ def _validated_cache_operation_stages(
         for counter_name in _CACHE_OPERATION_COUNTER_NAMES:
             value = counters[counter_name]
             if type(value) is not int or value < 0:
-                raise ValueError("cache operation counters must be non-negative integers")
+                raise ValueError(
+                    "cache operation counters must be non-negative integers"
+                )
             row[counter_name] = value
         validated[stage_name] = row
     return validated
@@ -2697,6 +2812,7 @@ def _accounting_values(value: object) -> dict[str, int]:
     if isinstance(value, Mapping):
         getter = value.get
     else:
+
         def getter(name: str, default: object = 0) -> object:
             return getattr(value, name, default)
 
@@ -2924,7 +3040,9 @@ def _run_production_topic_job(job: TopicJob) -> TopicJobReceipt:
     )
     matches = tuple(topic for topic in official_topics if topic.id == job.topic_id)
     if len(matches) != 1:
-        raise ValueError("topic job identity is absent or duplicated in official topics")
+        raise ValueError(
+            "topic job identity is absent or duplicated in official topics"
+        )
     topic = matches[0]
     cache_root = repo_cache_root(config.root_dir)
     assert_no_incomplete_cache_bundle_merge(cache_root)
@@ -3080,9 +3198,7 @@ def _durable_mkdirs(path: Path, *, managed_root: Path) -> None:
     if ".." in relative.parts:
         raise ValueError("durable directory creation escaped its managed root")
     root_metadata = root.lstat()
-    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(
-        root_metadata.st_mode
-    ):
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
         raise ValueError(f"offline publication directory is unsafe: {root}")
     current = root
     for part in relative.parts:
@@ -3094,17 +3210,13 @@ def _durable_mkdirs(path: Path, *, managed_root: Path) -> None:
                 child.mkdir(mode=0o700)
             except FileExistsError:
                 metadata = child.lstat()
-                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(
-                    metadata.st_mode
-                ):
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                     raise ValueError(
                         f"offline publication directory is unsafe: {child}"
                     )
         else:
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                raise ValueError(
-                    f"offline publication directory is unsafe: {child}"
-                )
+                raise ValueError(f"offline publication directory is unsafe: {child}")
         _fsync_path(current, directory=True)
         current = child
 
@@ -3167,9 +3279,14 @@ def _run_offline_topic_staged(
     *,
     config_sha256: str,
     expected_retriever_identity: Mapping[str, object],
+    source_cache_root: Path | None = None,
 ) -> _TopicTaskOutcome:
     """Build an offline replay privately and publish its topic tree only on success."""
-    source_cache_root = repo_cache_root(config.root_dir)
+    source_cache_root = (
+        repo_cache_root(config.root_dir)
+        if source_cache_root is None
+        else Path(source_cache_root).resolve(strict=False)
+    )
     _validate_offline_path_isolation(config, source_cache_root)
     if job.topic_root.exists():
         recovered = _validated_existing_topic_job_receipt(
@@ -3215,12 +3332,11 @@ def _run_offline_topic_staged(
             identity,
             dependencies,
             offline_cache_only=True,
-            offline_source_document_store_root=(
-                source_cache_root / "documents" / "v1"
-            ),
+            offline_source_document_store_root=(source_cache_root / "documents" / "v1"),
             offline_stage_document_store_root=stage_document_store_root,
             config_sha256=config_sha256,
             expected_retriever_identity=expected_retriever_identity,
+            runtime_cache_root=stage_cache_root,
         )
         staged_topic_root = staged_config.output_dir / topic.id
         if not staged_topic_root.is_dir():
@@ -3286,7 +3402,9 @@ def _run_official(
             raise TypeError("topic_ids must be a sequence of topic IDs, not a string")
         requested_ids = tuple(topic_ids)
         if not requested_ids:
-            raise ValueError("topic_ids must not be empty; omit it to select all topics")
+            raise ValueError(
+                "topic_ids must not be empty; omit it to select all topics"
+            )
     if external is None:
         adapters = ExternalAdapters()
     elif isinstance(external, ExternalAdapters):
@@ -3414,6 +3532,7 @@ def _run_official(
         topic_worker = _run_production_topic_job
         topic_workers = loaded_config.execution.topic_workers
     else:
+
         def run_injected_topic_job(job: TopicJob) -> TopicJobReceipt:
             topic = selected_by_id.get(job.topic_id)
             if topic is None:
@@ -3460,9 +3579,7 @@ def _run_official(
             )
             return TopicJobReceipt(
                 topic_id=topic.id,
-                projection_manifest_sha256=(
-                    outcome.projection_receipt.manifest_sha256
-                ),
+                projection_manifest_sha256=(outcome.projection_receipt.manifest_sha256),
                 status=status,
                 stopping_reason=stopping_reason,
             )
@@ -3477,7 +3594,9 @@ def _run_official(
         topic_worker,
         max_workers=topic_workers,
     )
-    final_planning_backend = None if production_dispatch else dependencies.planning_backend
+    final_planning_backend = (
+        None if production_dispatch else dependencies.planning_backend
+    )
     decomposition_producer_sha256s = {
         topic.id: _decomposition_producer_sha256(
             topic,
@@ -3493,7 +3612,9 @@ def _run_official(
         expected_decomposition_producer_sha256=decomposition_producer_sha256s,
     )
     if len(dispatched_receipts) != len(ordered_receipts):
-        raise RuntimeError("all selected topic dispatch receipts are required before export")
+        raise RuntimeError(
+            "all selected topic dispatch receipts are required before export"
+        )
     for topic, dispatch_receipt, projection_receipt in zip(
         selected_topics,
         dispatched_receipts,
@@ -3547,7 +3668,9 @@ def _run_official(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the official facet retrieval export.")
+    parser = argparse.ArgumentParser(
+        description="Run the official facet retrieval export."
+    )
     parser.add_argument("config", type=Path)
     parser.add_argument("--offline-cache-only", action="store_true")
     selectors = parser.add_mutually_exclusive_group()

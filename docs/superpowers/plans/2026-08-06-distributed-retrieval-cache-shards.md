@@ -1,8 +1,8 @@
 # Distributed Retrieval Cache Shards Implementation Plan
 
 > **For Codex:** Use `superpowers:test-driven-development` for every production
-> behavior, delegate independent file sets to Luna workers, use an independent
-> Sol review for the integrated branch, and apply
+> behavior, delegate independent bounded streams when useful, use an independent
+> review for the integrated branch, and apply
 > `superpowers:verification-before-completion` before every completion claim.
 
 **Goal:** Run fixed/non-agentic competition retrieval topics independently on
@@ -34,6 +34,41 @@ and canonicalization, Pyserini REST retrieval.
 - The ignored `.env` was copied from the shared checkout without printing it.
 - Environment setup verified ROCm GPU access.
 - Clean baseline: 2,266 tests passed and 19 skipped.
+- Tasks 1–6 are implemented on branch `codex/distributed-retrieval-cache`.
+  Cache identities, read-only replay, authenticated deterministic bundles,
+  transactional consolidation, the committed-only dstack launcher, and the
+  private-HF wrapper all have focused regression coverage.
+- The integrated whole-branch review found three important gaps: bundle success
+  did not prove a complete offline replay, concurrent score merges could publish
+  while rows remained in a WAL, and hostile portable-score members could exceed
+  safe parser memory. All three are fixed locally with real-chain, mid-flight
+  multiprocessing serialization, and bounded-input regressions. A subsequent
+  review also required the verifier to exercise the production staged offline
+  runner, verification to precede destination locking, same-thread lock
+  re-entry to fail instead of deadlock, and TSV-safe recovered narratives;
+  those regressions are now covered and the final follow-up review is running.
+- A real one-topic fixture now completes online planning/retrieval/reranking/
+  similarity/canonicalization, packs and verifies its shard, merges it, and
+  replays from a fresh output namespace with poisoned transports/model loaders.
+  Its authenticated operation receipt reports zero misses, network/provider
+  calls, and model batches. Removing any required cache namespace, or using an
+  uncached planning/canonical fallback, prevents bundle publication.
+- Current focused verification includes 159 bundle/offline/retrieval tests and
+  21 dstack/HF workflow tests, with clean Ruff formatting/static checks. The
+  latest complete run passed 2,478 tests, 19 skips, and 60 subtests. `uv lock
+  --check` passed. The optional torch-group verifier made no progress while
+  resolving external package metadata and was interrupted after two minutes;
+  it previously reached the same transient `repo.radeon.com` availability
+  boundary. The full suite will run once more from the committed clean branch.
+- Both exact topic wrappers passed credential-free local preflight at the last
+  clean commit for run ID `nonagentic-two-topic-20260806`. Commit and verify the
+  current review fixes before previewing.
+- The private HF bucket is authenticated and both exact target prefixes are
+  empty. dstack 0.20.29 now has masked, case-correct `HF_TOKEN`, `INDEX_URL`,
+  `PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY` secrets; the pre-existing
+  lowercase `hf_token` alias was left untouched. HF CLI authentication and
+  dstack secret injection are configured separately; no token value is copied
+  into the tracked repository.
 - No dstack task or paid/cache-miss retrieval has been launched.
 
 ## Global constraints
@@ -59,7 +94,9 @@ and canonicalization, Pyserini REST retrieval.
   destination value and records an audit entry.
 - A merger is retryable and idempotent. A durable prepare journal exists until
   the merge completion receipt is committed. Supported runners refuse to start
-  against a cache root with an incomplete merge.
+  against a cache root with an incomplete merge. Run consolidation quiescent
+  with respect to non-merger score-cache writers; mergers sharing a destination
+  are process-serialized and same-thread re-entry fails closed.
 - Bundles and remote prefixes contain no credentials, provider raw responses,
   lock files, attempts, SQLite/WAL/SHM files, full corpus dumps, qrels, gold
   nuggets, RAGDoll scores, or generated RAG answers.
@@ -93,12 +130,12 @@ read: it never creates a directory, lock, derivation, or repair file. The
 retriever exposes exact transport-call accounting. Cache entry identities and
 existing online behavior remain byte-compatible.
 
-- [ ] Add failing tests for absolute override validation, pure missing/hit
+- [x] Add failing tests for absolute override validation, pure missing/hit
   lookup, no filesystem mutations, and transport call counts.
-- [ ] Run the focused tests and preserve the expected RED output in the task
+- [x] Run the focused tests and preserve the expected RED output in the task
   report.
-- [ ] Implement the minimum production behavior.
-- [ ] Run the focused suite and existing cache/retriever regression tests.
+- [x] Implement the minimum production behavior.
+- [x] Run the focused suite and existing cache/retriever regression tests.
 
 ### Task 2: Cache deterministic planning, canonicalization, and similarity
 
@@ -119,11 +156,11 @@ without instantiating its backend. MiniLM similarity matrices are cached by
 model/revision and ordered text hashes, stored as finite `float.hex()` values,
 and expose hit/miss/model-batch accounting. Offline misses are side-effect free.
 
-- [ ] Add failing behavior tests, including malformed entries, exact identity
+- [x] Add failing behavior tests, including malformed entries, exact identity
   changes, read-only misses, and lazy backend/model construction.
-- [ ] Verify RED for each new public behavior.
-- [ ] Implement immutable create-only entries and accounting.
-- [ ] Run focused plus planning/canonical/evidence regressions.
+- [x] Verify RED for each new public behavior.
+- [x] Implement immutable create-only entries and accounting.
+- [x] Run focused plus planning/canonical/evidence regressions.
 
 ### Task 3: Make reranker scores read-only and portable
 
@@ -143,10 +180,10 @@ import is one transaction, is idempotent, and supports `strict` or audited
 `keep-existing` numerical conflicts. Passage and sentence scorers expose cache
 hits, misses, and model batches.
 
-- [ ] Write and verify failing tests for read-only hit/miss behavior, portable
+- [x] Write and verify failing tests for read-only hit/miss behavior, portable
   round trips, idempotence, strict rollback, keep-existing audit, and stats.
-- [ ] Implement the minimal SQLite/API changes without copying database files.
-- [ ] Run focused and all existing reranker-score regression tests.
+- [x] Implement the minimal SQLite/API changes without copying database files.
+- [x] Run focused and all existing reranker-score regression tests.
 
 ### Task 4: Build deterministic, safe cache shard bundles
 
@@ -154,6 +191,7 @@ hits, misses, and model batches.
 
 - Create: `code/trec_rag/competition_cache_bundle.py`
 - Create: `code/tests/test_competition_cache_bundle.py`
+- Create: `code/tests/test_competition_cache_bundle_offline_replay.py`
 - Modify: `pyproject.toml`
 - Modify: `uv.lock`
 
@@ -177,12 +215,12 @@ stages verified shards, writes a durable journal, create-only installs
 immutable files, transactionally imports score rows, writes conflict audits,
 and atomically publishes completion. Re-running the same merge converges.
 
-- [ ] Write failing pack/verify/merge tests using synthetic tiny artifacts.
-- [ ] Include attacks for traversal, symlink/hardlink/device, duplicates,
+- [x] Write failing pack/verify/merge tests using synthetic tiny artifacts.
+- [x] Include attacks for traversal, symlink/hardlink/device, duplicates,
   undeclared members, decompression/size bounds, digest mismatch, and collision.
-- [ ] Implement deterministic timestamps/order/modes and canonical manifests.
-- [ ] Make `zstandard==0.25.0` a direct locked dependency.
-- [ ] Verify exact archive reproducibility and transactional retry behavior.
+- [x] Implement deterministic timestamps/order/modes and canonical manifests.
+- [x] Make `zstandard==0.25.0` a direct locked dependency.
+- [x] Verify exact archive reproducibility and transactional retry behavior.
 
 ### Task 5: Integrate cache-only execution and zero-work receipts
 
@@ -204,12 +242,12 @@ hits, misses, network/provider calls, and model batches. A successful cache-only
 receipt has zero misses/calls/model batches and cannot be synthesized from an
 older online checkpoint.
 
-- [ ] Add failing CLI/integration tests for a complete hit, one miss per stage,
+- [x] Add failing CLI/integration tests for a complete hit, one miss per stage,
   lazy external factories, immutable checkpoints, incomplete-merge refusal,
   and receipt aggregation.
-- [ ] Implement explicit dependency construction and accounting.
-- [ ] Update the ignored two-topic config workflow and cache replay examples.
-- [ ] Run competition retrieval, topic-dispatch, evidence, and cache regressions.
+- [x] Implement explicit dependency construction and accounting.
+- [x] Update the ignored two-topic config workflow and cache replay examples.
+- [x] Run competition retrieval, topic-dispatch, evidence, and cache regressions.
 
 ### Task 6: Add the dstack and private-HF shard workflow
 
@@ -217,15 +255,19 @@ older online checkpoint.
 
 - Create: `.dstack/rag26-retrieval-cache-shard.yaml`
 - Create: `code/tools/run_retrieval_cache_shard.sh`
+- Create: `code/tools/apply_retrieval_cache_shard.sh`
+- Create: `code/trec_rag/hf_bucket_listing.py`
 - Create/modify shell/config contract tests under `code/tests/`
 - Update: `code/trec_rag/README.md`
 
 **Contract:** The task uses image
-`huggingface/trl@sha256:4de10fa68e4f4e060cb41885044208e2a44715fc0d52ce83bb071b1fc6d63db1`,
-clones the current local worktree through dstack repo transport, verifies the
-applied patch in an ephemeral local commit, runs exactly one selected topic in
-an isolated cache/output namespace, packs/verifies it, uploads archive first
-and completion last, then foreground-verifies the remote listing/download/hash.
+`huggingface/trl@sha256:4de10fa68e4f4e060cb41885044208e2a44715fc0d52ce83bb071b1fc6d63db1`.
+The local launcher requires a clean branch whose upstream is an ancestor,
+creates a committed-only clone, and passes that immutable snapshot through
+dstack repo transport. The remote wrapper seals any dstack-applied patch in an
+ephemeral commit, runs exactly one selected topic in an isolated cache/output
+namespace, packs/verifies it, uploads archive first and completion last, then
+foreground-verifies the remote listing/download/hash.
 It accepts only named dstack secrets `HF_TOKEN`, `INDEX_URL`,
 `PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY`.
 
@@ -236,26 +278,27 @@ verify the Mixedbread revision
 `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` and MiniLM revision
 `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` before the live runner.
 
-- [ ] Add failing tests that parse the YAML and execute the wrapper's cheap
+- [x] Add failing tests that parse the YAML and execute the wrapper's cheap
   preflight path without secrets or provisioning.
-- [ ] Implement the config/wrapper with foreground exit-code preservation.
-- [ ] Run the bundled dstack/HF preflight and exact image-command checks.
-- [ ] Preview each topic with `echo "n" | dstack apply ...`; preserve and show
-  the complete output unchanged. Do not submit yet.
+- [x] Implement the config/wrapper with foreground exit-code preservation.
+- [x] Run the bundled dstack/HF preflight and exact image-command checks.
+- [ ] Run and retain both declined previews through the supported
+  `code/tools/apply_retrieval_cache_shard.sh --preview` commands in the README;
+  preserve the complete output unchanged and do not submit.
 
 ### Task 7: Integrate, verify, and independently review
 
 **Owned files:** all branch changes after parallel ownership is reconciled.
 
-- [ ] Review every worker diff and report; resolve overlaps deliberately.
-- [ ] Run focused suites, formatting/static checks used by the repository, and
+- [x] Review every worker diff and report; resolve overlaps deliberately.
+- [x] Run focused suites, formatting/static checks used by the repository, and
   the complete pytest suite.
-- [ ] Run synthetic end-to-end: online fixture build → pack → verify → merge →
+- [x] Run synthetic end-to-end: online fixture build → pack → verify → merge →
   cache-only replay, with credentials removed and filesystems snapshotted.
-- [ ] Inspect bundles for excluded secrets/raw artifacts and validate exact
+- [x] Inspect bundles for excluded secrets/raw artifacts and validate exact
   deterministic reproduction.
-- [ ] Request independent Sol whole-branch review; fix and re-review all
-  load-bearing findings.
+- [ ] Complete independent follow-up review after fixing all three load-bearing
+  whole-branch findings.
 - [ ] Re-read this plan and record verification evidence/current next action.
 
 ### Task 8: Gated two-machine validation and local replay

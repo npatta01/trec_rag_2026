@@ -242,7 +242,11 @@ immutable bundle files, verify them after download, and merge through the bundle
 API. The archive carries the authenticated topic checkpoint, content-addressed
 retrieval/document/planning/canonical/similarity entries, and portable reranker
 JSONL. It excludes locks, WAL files, raw provider responses, qrels, gold data,
-RAG answers, and model weights.
+RAG answers, and model weights. Before publishing `bundle-complete.json`, the
+packer extracts the proposed archive in isolation, reconstructs its portable
+score databases, and runs the topic through a fresh cache-only replay with
+network and model loading disabled. The standalone verifier repeats that proof;
+a structurally valid but incomplete cache shard is rejected.
 
 The checked-in dstack task template is
 `.dstack/rag26-retrieval-cache-shard.yaml`. Always invoke it through
@@ -342,9 +346,12 @@ mkdir -p "$shard_root/rag2026-0" "$shard_root/rag2026-1"
 
 Merge only verified bundles. The merge stages every source, journals intent,
 installs immutable files create-only, imports portable scores transactionally,
-and publishes its completion last. `keep-existing` permits only validated
-finite reranker/similarity values for the same identity; it records, but never
-averages, small cross-device numerical differences:
+checkpoints SQLite WAL state for immutable readers, and publishes its completion
+last. Run merges while no retrieval or other score-cache writer is using the
+destination. Merges targeting the same cache root are process-serialized through
+the private `cache/.cache-bundle-merge.lock`. `keep-existing`
+permits only validated finite reranker/similarity values for the same identity;
+it records, but never averages, small cross-device numerical differences:
 
 ```bash
 .venv/bin/python -m trec_rag.competition_cache_bundle merge \
