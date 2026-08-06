@@ -2779,12 +2779,12 @@ def _preflight_score_operations(
 
     conflicts: list[dict[str, object]] = []
     expected_import_conflicts: list[tuple[dict[str, str], ...]] = []
-    effective_scores: dict[tuple[str, str], float] = {}
+    effective_scores: dict[tuple[str, str], tuple[float, str]] = {}
     for operation in operations:
         context, rows = _portable_score_context_and_rows(operation.staged_path)
         scratch = GlobalScoreCache(validation_root / "reranker", context)
         try:
-            scratch_receipt = scratch.import_portable_jsonl(
+            scratch.import_portable_jsonl(
                 operation.staged_path,
                 conflict_policy=conflict_policy,
             )
@@ -2802,16 +2802,6 @@ def _preflight_score_operations(
             ) from exc
         finally:
             scratch.close()
-        for row in scratch_receipt.get("conflicts", []):
-            conflicts.append(
-                {
-                    **row,
-                    "context_sha256": context.context_sha256,
-                    "kind": "score",
-                    "resolution": "kept-existing",
-                    "scope": "bundle",
-                }
-            )
 
         target_path = (cache_root / "reranker").joinpath(*context.path_parts)
         if _existing_target_receipt(target_path, cache_root) is None:
@@ -2841,34 +2831,21 @@ def _preflight_score_operations(
                     target.close()
         operation_conflicts: list[dict[str, str]] = []
         for row, existing in zip(rows, found, strict=True):
-            if existing is not None and existing.hex() != row["score_hex"]:
-                if conflict_policy == "strict":
-                    raise CacheBundleConflictError(
-                        "numerical score conflicts with an existing destination value"
-                    )
-                conflicts.append(
-                    {
-                        "cache_key": row["cache_key"],
-                        "context_sha256": context.context_sha256,
-                        "existing_score_hex": existing.hex(),
-                        "kind": "score",
-                        "query_sha256": row["query_sha256"],
-                        "resolution": "kept-existing",
-                        "scope": "destination",
-                        "source_score_hex": row["score_hex"],
-                        "text_sha256": row["text_sha256"],
-                    }
-                )
             key = (context.context_sha256, str(row["cache_key"]))
             effective = effective_scores.get(key)
-            if effective is None and existing is not None:
-                effective = existing
-                effective_scores[key] = effective
             source_score = float(row["score"])
             if effective is None:
-                effective_scores[key] = source_score
-                continue
-            if effective.hex() == row["score_hex"]:
+                # An identical first ordered source is observationally the same
+                # whether it predated this merge or a prior identical merge
+                # installed it.  Canonicalize it as bundle authority so the
+                # completed retry produces the original conflict audit.
+                if existing is None or existing.hex() == row["score_hex"]:
+                    effective_scores[key] = (source_score, "bundle")
+                    continue
+                effective = (existing, "destination")
+                effective_scores[key] = effective
+            effective_score, scope = effective
+            if effective_score.hex() == row["score_hex"]:
                 continue
             if conflict_policy == "strict":
                 raise CacheBundleConflictError(
@@ -2876,12 +2853,21 @@ def _preflight_score_operations(
                 )
             conflict = {
                 "cache_key": str(row["cache_key"]),
-                "existing_score_hex": effective.hex(),
+                "existing_score_hex": effective_score.hex(),
                 "query_sha256": str(row["query_sha256"]),
                 "source_score_hex": str(row["score_hex"]),
                 "text_sha256": str(row["text_sha256"]),
             }
             operation_conflicts.append(conflict)
+            conflicts.append(
+                {
+                    **conflict,
+                    "context_sha256": context.context_sha256,
+                    "kind": "score",
+                    "resolution": "kept-existing",
+                    "scope": scope,
+                }
+            )
         expected_import_conflicts.append(tuple(operation_conflicts))
     return (
         sorted(

@@ -1924,6 +1924,84 @@ def test_score_conflicts_are_strict_by_default_and_keep_existing_is_audited(
     ]
 
 
+def test_multi_bundle_keep_existing_retry_preserves_canonical_bundle_conflict(
+    tmp_path: Path,
+) -> None:
+    context = ScoreCacheContext(
+        backend="fixture-backend",
+        model="fixture-model",
+        max_length=128,
+        score_kind="passage",
+        model_revision="fixture-revision",
+        backend_version="1.0",
+        score_representation="raw_logits",
+        inference_dtype="float32",
+        input_policy="trec_rag_whitespace_v1",
+    )
+    bundles = []
+    ordered_inputs = []
+    cache_key = ""
+    for label, value in (("first", 1.25), ("second", 2.5)):
+        config = _write_fixture(tmp_path / f"repo-{label}")
+        source = GlobalScoreCache(config.parent / "cache/reranker", context)
+        source.seed_many(
+            [("query", "passage", value)],
+            source_path=label,
+            source_sha256=("1" if label == "first" else "2") * 64,
+        )
+        cache_key = source.cache_key(query_text="query", text="passage")
+        source.close()
+        bundle = (tmp_path / f"bundle-{label}").resolve()
+        pack_bundle(config, "rag2026-0", bundle)
+        score_member = next(
+            member for member in verify_bundle(bundle).members if member.kind == "score"
+        )
+        bundles.append(bundle)
+        ordered_inputs.append((score_member.sha256, value))
+    winner, conflicting = (
+        value for _digest, value in sorted(ordered_inputs, key=lambda item: item[0])
+    )
+    cache_root = (tmp_path / "destination-cache").resolve()
+    outputs_root = (tmp_path / "destination-outputs").resolve()
+
+    first = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=tuple(bundles),
+        score_conflicts="keep-existing",
+    )
+    conflict_path = first.completion_path.parent / "conflicts.json"
+    first_conflict_bytes = conflict_path.read_bytes()
+    first_audit = json.loads(first_conflict_bytes)
+    second = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=tuple(reversed(bundles)),
+        score_conflicts="keep-existing",
+    )
+
+    retained = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
+    try:
+        assert retained.get(query_text="query", text="passage") == winner
+    finally:
+        retained.close()
+    assert second == first
+    assert conflict_path.read_bytes() == first_conflict_bytes
+    assert first_audit["conflicts"] == [
+        {
+            "cache_key": cache_key,
+            "context_sha256": context.context_sha256,
+            "existing_score_hex": winner.hex(),
+            "kind": "score",
+            "query_sha256": hashlib.sha256(b"query").hexdigest(),
+            "resolution": "kept-existing",
+            "scope": "bundle",
+            "source_score_hex": conflicting.hex(),
+            "text_sha256": hashlib.sha256(b"passage").hexdigest(),
+        }
+    ]
+
+
 def test_keep_existing_is_limited_to_similarity_and_audits_numerical_conflict(
     tmp_path: Path,
 ) -> None:
