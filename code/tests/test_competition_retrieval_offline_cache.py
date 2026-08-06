@@ -818,7 +818,11 @@ def test_offline_create_only_publication_fsyncs_tree_and_both_rename_parents(
 
     monkeypatch.setattr(os, "fsync", record_fsync)
 
-    competition_retrieval._publish_directory_create_only(source, destination)
+    competition_retrieval._publish_directory_create_only(
+        source,
+        destination,
+        managed_root=tmp_path,
+    )
 
     assert not source.exists()
     assert (destination / "records.sqlite3").read_bytes() == b"sealed records"
@@ -830,11 +834,14 @@ def test_offline_create_only_publication_fsyncs_tree_and_both_rename_parents(
         assert required in synced_paths
     assert synced_paths.index(nested_file) < synced_paths.index(nested)
     assert synced_paths.index(nested) < synced_paths.index(source)
-    assert synced_paths[-2:] == [source_parent, destination.parent]
+    assert synced_paths[-2:] == [destination.parent, source_parent]
     assert dict(fsynced)[root_file] is False
     assert dict(fsynced)[nested_file] is False
     assert dict(fsynced)[nested] is True
     assert dict(fsynced)[source] is True
+    assert all(
+        path == tmp_path or path.is_relative_to(tmp_path) for path in synced_paths
+    )
 
 
 def test_offline_create_only_publication_durably_creates_destination_ancestors(
@@ -856,7 +863,11 @@ def test_offline_create_only_publication_durably_creates_destination_ancestors(
     monkeypatch.setattr(os, "fsync", record_fsync)
 
     try:
-        competition_retrieval._publish_directory_create_only(source, destination)
+        competition_retrieval._publish_directory_create_only(
+            source,
+            destination,
+            managed_root=tmp_path,
+        )
     except FileNotFoundError as exc:
         pytest.fail(f"publication did not create destination ancestors: {exc}")
 
@@ -888,10 +899,43 @@ def test_offline_create_only_publication_accepts_a_concurrent_parent_creator(
 
     monkeypatch.setattr(Path, "mkdir", race_mkdir)
 
-    competition_retrieval._publish_directory_create_only(source, destination)
+    competition_retrieval._publish_directory_create_only(
+        source,
+        destination,
+        managed_root=tmp_path,
+    )
 
     assert raced is True
     assert (destination / "sealed.txt").read_text(encoding="utf-8") == "sealed"
+
+
+def test_durable_mkdirs_fsyncs_a_parent_when_child_appears_before_lstat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published = tmp_path / "published"
+    original_lstat = Path.lstat
+    observed: list[Path] = []
+    raced = False
+
+    def race_lstat(path: Path) -> os.stat_result:
+        nonlocal raced
+        if path == published and not raced:
+            raced = True
+            published.mkdir()
+        return original_lstat(path)
+
+    def record_fsync(descriptor: int) -> None:
+        observed.append(Path(os.readlink(f"/proc/self/fd/{descriptor}")))
+
+    monkeypatch.setattr(Path, "lstat", race_lstat)
+    monkeypatch.setattr(os, "fsync", record_fsync)
+
+    competition_retrieval._durable_mkdirs(published, managed_root=tmp_path)
+
+    assert raced is True
+    assert tmp_path in observed
+    assert tmp_path.parent not in observed
 
 
 def test_offline_publication_exdev_leaves_no_topic_or_private_stage(
@@ -957,7 +1001,11 @@ def test_offline_publication_without_renameat2_preserves_the_private_tree(
     )
 
     with pytest.raises(RuntimeError, match="requires Linux renameat2"):
-        competition_retrieval._publish_directory_create_only(source, destination)
+        competition_retrieval._publish_directory_create_only(
+            source,
+            destination,
+            managed_root=tmp_path,
+        )
 
     assert (source / "sealed.txt").read_text(encoding="utf-8") == "sealed"
     assert not destination.exists()

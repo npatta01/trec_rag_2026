@@ -3075,13 +3075,25 @@ def _fsync_topic_tree(path: Path) -> None:
     _fsync_path(root, directory=True)
 
 
-def _durable_mkdirs(path: Path) -> None:
-    """Create an absolute directory path and fsync each new parent entry."""
+def _durable_mkdirs(path: Path, *, managed_root: Path) -> None:
+    """Create a directory path and durably link each component below its root."""
     destination = Path(path)
-    if not destination.is_absolute():
+    root = Path(managed_root)
+    if not destination.is_absolute() or not root.is_absolute():
         raise ValueError("durable directory creation requires an absolute path")
-    current = Path(destination.anchor)
-    for part in destination.parts[1:]:
+    try:
+        relative = destination.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("durable directory creation escaped its managed root") from exc
+    if ".." in relative.parts:
+        raise ValueError("durable directory creation escaped its managed root")
+    root_metadata = root.lstat()
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(
+        root_metadata.st_mode
+    ):
+        raise ValueError(f"offline publication directory is unsafe: {root}")
+    current = root
+    for part in relative.parts:
         child = current / part
         try:
             metadata = child.lstat()
@@ -3096,23 +3108,36 @@ def _durable_mkdirs(path: Path) -> None:
                     raise ValueError(
                         f"offline publication directory is unsafe: {child}"
                     )
-            _fsync_path(current, directory=True)
         else:
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                 raise ValueError(
                     f"offline publication directory is unsafe: {child}"
                 )
+        _fsync_path(current, directory=True)
         current = child
 
 
-def _publish_directory_create_only(source: Path, destination: Path) -> None:
+def _publish_directory_create_only(
+    source: Path,
+    destination: Path,
+    *,
+    managed_root: Path,
+) -> None:
     source = Path(source)
     destination = Path(destination)
+    root = Path(managed_root)
+    for candidate in (source, destination):
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("offline publication escaped its managed root") from exc
+        if ".." in relative.parts:
+            raise ValueError("offline publication escaped its managed root")
     _fsync_topic_tree(source)
-    _durable_mkdirs(destination.parent)
+    _durable_mkdirs(destination.parent, managed_root=root)
     _rename_directory_noreplace(source, destination)
-    _fsync_path(source.parent, directory=True)
     _fsync_path(destination.parent, directory=True)
+    _fsync_path(source.parent, directory=True)
 
 
 def _paths_overlap(left: Path, right: Path) -> bool:
@@ -3209,7 +3234,11 @@ def _run_offline_topic_staged(
         if not staged_topic_root.is_dir():
             raise RuntimeError("offline cache replay did not produce its topic tree")
         try:
-            _publish_directory_create_only(staged_topic_root, job.topic_root)
+            _publish_directory_create_only(
+                staged_topic_root,
+                job.topic_root,
+                managed_root=config.root_dir.resolve(strict=False),
+            )
         except FileExistsError as exc:
             raise ValueError(
                 "offline cache replay topic output appeared during publication"
