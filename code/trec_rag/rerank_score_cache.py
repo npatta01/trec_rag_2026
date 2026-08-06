@@ -1787,6 +1787,7 @@ def _load_cross_encoder(
     revision: str,
     max_length: int,
     device: str,
+    inference_dtype: str,
 ) -> Any:
     try:
         from sentence_transformers import CrossEncoder
@@ -1801,6 +1802,7 @@ def _load_cross_encoder(
         revision=revision,
         max_length=max_length,
         device=device,
+        model_kwargs={"dtype": inference_dtype},
     )
 
 
@@ -2366,6 +2368,7 @@ def main() -> int:
                 revision=model_revision,
                 max_length=document_model_max_length,
                 device=device,
+                inference_dtype=inference_dtype,
             )
             _validate_model_dtype(document_model, inference_dtype)
         if window_model_required:
@@ -2374,6 +2377,7 @@ def main() -> int:
                 revision=model_revision,
                 max_length=args.window_max_length,
                 device=device,
+                inference_dtype=inference_dtype,
             )
             _validate_model_dtype(window_model, inference_dtype)
 

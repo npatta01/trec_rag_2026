@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -191,6 +192,37 @@ def test_load_cached_candidates_reads_authenticated_v2_retrieval_cache(
             text="exact body",
         )
     ]
+
+
+def test_load_cross_encoder_requests_the_cache_contract_dtype(monkeypatch):
+    captured = {}
+
+    def fake_cross_encoder(model_name, **kwargs):
+        captured["model_name"] = model_name
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(CrossEncoder=fake_cross_encoder),
+    )
+
+    score_cache_module._load_cross_encoder(
+        "model/name",
+        revision="pinned-revision",
+        max_length=1024,
+        device="cuda",
+        inference_dtype="bfloat16",
+    )
+
+    assert captured == {
+        "model_name": "model/name",
+        "revision": "pinned-revision",
+        "max_length": 1024,
+        "device": "cuda",
+        "model_kwargs": {"dtype": "bfloat16"},
+    }
 
 
 def test_document_scores_reuse_global_content_cache(tmp_path):
