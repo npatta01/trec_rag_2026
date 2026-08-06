@@ -1650,6 +1650,119 @@ def test_completed_merge_rejects_nonregular_receipt_before_recovery_mutation(
     assert publication_events == []
 
 
+def test_keep_existing_rejects_score_conflict_created_after_preflight(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    context = ScoreCacheContext(
+        backend="fixture-backend",
+        model="fixture-model",
+        max_length=128,
+        score_kind="passage",
+        model_revision="fixture-revision",
+        backend_version="1.0",
+        score_representation="raw_logits",
+        inference_dtype="float32",
+        input_policy="trec_rag_whitespace_v1",
+    )
+    source = GlobalScoreCache(config.parent / "cache/reranker", context)
+    source.seed_many(
+        [("query", "passage", 1.25)],
+        source_path="source",
+        source_sha256="1" * 64,
+    )
+    source.close()
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "destination-cache").resolve()
+    outputs_root = (tmp_path / "destination-outputs").resolve()
+
+    def publish_conflicting_score(phase: str) -> None:
+        if phase != "prepare":
+            return
+        destination = GlobalScoreCache(cache_root / "reranker", context)
+        destination.seed_many(
+            [("query", "passage", 2.5)],
+            source_path="concurrent-writer",
+            source_sha256="2" * 64,
+        )
+        destination.close()
+
+    with pytest.raises(CacheBundleConflictError, match="score|conflict|preflight"):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+            score_conflicts="keep-existing",
+            publication_hook=publish_conflicting_score,
+        )
+
+    retained = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
+    try:
+        assert retained.get(query_text="query", text="passage") == 2.5
+    finally:
+        retained.close()
+    states = tuple((cache_root / MERGE_STATE_DIRECTORY).iterdir())
+    assert len(states) == 1
+    assert not (states[0] / "complete.json").exists()
+
+
+def test_keep_existing_rejects_similarity_conflict_changed_after_preflight(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    model_identity = {
+        "backend": "sentence-transformers",
+        "embedding_representation": "normalized-float32",
+        "local_files_only": True,
+        "model": "fixture/minilm",
+        "model_revision": "revision",
+        "score_kind": "cosine-similarity",
+    }
+    identity = build_similarity_cache_identity(
+        model_identity=model_identity,
+        texts=("first", "second"),
+    )
+    SimilarityCache(config.parent / "cache").store(
+        identity,
+        ((1.0, 0.25), (0.25, 1.0)),
+    )
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "destination-cache").resolve()
+    destination = SimilarityCache(cache_root).store(
+        identity,
+        ((1.0, 0.5), (0.5, 1.0)),
+    )
+    replacement = SimilarityCache(tmp_path / "replacement-cache").store(
+        identity,
+        ((1.0, 0.75), (0.75, 1.0)),
+    )
+    replacement_bytes = replacement.read_bytes()
+    outputs_root = (tmp_path / "destination-outputs").resolve()
+
+    def replace_similarity_conflict(phase: str) -> None:
+        if phase == "prepare":
+            destination.write_bytes(replacement_bytes)
+
+    with pytest.raises(
+        CacheBundleConflictError,
+        match="similarity|conflict|preflight|destination",
+    ):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+            score_conflicts="keep-existing",
+            publication_hook=replace_similarity_conflict,
+        )
+
+    assert destination.read_bytes() == replacement_bytes
+    states = tuple((cache_root / MERGE_STATE_DIRECTORY).iterdir())
+    assert len(states) == 1
+    assert not (states[0] / "complete.json").exists()
+
+
 def test_score_conflicts_are_strict_by_default_and_keep_existing_is_audited(
     tmp_path: Path,
 ) -> None:

@@ -2770,11 +2770,16 @@ def _preflight_score_operations(
     cache_root: Path,
     validation_root: Path,
     conflict_policy: str,
-) -> list[dict[str, object]]:
+) -> tuple[
+    list[dict[str, object]],
+    tuple[tuple[dict[str, str], ...], ...],
+]:
     """Validate imports in scratch and compare destination scores read-only."""
     from trec_rag.rerank_score_cache import GlobalScoreCache
 
     conflicts: list[dict[str, object]] = []
+    expected_import_conflicts: list[tuple[dict[str, str], ...]] = []
+    effective_scores: dict[tuple[str, str], float] = {}
     for operation in operations:
         context, rows = _portable_score_context_and_rows(operation.staged_path)
         scratch = GlobalScoreCache(validation_root / "reranker", context)
@@ -2810,54 +2815,84 @@ def _preflight_score_operations(
 
         target_path = (cache_root / "reranker").joinpath(*context.path_parts)
         if _existing_target_receipt(target_path, cache_root) is None:
-            continue
-        target = None
-        try:
-            target = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
-            found = target.lookup_many(
-                [
+            found: Sequence[float | None] = (None,) * len(rows)
+        else:
+            target = None
+            try:
+                target = GlobalScoreCache(
+                    cache_root / "reranker", context, read_only=True
+                )
+                found = target.lookup_many(
+                    [
+                        {
+                            "cache_key": row["cache_key"],
+                            "query_sha256": row["query_sha256"],
+                            "text_sha256": row["text_sha256"],
+                        }
+                        for row in rows
+                    ]
+                )
+            except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
+                raise CacheBundleIntegrityError(
+                    f"destination score database is invalid: {target_path}"
+                ) from exc
+            finally:
+                if target is not None:
+                    target.close()
+        operation_conflicts: list[dict[str, str]] = []
+        for row, existing in zip(rows, found, strict=True):
+            if existing is not None and existing.hex() != row["score_hex"]:
+                if conflict_policy == "strict":
+                    raise CacheBundleConflictError(
+                        "numerical score conflicts with an existing destination value"
+                    )
+                conflicts.append(
                     {
                         "cache_key": row["cache_key"],
+                        "context_sha256": context.context_sha256,
+                        "existing_score_hex": existing.hex(),
+                        "kind": "score",
                         "query_sha256": row["query_sha256"],
+                        "resolution": "kept-existing",
+                        "scope": "destination",
+                        "source_score_hex": row["score_hex"],
                         "text_sha256": row["text_sha256"],
                     }
-                    for row in rows
-                ]
-            )
-        except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
-            raise CacheBundleIntegrityError(
-                f"destination score database is invalid: {target_path}"
-            ) from exc
-        finally:
-            if target is not None:
-                target.close()
-        for row, existing in zip(rows, found, strict=True):
-            if existing is None or existing.hex() == row["score_hex"]:
+                )
+            key = (context.context_sha256, str(row["cache_key"]))
+            effective = effective_scores.get(key)
+            if effective is None and existing is not None:
+                effective = existing
+                effective_scores[key] = effective
+            source_score = float(row["score"])
+            if effective is None:
+                effective_scores[key] = source_score
+                continue
+            if effective.hex() == row["score_hex"]:
                 continue
             if conflict_policy == "strict":
                 raise CacheBundleConflictError(
                     "numerical score conflicts with an existing destination value"
                 )
-            conflicts.append(
-                {
-                    "cache_key": row["cache_key"],
-                    "context_sha256": context.context_sha256,
-                    "existing_score_hex": existing.hex(),
-                    "kind": "score",
-                    "query_sha256": row["query_sha256"],
-                    "resolution": "kept-existing",
-                    "scope": "destination",
-                    "source_score_hex": row["score_hex"],
-                    "text_sha256": row["text_sha256"],
-                }
-            )
-    return sorted(
-        conflicts,
-        key=lambda row: (
-            str(row.get("context_sha256")),
-            str(row.get("cache_key")),
-            str(row.get("scope")),
+            conflict = {
+                "cache_key": str(row["cache_key"]),
+                "existing_score_hex": effective.hex(),
+                "query_sha256": str(row["query_sha256"]),
+                "source_score_hex": str(row["score_hex"]),
+                "text_sha256": str(row["text_sha256"]),
+            }
+            operation_conflicts.append(conflict)
+        expected_import_conflicts.append(tuple(operation_conflicts))
+    return (
+        sorted(
+            conflicts,
+            key=lambda row: (
+                str(row.get("context_sha256")),
+                str(row.get("cache_key")),
+                str(row.get("scope")),
+            ),
         ),
+        tuple(expected_import_conflicts),
     )
 
 
@@ -3110,7 +3145,7 @@ def merge_bundles(
     with tempfile.TemporaryDirectory(prefix="trec-rag-cache-merge-") as temporary:
         staging_root = Path(temporary)
         operations, score_operations = _prepare_operations(bundles, staging_root)
-        conflicts = _preflight_score_operations(
+        conflicts, expected_score_import_conflicts = _preflight_score_operations(
             score_operations,
             cache_root=cache_destination,
             validation_root=staging_root / "score-validation",
@@ -3119,6 +3154,7 @@ def merge_bundles(
         missing: list[_InstallOperation] = []
         identical = 0
         kept: set[tuple[str, str]] = set()
+        kept_conflicts: dict[tuple[str, str], dict[str, object]] = {}
         for operation in operations:
             target = operation.target(cache_destination, outputs_destination)
             target_root = (
@@ -3143,18 +3179,18 @@ def merge_bundles(
                 )
                 key = (operation.target_root_name, operation.relative_path.as_posix())
                 kept.add(key)
-                conflicts.append(
-                    {
-                        "existing_sha256": existing[1],
-                        "existing_size": existing[0],
-                        "kind": "similarity",
-                        "relative_path": operation.relative_path.as_posix(),
-                        "resolution": "kept-existing",
-                        "source_sha256": operation.member.sha256,
-                        "source_size": operation.member.size,
-                        "target_root": operation.target_root_name,
-                    }
-                )
+                conflict = {
+                    "existing_sha256": existing[1],
+                    "existing_size": existing[0],
+                    "kind": "similarity",
+                    "relative_path": operation.relative_path.as_posix(),
+                    "resolution": "kept-existing",
+                    "source_sha256": operation.member.sha256,
+                    "source_size": operation.member.size,
+                    "target_root": operation.target_root_name,
+                }
+                kept_conflicts[key] = conflict
+                conflicts.append(conflict)
             else:
                 raise CacheBundleConflictError(f"immutable merge conflict at {target}")
 
@@ -3246,12 +3282,31 @@ def merge_bundles(
             publication_hook("prepare")
 
         score_import_count = 0
-        for operation in score_operations:
-            _import_score_operation(
-                operation,
-                cache_root=cache_destination,
-                conflict_policy=score_conflicts,
-            )
+        for operation, expected_import_conflicts in zip(
+            score_operations,
+            expected_score_import_conflicts,
+            strict=True,
+        ):
+            try:
+                import_receipt = _import_score_operation(
+                    operation,
+                    cache_root=cache_destination,
+                    conflict_policy=score_conflicts,
+                )
+            except ValueError as exc:
+                if "conflict" in str(exc).casefold():
+                    raise CacheBundleConflictError(
+                        "transactional score import conflicts changed after preflight"
+                    ) from exc
+                raise CacheBundleIntegrityError(
+                    "transactional score import failed after preflight"
+                ) from exc
+            if import_receipt.get("conflict_count") != len(
+                expected_import_conflicts
+            ) or import_receipt.get("conflicts") != list(expected_import_conflicts):
+                raise CacheBundleConflictError(
+                    "transactional score import conflicts changed after preflight"
+                )
             score_import_count += 1
             if publication_hook is not None:
                 publication_hook(f"score-imported:{operation.member.sha256}")
@@ -3268,6 +3323,45 @@ def merge_bundles(
             if publication_hook is not None:
                 publication_hook(
                     f"installed:{operation.target_root_name}/{operation.relative_path.as_posix()}"
+                )
+
+        for operation in operations:
+            key = (operation.target_root_name, operation.relative_path.as_posix())
+            target = operation.target(cache_destination, outputs_destination)
+            target_root = (
+                cache_destination
+                if operation.target_root_name == "cache"
+                else outputs_destination
+            )
+            existing = _existing_target_receipt(target, target_root)
+            if key not in kept:
+                if existing != (operation.member.size, operation.member.sha256):
+                    raise CacheBundleConflictError(
+                        f"immutable merge target changed after preflight: {target}"
+                    )
+                continue
+            if existing is None:
+                raise CacheBundleConflictError(
+                    f"kept similarity target changed after preflight: {target}"
+                )
+            _validate_existing_similarity_conflict(
+                operation,
+                cache_root=cache_destination,
+                target=target,
+            )
+            current_conflict = {
+                "existing_sha256": existing[1],
+                "existing_size": existing[0],
+                "kind": "similarity",
+                "relative_path": operation.relative_path.as_posix(),
+                "resolution": "kept-existing",
+                "source_sha256": operation.member.sha256,
+                "source_size": operation.member.size,
+                "target_root": operation.target_root_name,
+            }
+            if current_conflict != kept_conflicts[key]:
+                raise CacheBundleConflictError(
+                    f"kept similarity conflict changed after preflight: {target}"
                 )
 
         _write_durable_create_only(conflicts_path, conflicts_bytes)
