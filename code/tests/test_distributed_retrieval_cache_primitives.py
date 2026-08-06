@@ -9,7 +9,7 @@ import pytest
 from trec_rag.document_store import DocumentStore
 from trec_rag.pipeline_config import RetrieverConfig
 from trec_rag.pipeline_models import QueryVariant
-from trec_rag.remote_client import RemoteSearchResponse
+from trec_rag.remote_client import RemotePyseriniThrottled, RemoteSearchResponse
 from trec_rag.remote_config import RemotePyseriniConfig
 from trec_rag.repo_env import repo_cache_root
 from trec_rag.retrieval_cache import (
@@ -67,7 +67,9 @@ def _tree_snapshot(root: Path) -> tuple[tuple[str, str, int], ...]:
     if not root.exists():
         return ()
     rows: list[tuple[str, str, int]] = []
-    for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+    for path in sorted(
+        candidate for candidate in root.rglob("*") if candidate.is_file()
+    ):
         content = path.read_bytes()
         rows.append(
             (
@@ -153,6 +155,67 @@ class _RecordingClient:
             payload=json.loads(raw),
             sha256=hashlib.sha256(raw).hexdigest(),
         )
+
+
+def test_online_retriever_counts_every_short_throttle_transport_attempt(
+    tmp_path: Path,
+) -> None:
+    class ThrottleOnceClient(_RecordingClient):
+        def search_raw(self, query_text: str, *, raw_sink=None) -> RemoteSearchResponse:
+            self.calls += 1
+            if self.calls == 1:
+                raise RemotePyseriniThrottled(0)
+            raw = _response(query_text)
+            if raw_sink is not None:
+                raw_sink(raw)
+            return RemoteSearchResponse(
+                raw=raw,
+                payload=json.loads(raw),
+                sha256=hashlib.sha256(raw).hexdigest(),
+            )
+
+    client = ThrottleOnceClient()
+    retriever = PyseriniRemoteRetriever(
+        _retriever_config(), cache_dir=tmp_path / "cache", client=client
+    )
+
+    assert [row.docid for row in retriever.retrieve(_query())] == ["doc-portable"]
+    assert client.calls == 2
+    assert retriever.transport_calls == 2
+
+
+def test_online_noncache_search_fallback_counts_its_transport_call(
+    tmp_path: Path,
+) -> None:
+    class SearchOnlyClient:
+        config = RemotePyseriniConfig(ENDPOINT, None, 2, ())
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, query_text: str) -> dict[str, object]:
+            self.calls += 1
+            return json.loads(_response(query_text))
+
+    client = SearchOnlyClient()
+    config = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=2,
+        index="climbmix-400b",
+        corpus_epoch="test-epoch",
+        cache=False,
+    )
+    retriever = PyseriniRemoteRetriever(
+        config,
+        cache_dir=tmp_path / "cache",
+        client=client,  # type: ignore[arg-type]
+    )
+
+    assert [row.docid for row in retriever.retrieve(_query())] == ["doc-portable"]
+    assert client.calls == 1
+    assert retriever.transport_calls == 1
 
 
 def test_cache_only_retriever_hit_never_constructs_client_or_writes(

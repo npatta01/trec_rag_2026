@@ -327,10 +327,10 @@ before touching the shared cache:
 shard_root="$(pwd)/outputs/private-cache-shards/nonagentic-two-topic-20260806"
 mkdir -p "$shard_root/rag2026-0" "$shard_root/rag2026-1"
 
-hf buckets sync \
+.venv/bin/hf buckets sync \
   hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0 \
   "$shard_root/rag2026-0"
-hf buckets sync \
+.venv/bin/hf buckets sync \
   hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-1 \
   "$shard_root/rag2026-1"
 
