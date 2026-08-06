@@ -27,7 +27,7 @@ OpenRouter DeepSeek, Pyserini REST, Mixedbread ROCm reranking.
   topic identity, exact Git revision validation, TopicRecords receipts,
   producer revision binding, evidence-phase provider failure propagation,
   synthesis provider retry/recovery, and the shared two-attempt closeout bound.
-- Task 9 is green: the full sandboxed suite passed 2,091 tests with 19 skips
+- Task 9 is green: the full sandboxed suite passed 2,095 tests with 19 skips
   and one expected Chrome IPC sandbox failure; that exact Chrome test passed
   separately with its required process access. The offline one-topic CLI test
   now exercises production cache/dependency wiring, a real TopicRecords
