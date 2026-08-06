@@ -1,7 +1,7 @@
 schema_version: facet_pilot_config_v2
 
 experiment:
-  id: facet-deepseek-b40-v2
+  id: facet-deepseek-b40-v3
 
 topics:
   path: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
@@ -19,7 +19,12 @@ retrieval:
 passage:
   model: mixedbread-ai/mxbai-rerank-base-v2
   score_cache_dir: cache/reranker
-  device: auto
+  # Pinned rather than `auto` so the sealed passage-search identity is the same
+  # string on every host. `auto` resolves per hardware, and a checkpoint scored
+  # where it resolved to `cpu` cannot be resumed or exported where it resolves
+  # to `cuda`. ROCm reports itself as `cuda`, so this covers the ROCm host and a
+  # rented NVIDIA box alike.
+  device: cuda
   passages_per_query: 100
   chunk_max_characters: 3500
   chunk_overlap_characters: 350

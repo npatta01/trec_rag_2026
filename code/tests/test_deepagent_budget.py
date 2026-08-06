@@ -571,6 +571,8 @@ def test_round_authorization_refuses_an_out_of_order_round_index() -> None:
         {"soft_seconds": float("nan")},
         {"hard_seconds": float("inf")},
         {"soft_seconds": 10.0, "hard_seconds": 9.0},
+        {"soft_seconds": True},
+        {"hard_seconds": False},
     ],
 )
 def test_configuration_rejects_invalid_budget_values(config: dict[str, object]) -> None:
@@ -578,9 +580,51 @@ def test_configuration_rejects_invalid_budget_values(config: dict[str, object]) 
         ResearchBudgetConfig(**config)  # type: ignore[arg-type]
 
 
-def test_deadlines_clear_a_realistic_paced_run() -> None:
-    """A healthy run must not trip the soft deadline just from search pacing."""
+def test_default_budget_has_no_elapsed_time_stop() -> None:
+    """Elapsed time is observable by default, but never stops or refuses work."""
     config = ResearchBudgetConfig()
+    assert config.soft_seconds is None
+    assert config.hard_seconds is None
+
+    clock = FakeClock()
+    budget = ResearchBudget(config, clock=clock)
+    # Far past both retired 30/60-minute defaults.
+    clock.advance(100_000.0)
+
+    decision = budget.reserve_task(ResearchTaskContext("T1", 1, "survey", ("N1",)))
+
+    assert decision.ok is True
+    assert decision.code == "OK"
+    assert decision.must_stop is False
+    assert decision.snapshot.soft_deadline_reached is False
+    assert decision.snapshot.hard_deadline_reached is False
+    assert decision.snapshot.stop_code is None
+    # Elapsed time is still reported, just not enforced.
+    assert decision.snapshot.elapsed_seconds == 100_000.0
+    assert budget.snapshot().stop_code is None
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"soft_seconds": None, "hard_seconds": None},
+        {"soft_seconds": 600.0, "hard_seconds": None},
+        {"soft_seconds": None, "hard_seconds": 1800.0},
+        {"soft_seconds": 600.0, "hard_seconds": 1800.0},
+    ],
+)
+def test_optional_deadline_validation(config: dict[str, object]) -> None:
+    """Either deadline may be absent; finite ones keep their existing rules."""
+    accepted = ResearchBudgetConfig(**config)  # type: ignore[arg-type]
+
+    assert accepted.soft_seconds == config.get("soft_seconds")
+    assert accepted.hard_seconds == config.get("hard_seconds")
+
+
+def test_deadlines_clear_a_realistic_paced_run() -> None:
+    """An explicitly bounded run must not trip its soft deadline from pacing."""
+    config = ResearchBudgetConfig(soft_seconds=1800.0, hard_seconds=3600.0)
 
     assert config.soft_seconds >= 1200.0
     assert config.hard_seconds >= 2 * config.soft_seconds - 1

@@ -234,12 +234,294 @@ planning, retrieval, evidence, and canonicalization; they belong only in
 post-seal evaluation. Outputs include source text and generated claims, so keep
 `outputs/` ignored and private.
 
+### Splitting one run across hosts
+
+Topic selection plus per-topic sealing make it practical to run part of a run on
+a rented GPU box and finish it locally. Partition the topics with
+`--topic-subset`, never overlap the two sets, and copy the remote work back
+before the final local run. Sealed topics revalidate and are skipped, the
+remaining topics run locally, and the export is regenerated over every selected
+topic, so the organizer TSV, full-text ZIP, and handoff never need manual
+merging.
+
+The downloadable artifact is **two directories**, not one:
+
+| Path | Required | Why |
+| --- | --- | --- |
+| `outputs/<experiment.id>/<topic-id>/` | yes | sealed per-topic checkpoints, ledger, and receipts |
+| `cache/documents/v1/` | yes | content-addressed document text the export reads for every row |
+| `cache/retrieval/pyserini_remote/` | no | avoids re-querying the hosted index if a topic is rerun |
+| `cache/canonical/<prompt-version>/` | no | avoids re-paying for hosted canonical calls on a rerun |
+| `cache/reranker/` | **no — do not copy** | the score database path is derived from the scoring context, so both hosts write the same filename with different contents and a copy clobbers local scores |
+
+Skipping `cache/documents/v1/` is the quiet failure: the checkpoints validate
+and the export then fails on missing document text. Both required directories
+are content-addressed or topic-scoped, so they merge by copy.
+
+Both hosts must agree on the things the checkpoints seal, or resume fails
+closed:
+
+- **The same config bytes.** The YAML SHA-256 is sealed into every dispatch and
+  projection receipt, so `experiment.id` and every other field must be
+  byte-identical on both hosts.
+- **`passage.device` pinned, not `auto`.** The resolved device string is part of
+  the sealed passage-search identity, and the exporting host recomputes it.
+  `auto` resolving to `cpu` remotely and `cuda` locally rejects the download.
+  The checked-in config pins `cuda`, which both ROCm and NVIDIA report.
+- **The same `INDEX_URL`.** It is part of the retriever identity and is required
+  even for a resume-and-export pass that issues no queries.
+- **A clean tracked worktree containing real git metadata.** The runner rejects
+  a dirty tree and reads `HEAD` for the recorded commit, so ship a checkout
+  rather than a file tarball.
+- **No commit change inside a topic.** All phases of one topic must share a
+  commit; different topics may carry different commits.
+- **Both pinned model snapshots pre-cached.** The retrieval path loads two, each
+  at a pinned revision with `local_files_only=True`, and each must resolve from
+  the cache alone before a run starts:
+
+  | Snapshot | Revision | Loaded by |
+  | --- | --- | --- |
+  | `mixedbread-ai/mxbai-rerank-base-v2` | `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` | passage scoring |
+  | `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | evidence selection |
+
+  `code/tools/setup_cuda_env.sh` fetches both and re-resolves each with
+  `local_files_only=True`. Caching only the reranker is the trap: selection runs
+  *after* passage scoring, so the missing MiniLM surfaces as a late failure with
+  the expensive stage already paid for.
+
+Set up a rented NVIDIA box with `code/tools/setup_env.sh`, which now detects
+CUDA as well as ROCm and syncs the `cuda` dependency group. That group pins the
+same `sentence-transformers`, `transformers`, and `numpy` versions the `rocm`
+group resolves to, so reranker score-cache entries stay interchangeable and the
+recorded backend version stays honest. The two groups are declared conflicting,
+so `uv.lock` carries separate CUDA and ROCm resolution forks. Regenerate it on a
+ROCm host whenever either group changes, because `repo.radeon.com` must be
+reachable while uv resolves both forks.
+
+`code/tools/verify_torch_groups.sh` proves three things without installing
+anything:
+
+1. **`uv.lock` is current with `pyproject.toml`.** `uv lock --check` re-resolves
+   and compares the result against the committed lock, failing if they differ.
+   It never writes the lock and never installs, but it does re-resolve, so it
+   needs package-index access.
+2. **Each group selects the torch build it should.** `uv export --frozen` reads
+   the committed lock alone. The `rocm` group must resolve a `repo.radeon.com`
+   wheel. The `cuda` group must resolve *exactly* `torch==2.9.1` — a direct URL,
+   a CPU wheel, or any other version fails — and the export must also carry the
+   `nvidia-cuda-runtime`, `nvidia-cublas`, and `nvidia-cudnn` packages a
+   GPU-enabled wheel depends on, which is what separates the real build from a
+   CPU-only one published under the same version.
+3. **That `cuda` torch comes from PyPI.** The requirements format renders every
+   registry package as `name==version` with no source attached, so
+   `torch==2.9.1` reads identically whether PyPI, a mirror, or a private index
+   served it. To settle it, the script also exports the same group as PEP 751
+   metadata (`uv export --frozen --group cuda --format pylock.toml`), which does
+   record a per-package index, and requires the single `torch` entry there to be
+   version `2.9.1` with index exactly `https://pypi.org/simple`. Asking uv for
+   the group-scoped export is what keeps this honest — reading an unscoped
+   multi-fork `uv.lock` block would leave the fork ambiguous.
+
+Every uv call runs with `--no-cache` and a throwaway `--cache-dir` removed on
+exit, so the script neither reads nor writes the shared persistent uv cache, and
+it never touches a model, retrieval, or reranker cache. Every call also runs
+with `--no-python-downloads`, which is what makes "installs nothing" hold on a
+host that does not already have the pinned Python 3.12.13: without it, `uv lock`
+would fetch and install a managed interpreter just to resolve. With it, such a
+host fails loudly instead. Safe to run beside an active pipeline task. When uv
+itself fails for an unrelated reason — no network, a rejected credential, an
+unknown flag — the script reports uv's own message instead of blaming the
+dependency group, and it withholds the "regenerate the lock" hint, which is
+printed only when the lock is actually diagnosed as stale.
+
+```bash
+./code/tools/verify_torch_groups.sh
+OK   uv.lock is current with pyproject.toml
+OK   rocm: torch @ https://repo.radeon.com/rocm/.../torch-2.9.1+rocm7.2.1...whl
+OK   cuda: torch==2.9.1 from https://pypi.org/simple
+```
+
+`code/tests/test_verify_torch_groups.py` and
+`code/tests/test_env_setup_contract.py` cover this bootstrap path hermetically:
+the first runs the script against a stub `uv` on `PATH`, the second executes the
+setup script's prefetch block against a stubbed `huggingface_hub` and drives the
+production loaders with stub loaders. Neither reaches the network, resolves
+dependencies, or downloads a model.
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_verify_torch_groups.py \
+  code/tests/test_env_setup_contract.py -q
+```
+
+These tests do write files — a throwaway SQLite score-cache database and a stub
+uv cache directory — but only under pytest's per-test `tmp_path`. Nothing is
+written to the shared persistent caches under `cache/` (`cache/reranker/`,
+`cache/retrieval/`, `cache/documents/`), to the Hugging Face model cache, or to
+the shared uv cache, so the suite is safe to run beside a live pipeline task.
+
 **Model quality is not validated.** The two-topic pilot verifies mechanics,
 provenance, fallback, and byte-stable resume behavior, but it does not establish
 that generated decompositions improve retrieval or that canonical claims are
 entailed. Promotion requires a frozen, held-out topic evaluation measuring
 retrieval coverage, evidence quality, claim grounding, redundancy, and failure
 rate.
+
+## Agentic competition retrieval operations
+
+Fixed and agentic retrieval are separate, strict workflows that share only the
+sealed generation-handoff contract:
+
+- `configs/rag26_competition_retrieval_v2.yaml` runs with
+  `trec_rag.competition_retrieval` and keeps the fixed facet pipeline's existing
+  checkpoint behavior.
+- `configs/rag26_competition_agentic_retrieval_v1.yaml` runs with
+  `trec_rag.competition_agentic_retrieval` and uses an authenticated run plan
+  plus create-only per-topic seals.
+
+The runners reject the other mode's config before cache or output mutation.
+Both checked-in files are canonical full-run configs and select all 119 test
+narratives when no `--topic` arguments are supplied. Do not edit either one for
+a smoke run. Instead, make an ignored local copy, change only
+`experiment.id` to a fresh smoke identity, and leave all retrieval, model,
+cache, chunking, and budget identities unchanged:
+
+```bash
+mkdir -p configs/local
+cp configs/rag26_competition_agentic_retrieval_v1.yaml \
+  configs/local/rag26-agentic-two-topic-smoke.yaml
+```
+
+For example, set the copy's `experiment.id` to
+`agentic-deepseek-two-topic-smoke-20260805`. Once create starts, do not edit
+that file: resume authenticates its exact bytes. Bound a one- or two-topic
+smoke with repeated selectors:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/local/rag26-agentic-two-topic-smoke.yaml \
+  --topic rag2026-0 --topic rag2026-1
+```
+
+Before any live create or resume, verify the tracked worktree is clean,
+submodules match the superproject, the local model revision is available to
+ROCm, and the ignored `.env`/`.env.local` supplies `INDEX_URL`,
+`PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY` without printing their values.
+Confirm the exact selected topic count, the fresh or existing
+`outputs/<experiment.id>/` namespace as appropriate, expected cache hits and
+misses, and expected hosted calls. The CLI performs its own config, topic,
+revision, submodule, secret-name, and namespace preflight before constructing
+runtime dependencies or making hosted calls. A full live run still requires
+explicit authorization.
+
+Create is the default lifecycle mode; there is no `--create` flag. It refuses
+an existing output namespace. When a full-cohort run is separately authorized,
+the checked-in agentic config form is:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/rag26_competition_agentic_retrieval_v1.yaml
+```
+
+Create writes `work/run_plan.json` before topic work. Its config bytes, run ID,
+source revisions, and ordered topic cohort are immutable. Initial repeated
+`--topic` arguments define a subset cohort; omitting them selects the config's
+complete 119-topic cohort.
+
+If create exits with unresolved topics, keep the same config file, run ID, and
+output directory. Resume-all runs every outstanding topic and skips valid
+sealed successes:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  CONFIG --resume
+```
+
+Targeted resume narrows that invocation to named outstanding topics:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  CONFIG --resume --topic rag2026-19
+```
+
+Resume selectors never change final membership: the original run plan remains
+the publication cohort. A targeted topic restarts logically from its official
+narrative in a new attempt; it does not continue model state or mutate an
+earlier attempt. A zero-grounded topic likewise fails once, preserves private
+diagnostics, and waits for an explicit operator `--resume`. It is never
+automatically retried and raw original-query passages are never substituted as
+generation evidence.
+
+Logical restart does not discard shared cache reuse. An exact retrieval request
+with the same endpoint, index/corpus identity, query text, and requested depth
+hits the authenticated retrieval cache. An exact reranker pair with the same
+query text, passage text, model/revision, runtime/scoring, and chunker identity
+hits the score cache; authenticated document bodies and the pinned local model
+are also shared. A new adaptive query or query/passage pair is a normal cache
+miss. Coordinator and researcher OpenRouter responses are not cached, so a
+restarted topic makes fresh hosted model calls and may choose different
+adaptive queries.
+
+There is no agentic overwrite mode. Config-byte, run-ID, topic-source, code, or
+submodule drift requires a fresh `experiment.id` and output namespace. Sealed
+topics are immutable, and conflicting existing bytes fail closed.
+
+Root publication happens only when every topic in the original run plan has a
+valid success seal. Until then the command exits nonzero, reports unresolved
+IDs and a copy-paste resume command, and leaves the root export absent. A
+complete agentic output root publishes exactly these standard artifacts, with
+the outer receipt last:
+
+- `r_output_trec_rag_2026.tsv`
+- `retrieval_with_text.jsonl.zip`
+- `generation_handoff_manifest.json`
+- `retrieval_export_manifest.json`
+
+For a concrete 20-topic repair, first make an ignored local config copy whose
+only edit is
+`experiment.id: agentic-deepseek-twenty-topic-repair-20260805`, then freeze its
+bytes. This create command records `rag2026-0` through `rag2026-19` as the
+immutable cohort:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/local/rag26-agentic-twenty-topic-repair.yaml \
+  --topic rag2026-0 --topic rag2026-1 --topic rag2026-2 \
+  --topic rag2026-3 --topic rag2026-4 --topic rag2026-5 \
+  --topic rag2026-6 --topic rag2026-7 --topic rag2026-8 \
+  --topic rag2026-9 --topic rag2026-10 --topic rag2026-11 \
+  --topic rag2026-12 --topic rag2026-13 --topic rag2026-14 \
+  --topic rag2026-15 --topic rag2026-16 --topic rag2026-17 \
+  --topic rag2026-18 --topic rag2026-19
+```
+
+If the first 19 topics seal and `rag2026-19` fails, repair only that twentieth
+topic in the same namespace:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/local/rag26-agentic-twenty-topic-repair.yaml \
+  --resume --topic rag2026-19
+```
+
+The 19 seals are authenticated and skipped. When `rag2026-19` seals, the same
+invocation aggregates the original run-plan cohort and publishes all four root
+artifacts for all 20 topics under
+`outputs/agentic-deepseek-twenty-topic-repair-20260805/`.
+
+RAG consumption is unchanged. Point an ignored copy of a competition RAG
+config at this run's `generation_handoff_manifest.json`, give the RAG run its
+own experiment/output identity and matching topic IDs, then use the existing
+runner:
+
+```bash
+.venv/bin/python -m trec_rag.competition_rag \
+  --config configs/local/<matching-agentic-rag-config>.yaml
+```
+
+The RAG runner does not branch on retrieval mode; it validates and consumes the
+same typed handoff produced by fixed retrieval. Do not start hosted RAG
+generation as part of a retrieval smoke unless it is separately authorized.
 
 ## Topic-record source geometry
 
@@ -339,7 +621,7 @@ are the intended difference. Each config has one input field:
 
 ```yaml
 inputs:
-  handoff_manifest: outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json
+  handoff_manifest: outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
 ```
 
 Generation validates the complete handoff before mutating generation state.
@@ -680,21 +962,27 @@ general-purpose subagent. `write_todos` is intentionally not installed: the
 need/facet/nugget state and immutable result are the retrieval workflow's
 auditable state, not a general task tracker.
 
-### Fixed researcher budget
+### Default SDK researcher budget
 
-The following invocation-local limits are fixed defaults. Pass a
-`ResearchBudgetConfig` to the constructor or `from_env` only for a deliberate
-POC experiment; they are not environment variables.
+The following invocation-local defaults match the canonical agentic competition
+budget in `configs/rag26_competition_agentic_retrieval_v1.yaml`. The strict
+competition config is the authoritative run contract; it does not accept
+elapsed-time deadline fields. Pass a different `ResearchBudgetConfig` to the
+SDK only for a deliberate test or POC experiment. These limits are not
+environment variables.
 
 | Limit | Default |
 | --- | ---: |
-| Researcher invocations / concurrent researchers | 10 / 3 |
+| Researcher invocations / concurrent researchers | 20 / 3 |
 | Combined researcher search + snippet attempts | 100 |
 | Tool calls / searches / snippets per researcher | 20 / 8 / 16 |
-| Model calls, researcher / main coordinator | 30 / 40 |
-| Soft warning / hard admission deadline | 30 min / 60 min |
+| Model calls, researcher / main coordinator | 30 / 80 |
+| Soft warning / hard admission deadline | none / none |
 | Consecutive no-yield calls per researcher | 3 |
 | Consecutive no-progress rounds | 2 |
+
+Elapsed time remains observable. It cannot warn, stop, or refuse competition
+work unless a non-competition caller explicitly supplies finite SDK deadlines.
 
 The original narrative is never rewritten for its deterministic first search.
 Each researcher receives compact task JSON containing its task ID, round,

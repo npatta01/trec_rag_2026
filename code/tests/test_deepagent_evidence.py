@@ -5,6 +5,7 @@ import json
 import pytest
 from trec_rag.deepagent_budget import ResearchTaskContext
 from trec_rag.deepagent_evidence import (
+    MAX_DRAFT_NUGGETS_PER_NEED,
     MAX_FRONTIER_CHARACTERS,
     SATURATION_ZERO_YIELD_PAGES,
     DocumentObservation,
@@ -323,6 +324,138 @@ def test_pending_closeout_reopens_when_every_selected_draft_is_superseded() -> N
     )
 
     assert state.pending_closeout_need_ids() == ("n1",)
+
+
+def test_pending_closeout_reopens_when_any_selected_draft_is_superseded() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta("g1"))
+    state.apply_delta(_grounded_nugget_delta("g2"))
+    state.apply_delta(_grounded_nugget_delta("g3"))
+    state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "More detail would help.",
+                    "draft_nugget_ids": ["g1", "g2"],
+                }
+            ]
+        }
+    )
+    state.apply_delta(
+        {"supersede_nuggets": [{"nugget_id": "g1", "superseded_by": "g3"}]}
+    )
+
+    assert state.pending_closeout_need_ids() == ("n1",)
+
+    recovery = state.recover_grounded_drafts()
+
+    assert recovery.recovered_need_ids == ("n1",)
+    assert state.report().needs[0].draft_nugget_ids == ("g2", "g3")
+
+
+def test_grounded_recovery_selects_live_nuggets_in_need_order_and_caps() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    nugget_ids = [
+        f"g{index}" for index in range(MAX_DRAFT_NUGGETS_PER_NEED + 2)
+    ]
+    for nugget_id in nugget_ids:
+        result = state.apply_delta(_grounded_nugget_delta(nugget_id))
+        assert result.accepted_ids == (nugget_id,)
+    state.apply_delta(
+        {
+            "supersede_nuggets": [
+                {"nugget_id": "g1", "superseded_by": nugget_ids[-1]}
+            ]
+        }
+    )
+
+    recovery = state.recover_grounded_drafts()
+
+    expected = ("g0", "g2", "g3", "g4", "g5")
+    assert recovery.recovered_need_ids == ("n1",)
+    assert recovery.selected_nugget_ids == expected
+    assert "g1" not in recovery.live_grounded_nugget_ids
+    need = state.report().needs[0]
+    assert need.status == "partial"
+    assert need.draft_nugget_ids == expected
+    assert state.pending_closeout_need_ids() == ()
+
+
+def test_grounded_recovery_retains_valid_selection_and_uses_only_owned_nuggets() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(
+        {
+            "add_needs": [
+                {
+                    "need_id": "n2",
+                    "narrative_span": "what challenges do they face",
+                    "question": "What challenges do migrants face?",
+                }
+            ]
+        }
+    )
+    state.apply_delta(_grounded_nugget_delta("owned-by-n1"))
+    state.apply_delta(
+        {
+            "add_nuggets": [
+                {
+                    "nugget_id": "owned-by-n2",
+                    "text": "Displacement creates practical challenges.",
+                    "need_ids": ["n2"],
+                    "facet_ids": [],
+                    "evidence": [{"cite": "S1"}],
+                    "contradicts": [],
+                }
+            ],
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "More detail would help.",
+                    "draft_nugget_ids": ["owned-by-n1"],
+                }
+            ],
+        }
+    )
+
+    recovery = state.recover_grounded_drafts()
+
+    needs = {need.need_id: need for need in state.report().needs}
+    assert recovery.recovered_need_ids == ("n2",)
+    assert recovery.selected_nugget_ids == ("owned-by-n2",)
+    assert needs["n1"].draft_nugget_ids == ("owned-by-n1",)
+    assert needs["n2"].draft_nugget_ids == ("owned-by-n2",)
+
+
+def test_grounded_recovery_reports_zero_without_mutating_empty_state() -> None:
+    state = EvidenceCoverageState("Why do people migrate?")
+    state.apply_delta(
+        {
+            "add_needs": [
+                {
+                    "need_id": "n1",
+                    "narrative_span": "Why do people migrate",
+                    "question": "Why do people migrate?",
+                }
+            ]
+        }
+    )
+    before = state.report()
+
+    recovery = state.recover_grounded_drafts()
+
+    after = state.report()
+    assert recovery.live_grounded_nugget_ids == ()
+    assert recovery.recovered_need_ids == ()
+    assert recovery.selected_nugget_ids == ()
+    assert after.state_version == before.state_version
+    assert after.state_hash == before.state_hash
+    assert after.needs[0].draft_nugget_ids == ()
 
 
 def test_atomic_completion_rejects_live_evidence_without_draft_selection() -> None:

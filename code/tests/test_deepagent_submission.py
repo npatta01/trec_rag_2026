@@ -1,13 +1,23 @@
+from types import SimpleNamespace
+
 import pytest
 
 from trec_rag.deepagent_evidence import EvidenceCoverageState
+from trec_rag.deepagent_retrieval import (
+    AgentCandidateProvenance,
+    AgentRankedCandidate,
+    AgentSearch,
+)
 from trec_rag.deepagent_snippets import RelevantSnippet, SnippetPage
 from trec_rag.deepagent_submission import (
+    AgenticDocumentRank,
     document_usefulness,
+    rank_agentic_documents,
     rank_for_submission,
     selection_summary,
     submission_rows,
 )
+from trec_rag.pipeline_models import RankedCandidate, RetrievedCandidate
 
 
 NARRATIVE = "Why do people migrate and what challenges do they face?"
@@ -198,3 +208,282 @@ def test_summary_reports_what_the_submission_leans_on() -> None:
     assert summary["documents_behind_a_vital_nugget"] == 1
     assert summary["documents_behind_a_drafted_nugget"] == 1
     assert summary["single_nugget_documents"] == 2
+
+
+# --- variable-depth agentic document order -----------------------------------
+#
+# The agentic run submits document order rather than a tuned score: documents
+# that supplied live evidence, ordered by the retrieval evidence that produced
+# them, with a depth that falls out of the ledger.
+
+
+def _retrieved(docid: str, rank: int) -> RetrievedCandidate:
+    return RetrievedCandidate(
+        topic_id="rag2026-1",
+        variant_name="original",
+        retriever_name="climbmix",
+        query_text="migration drivers",
+        docid=docid,
+        rank=rank,
+        score=1.0 / rank,
+        text="Conflict displaces people across borders every year.",
+    )
+
+
+def _search(*docids_and_ranks: tuple[str, int], query: str = "migration drivers"):
+    return AgentSearch(
+        query=query,
+        kind="original",
+        candidates=tuple(_retrieved(docid, rank) for docid, rank in docids_and_ranks),
+        cache_status="hit",
+    )
+
+
+def _fused(*docids: str) -> tuple[RankedCandidate, ...]:
+    return tuple(
+        RankedCandidate(
+            topic_id="rag2026-1",
+            docid=docid,
+            rank=rank,
+            score=1.0 / rank,
+            text="Conflict displaces people across borders every year.",
+            provenance=[],
+        )
+        for rank, docid in enumerate(docids, start=1)
+    )
+
+
+def test_agentic_document_order_submits_only_live_supporting_documents() -> None:
+    """Read-but-uncited and superseded-only documents are not evidence."""
+    state = _state()
+    _add(state, "live", "S1")
+    _add(state, "old", "S2")
+    _add(state, "new", "S3")
+    state.apply_delta(
+        {"supersede_nuggets": [{"nugget_id": "old", "superseded_by": "new"}]}
+    )
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=_fused("doc-a", "doc-b", "doc-c"),
+        searches=(_search(("doc-a", 1), ("doc-b", 2), ("doc-c", 3)),),
+    )
+
+    # doc-b is retrieved and fused but only backed a superseded claim.
+    assert [row.document_id for row in ranked] == ["doc-a", "doc-c"]
+
+
+def test_agentic_document_order_keeps_final_fused_order() -> None:
+    """Fused/RRF order is the ranking signal for documents that survived it."""
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+    _add(state, "c", "S3")
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        # Neither document-id order nor search order.
+        fused_candidates=_fused("doc-c", "doc-a", "doc-b"),
+        searches=(_search(("doc-a", 1), ("doc-b", 2), ("doc-c", 3)),),
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-c", "doc-a", "doc-b"]
+    assert {row.order_source for row in ranked} == {"fused"}
+
+
+def test_agentic_document_order_falls_back_to_earliest_search_position() -> None:
+    """A document fusion dropped keeps the earliest place any search gave it."""
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+    _add(state, "c", "S3")
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=(),
+        searches=(
+            _search(("doc-c", 1), ("doc-b", 2)),
+            # doc-b reappears later and higher; the earliest sighting still wins.
+            _search(("doc-b", 1), ("doc-a", 2), query="displacement"),
+        ),
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-c", "doc-b", "doc-a"]
+    assert {row.order_source for row in ranked} == {"search"}
+
+
+def test_agentic_document_order_uses_passage_rank_when_search_retains_passages() -> None:
+    """Production searches retain reranked passages; that is the fallback signal."""
+    state = _state(documents=("doc-a", "doc-b"))
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+    search = SimpleNamespace(
+        # Remote document order disagrees with the local passage reranker.
+        candidates=(
+            SimpleNamespace(docid="doc-a", rank=1),
+            SimpleNamespace(docid="doc-b", rank=2),
+        ),
+        passages=(
+            SimpleNamespace(docid="doc-b", rank=1),
+            SimpleNamespace(docid="doc-a", rank=8),
+        ),
+    )
+
+    ranked = rank_agentic_documents(
+        state.report(), fused_candidates=(), searches=(search,)
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-b", "doc-a"]
+
+
+def test_agentic_document_order_breaks_search_ties_by_document_id() -> None:
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=(),
+        searches=(_search(("doc-b", 1), ("doc-a", 1)),),
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-a", "doc-b"]
+
+
+def test_agentic_document_order_puts_fused_documents_before_search_only_ones() -> None:
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+    _add(state, "c", "S3")
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=_fused("doc-c"),
+        searches=(_search(("doc-a", 1), ("doc-b", 2), ("doc-c", 3)),),
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-c", "doc-a", "doc-b"]
+    assert [row.order_source for row in ranked] == ["fused", "search", "search"]
+
+
+def test_agentic_document_order_places_unseen_documents_last_by_id() -> None:
+    """A cited document neither fused nor in any search still has to be ranked."""
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+    _add(state, "c", "S3")
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=_fused("doc-c"),
+        searches=(),
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-c", "doc-a", "doc-b"]
+    assert [row.order_source for row in ranked] == ["fused", "unplaced", "unplaced"]
+
+
+def test_agentic_document_order_collapses_duplicates() -> None:
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "a2", "S1")
+    _add(state, "b", "S2")
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=_fused("doc-a", "doc-b", "doc-a"),
+        searches=(
+            _search(("doc-a", 1), ("doc-b", 2)),
+            _search(("doc-a", 1), query="displacement"),
+        ),
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-a", "doc-b"]
+
+
+def test_agentic_document_order_ranks_are_contiguous_with_integer_scores() -> None:
+    """Ranks start at 1 with no gaps; scores are ``document_count - rank + 1``."""
+    state = _state(documents=("doc-a", "doc-b", "doc-c", "doc-d"))
+    for index, handle in enumerate(("S1", "S2", "S3", "S4")):
+        _add(state, f"g{index}", handle)
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=_fused("doc-d", "doc-b"),
+        searches=(_search(("doc-c", 1), ("doc-a", 2)),),
+    )
+
+    assert [row.rank for row in ranked] == [1, 2, 3, 4]
+    scores = [row.score for row in ranked]
+    assert scores == [4, 3, 2, 1]
+    assert all(
+        isinstance(row.score, int) and not isinstance(row.score, bool)
+        for row in ranked
+    )
+    assert all(row.score > 0 for row in ranked)
+    assert all(earlier > later for earlier, later in zip(scores, scores[1:]))
+    assert all(row.score == len(ranked) - row.rank + 1 for row in ranked)
+    assert ranked[0] == AgenticDocumentRank(
+        document_id="doc-d", rank=1, score=4, order_source="fused"
+    )
+
+
+def test_agentic_document_order_is_empty_without_grounded_evidence() -> None:
+    """Fused candidates never inject a document the ledger did not ground."""
+    state = _state()
+
+    ranked = rank_agentic_documents(
+        state.report(),
+        fused_candidates=_fused("doc-a", "doc-b", "doc-c"),
+        searches=(_search(("doc-a", 1), ("doc-b", 2), ("doc-c", 3)),),
+    )
+
+    assert ranked == ()
+
+
+def test_agentic_document_order_accepts_agent_ranked_candidates() -> None:
+    """The projector takes the runner's own immutable candidate objects."""
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+
+    fused = tuple(
+        AgentRankedCandidate(
+            topic_id="rag2026-1",
+            docid=docid,
+            rank=rank,
+            score=1.0 / rank,
+            text="Conflict displaces people across borders every year.",
+            provenance=(
+                AgentCandidateProvenance(
+                    query="migration drivers",
+                    query_kind="original",
+                    variant_name="original",
+                    retriever_name="climbmix",
+                    source_rank=rank,
+                    source_score=1.0 / rank,
+                    cache_status="hit",
+                ),
+            ),
+        )
+        for rank, docid in enumerate(("doc-b", "doc-a"), start=1)
+    )
+
+    ranked = rank_agentic_documents(state.report(), fused_candidates=fused)
+
+    assert [(row.document_id, row.rank, row.score) for row in ranked] == [
+        ("doc-b", 1, 2),
+        ("doc-a", 2, 1),
+    ]
+
+
+def test_agentic_document_order_leaves_legacy_ranking_untouched() -> None:
+    """The usefulness ranking keeps its own float-score semantics."""
+    state = _state()
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+
+    legacy = rank_for_submission(state.report())
+
+    assert [row.document_id for row in legacy] == ["doc-a", "doc-b"]
+    assert all(isinstance(row.score, float) for row in legacy)
