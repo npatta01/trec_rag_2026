@@ -9,7 +9,7 @@ as a separate canonical receipt.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import gzip
 import hashlib
 import io
@@ -21,10 +21,11 @@ import sqlite3
 import stat
 import tarfile
 import tempfile
-from typing import BinaryIO, Callable, Sequence
+from typing import Any, BinaryIO, Callable, Sequence
 import unicodedata
 from urllib.parse import quote
 
+import yaml
 import zstandard
 
 from trec_rag.facet_pilot_config import (
@@ -93,13 +94,51 @@ _CACHE_TOP_LEVEL = frozenset(
     {
         "canonical",
         "documents",
-        "planning",
         "planning-cache-v1",
         "retrieval",
-        "similarity",
         "similarity-cache-v1",
     }
 )
+
+_TOPIC_PHASE_ARTIFACTS = {
+    "retrieval": frozenset(
+        {
+            "decomposition.json",
+            "retrieval/audit.json",
+            "retrieval/evidence-bundle.json",
+        }
+    ),
+    "scoring": frozenset(
+        {
+            "scoring/lane_scores.jsonl",
+            "scoring/selected_documents.jsonl",
+            "scoring/selection.json",
+            "scoring/selected_subnarrative_scores.jsonl",
+        }
+    ),
+    "canonical": frozenset(
+        {
+            "canonical/handoff/candidate-requests.jsonl",
+            "canonical/handoff/selection-contexts.jsonl",
+            "canonical/handoff/handoff-manifest.json",
+            "records.sqlite3",
+            "canonical/records-manifest.json",
+            "canonical/subnarrative-selections.jsonl",
+            "canonical/selection-manifest.json",
+            "canonical/canonical-nuggets.jsonl",
+            "canonical/canonical-nugget-manifest.json",
+            "canonical/retrieval-projection.json",
+            "canonical/retrieval-projection-manifest.json",
+            "canonical/generation-projection.json",
+            "canonical/generation-projection-manifest.json",
+        }
+    ),
+}
+_TOPIC_RECEIPT = "topic-job-receipt.json"
+_LIVE_DECOMPOSITION_RESULT = "decomposition/result.json"
+_LIVE_DECOMPOSITION_MANIFEST = "decomposition/manifest.json"
+_SEED_DECOMPOSITION_MANIFEST = "planning-seed-manifest.json"
+_SEED_DECOMPOSITION_RECEIPT = "planning-seed-receipt.json"
 
 
 class CacheBundleError(RuntimeError):
@@ -140,6 +179,7 @@ class VerifiedBundle:
     archive_sha256: str
     archive_size: int
     manifest_sha256: str
+    source_config_sha256: str
     members: tuple[BundleMember, ...]
 
 
@@ -240,8 +280,28 @@ def _canonical_json(value: object) -> bytes:
             allow_nan=False,
         )
     except (TypeError, ValueError) as exc:
-        raise CacheBundleIntegrityError("bundle metadata is not canonical JSON") from exc
+        raise CacheBundleIntegrityError(
+            "bundle metadata is not canonical JSON"
+        ) from exc
     return (encoded + "\n").encode("utf-8")
+
+
+def _canonical_or_pretty_json(value: object, body: bytes) -> bool:
+    """Accept only the two canonical encodings used by production manifests."""
+    try:
+        pretty = (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise CacheBundleIntegrityError("checkpoint metadata is not JSON") from exc
+    return body in {_canonical_json(value), pretty}
 
 
 def _strict_json(value: bytes, label: str) -> object:
@@ -249,7 +309,9 @@ def _strict_json(value: bytes, label: str) -> object:
         result: dict[str, object] = {}
         for key, item in pairs:
             if key in result:
-                raise CacheBundleIntegrityError(f"{label} contains a duplicate JSON key")
+                raise CacheBundleIntegrityError(
+                    f"{label} contains a duplicate JSON key"
+                )
             result[key] = item
         return result
 
@@ -364,7 +426,10 @@ def _validate_archive_path(name: str, seen: dict[str, str]) -> str:
 
 def _is_forbidden(relative: PurePosixPath) -> bool:
     folded = tuple(part.casefold() for part in relative.parts)
-    if any(part in _FORBIDDEN_PARTS for part in folded):
+    if any(
+        part in _FORBIDDEN_PARTS or PurePosixPath(part).stem in _FORBIDDEN_PARTS
+        for part in folded
+    ):
         return True
     name = relative.name.casefold()
     return name.startswith(".") or name.endswith(_FORBIDDEN_SUFFIXES)
@@ -374,7 +439,9 @@ def _require_regular_source(path: Path, root: Path) -> None:
     try:
         relative = path.relative_to(root)
     except ValueError as exc:
-        raise CacheBundleIntegrityError("bundle source escaped its declared root") from exc
+        raise CacheBundleIntegrityError(
+            "bundle source escaped its declared root"
+        ) from exc
     current = root
     for part in relative.parts:
         current = current / part
@@ -400,58 +467,240 @@ def _source_member(
     return _SourceMember(archive_path, source, kind, size, digest)
 
 
-def _validate_checkpoint_manifests(topic_root: Path) -> None:
-    seals = sorted(topic_root.rglob("complete.json"))
-    if not seals and not (
-        topic_root / "canonical" / "retrieval-projection-manifest.json"
-    ).is_file():
-        raise CacheBundleIntegrityError("selected topic has no sealed checkpoint")
-    for seal in seals:
-        value = _strict_json(seal.read_bytes(), f"checkpoint manifest {seal}")
-        if not isinstance(value, dict):
-            raise CacheBundleIntegrityError(f"checkpoint manifest is not an object: {seal}")
-        receipts = value.get("artifacts")
-        if receipts is None:
-            continue
-        if not isinstance(receipts, list):
-            raise CacheBundleIntegrityError("checkpoint artifacts must be a list")
-        for index, raw in enumerate(receipts):
-            receipt = _require_exact_fields(
-                raw,
-                {"bytes", "relative_path", "sha256"},
-                f"checkpoint artifact {index}",
-            )
-            relative = receipt["relative_path"]
-            if not isinstance(relative, str):
-                raise CacheBundleIntegrityError("checkpoint artifact path must be text")
-            _validate_archive_path(relative, {})
-            artifact = topic_root / PurePosixPath(relative)
-            _require_regular_source(artifact, topic_root)
-            size, digest = _file_receipt(artifact)
-            if size != _require_nonnegative_int(receipt["bytes"], "artifact bytes"):
-                raise CacheBundleIntegrityError("checkpoint artifact size mismatch")
-            if digest != _require_digest(receipt["sha256"], "artifact sha256"):
-                raise CacheBundleIntegrityError("checkpoint artifact digest mismatch")
+def _checkpoint_manifest_sources(topic_root: Path, phase: str) -> tuple[Path, ...]:
+    manifest_path = topic_root / phase / "complete.json"
+    try:
+        body = manifest_path.read_bytes()
+    except OSError as exc:
+        raise CacheBundleIntegrityError(
+            f"selected topic {phase} checkpoint manifest is missing"
+        ) from exc
+    value = _strict_json(body, f"{phase} checkpoint manifest")
+    if (
+        not isinstance(value, dict)
+        or not _canonical_or_pretty_json(value, body)
+        or value.get("topic_id") != topic_root.name
+        or value.get("phase") != ("retrieve" if phase == "retrieval" else phase)
+    ):
+        raise CacheBundleIntegrityError(
+            f"selected topic {phase} checkpoint manifest is invalid"
+        )
+    receipts = value.get("artifacts")
+    if not isinstance(receipts, list):
+        raise CacheBundleIntegrityError("checkpoint artifacts must be a list")
+    found: dict[str, Path] = {}
+    for index, raw in enumerate(receipts):
+        receipt = _require_exact_fields(
+            raw,
+            {"bytes", "relative_path", "sha256"},
+            f"checkpoint artifact {index}",
+        )
+        relative = receipt["relative_path"]
+        if not isinstance(relative, str):
+            raise CacheBundleIntegrityError("checkpoint artifact path must be text")
+        _validate_archive_path(relative, {})
+        if relative in found:
+            raise CacheBundleIntegrityError("checkpoint artifact receipt is duplicated")
+        artifact = topic_root.joinpath(*PurePosixPath(relative).parts)
+        _require_regular_source(artifact, topic_root)
+        size, digest = _file_receipt(artifact)
+        if size != _require_nonnegative_int(receipt["bytes"], "artifact bytes"):
+            raise CacheBundleIntegrityError("checkpoint artifact size mismatch")
+        if digest != _require_digest(receipt["sha256"], "artifact sha256"):
+            raise CacheBundleIntegrityError("checkpoint artifact digest mismatch")
+        found[relative] = artifact
+    if set(found) != _TOPIC_PHASE_ARTIFACTS[phase]:
+        raise CacheBundleIntegrityError(
+            f"selected topic {phase} checkpoint artifact set changed"
+        )
+    return (manifest_path, *(found[path] for path in sorted(found)))
 
 
-def _collect_topic_members(config: FacetPilotConfig, topic_id: str) -> list[_SourceMember]:
+def _decomposition_sources(
+    config: FacetPilotConfig,
+    topic_root: Path,
+) -> tuple[tuple[Path, Path], ...]:
+    result = topic_root / _LIVE_DECOMPOSITION_RESULT
+    _require_regular_source(result, topic_root)
+    retrieval = _strict_json(
+        (topic_root / "retrieval/complete.json").read_bytes(),
+        "retrieval checkpoint manifest",
+    )
+    if (
+        not isinstance(retrieval, dict)
+        or retrieval.get("decomposition_source_sha256")
+        != hashlib.sha256(result.read_bytes()).hexdigest()
+    ):
+        raise CacheBundleIntegrityError(
+            "decomposition source differs from its checkpoint identity"
+        )
+    live = topic_root / _LIVE_DECOMPOSITION_MANIFEST
+    seeded = topic_root / _SEED_DECOMPOSITION_MANIFEST
+    if live.is_file() == seeded.is_file():
+        raise CacheBundleIntegrityError(
+            "decomposition requires exactly one authenticated producer manifest"
+        )
+    if live.is_file():
+        _require_regular_source(live, topic_root)
+        body = live.read_bytes()
+        value = _require_exact_fields(
+            _strict_json(body, "decomposition producer manifest"),
+            {
+                "planner",
+                "result_bytes",
+                "result_file",
+                "result_sha256",
+                "schema_version",
+            },
+            "decomposition producer manifest",
+        )
+        if (
+            not _canonical_or_pretty_json(value, body)
+            or value["schema_version"] != "facet-decomposition-manifest-v1"
+            or value["result_file"] != result.name
+            or value["result_bytes"] != result.stat().st_size
+            or value["result_sha256"] != hashlib.sha256(result.read_bytes()).hexdigest()
+            or not isinstance(value["planner"], dict)
+        ):
+            raise CacheBundleIntegrityError("decomposition producer manifest is stale")
+        return ((result, topic_root), (live, topic_root))
+    _require_regular_source(seeded, topic_root)
+    aggregate = config.output_dir / _SEED_DECOMPOSITION_RECEIPT
+    _require_regular_source(aggregate, config.output_dir)
+    # The production validator has already authenticated the full seeded
+    # producer chain.  Retain both receipts so the merged checkpoint preserves
+    # that chain rather than silently degrading it to a result-only artifact.
+    return (
+        (result, topic_root),
+        (seeded, topic_root),
+        (aggregate, config.output_dir),
+    )
+
+
+def _validate_production_topic_checkpoint(
+    config: FacetPilotConfig,
+    topic: Any,
+    *,
+    config_path: Path,
+    config_bytes: bytes,
+) -> None:
+    """Use production dispatch/projection readers before selecting any bytes."""
+    from trec_rag.competition_retrieval import _decomposition_producer_sha256
+    from trec_rag.retrieval_export import (
+        read_topic_projection_receipt,
+        validate_retrieval_topic_checkpoints,
+    )
+    from trec_rag.topic_dispatch import TopicJob, read_topic_receipt
+
+    topic_root = (config.output_dir / topic.id).resolve()
+    config_sha256 = hashlib.sha256(config_bytes).hexdigest()
+    try:
+        job = TopicJob(
+            topic_id=topic.id,
+            run_id=config.run_id,
+            config_path=config_path.resolve(),
+            config_bytes=config_bytes,
+            config_sha256=config_sha256,
+            topic_root=topic_root,
+        )
+        dispatch = read_topic_receipt(job)
+        projection = read_topic_projection_receipt(config, topic)
+        source_seals = dict(projection.source_seals)
+        if source_seals.get("config_sha256") != config_sha256:
+            raise ValueError("projection config identity changed")
+        producer_sha256 = _decomposition_producer_sha256(topic, config.output_dir, None)
+        if source_seals.get("decomposition_producer_sha256") != producer_sha256:
+            raise ValueError("projection decomposition producer identity changed")
+        retrieval = _strict_json(
+            (topic_root / "retrieval/complete.json").read_bytes(),
+            "retrieval checkpoint manifest",
+        )
+        if not isinstance(retrieval, dict) or not isinstance(
+            retrieval.get("retriever"), dict
+        ):
+            raise ValueError("retrieval checkpoint identity is invalid")
+        validated = validate_retrieval_topic_checkpoints(
+            config,
+            (topic,),
+            expected_retriever_identity=retrieval["retriever"],
+            expected_decomposition_producer_sha256={topic.id: producer_sha256},
+        )
+        if (
+            len(validated) != 1
+            or validated[0] != projection
+            or dispatch is None
+            or dispatch.topic_id != topic.id
+            or dispatch.projection_manifest_sha256 != projection.manifest_sha256
+            or dispatch.status != projection.retrieval_status
+            or dispatch.stopping_reason != projection.retrieval_stopping_reason
+        ):
+            raise ValueError("dispatch and projection receipts differ")
+    except (CacheBundleError, OSError, TypeError, ValueError, RuntimeError) as exc:
+        raise CacheBundleIntegrityError(
+            f"selected topic production checkpoint is invalid: {topic.id}"
+        ) from exc
+
+
+def _collect_topic_members(
+    config: FacetPilotConfig,
+    topic: Any,
+    *,
+    config_path: Path,
+    config_bytes: bytes,
+) -> list[_SourceMember]:
+    topic_id = topic.id
     topic_root = config.output_dir / topic_id
     if not topic_root.is_dir() or topic_root.is_symlink():
-        raise CacheBundleIntegrityError(f"selected topic checkpoint is missing: {topic_id}")
-    _validate_checkpoint_manifests(topic_root)
-    members: list[_SourceMember] = []
-    prefix = PurePosixPath("outputs", config.experiment.id, topic_id)
+        raise CacheBundleIntegrityError(
+            f"selected topic checkpoint is missing: {topic_id}"
+        )
+    _validate_production_topic_checkpoint(
+        config,
+        topic,
+        config_path=config_path,
+        config_bytes=config_bytes,
+    )
+    allowed_sensitive = {
+        PurePosixPath("records.sqlite3"),
+        PurePosixPath(".topic-projection.lock"),
+        PurePosixPath(".records-publication.lock"),
+    }
     for source in sorted(topic_root.rglob("*")):
         if source.is_dir() and not source.is_symlink():
             continue
         relative = PurePosixPath(source.relative_to(topic_root).as_posix())
-        if _is_forbidden(relative):
-            continue
+        if _is_forbidden(relative) and relative not in allowed_sensitive:
+            raise CacheBundleIntegrityError(
+                f"selected topic contains a forbidden sensitive extra: {relative}"
+            )
+
+    sources: dict[Path, Path] = {}
+    for phase in ("retrieval", "scoring", "canonical"):
+        for source in _checkpoint_manifest_sources(topic_root, phase):
+            sources[source.resolve()] = topic_root
+    receipt = topic_root / _TOPIC_RECEIPT
+    _require_regular_source(receipt, topic_root)
+    sources[receipt.resolve()] = topic_root
+    for source, source_root in _decomposition_sources(config, topic_root):
+        sources[source.resolve()] = source_root
+
+    prefix = PurePosixPath("outputs", config.experiment.id, topic_id)
+    members: list[_SourceMember] = []
+    for source, source_root in sorted(
+        sources.items(), key=lambda item: item[0].as_posix()
+    ):
+        if source_root == config.output_dir:
+            archive_path = PurePosixPath(
+                "outputs", config.experiment.id, source.name
+            ).as_posix()
+        else:
+            relative = PurePosixPath(source.relative_to(topic_root).as_posix())
+            archive_path = (prefix / relative).as_posix()
         members.append(
             _source_member(
                 source,
-                source_root=topic_root,
-                archive_path=(prefix / relative).as_posix(),
+                source_root=source_root,
+                archive_path=archive_path,
                 kind="checkpoint",
             )
         )
@@ -480,7 +729,7 @@ def _validate_planning_entry(cache_root: Path, source: Path, topic_id: str) -> N
         ) from exc
 
 
-def _validate_similarity_entry(cache_root: Path, source: Path) -> None:
+def _validate_similarity_entry(cache_root: Path, source: Path) -> Any:
     """Adapter around the evolving similarity-cache public validation API."""
     from trec_rag.similarity_cache import SimilarityCache, SimilarityCacheIdentity
 
@@ -502,9 +751,34 @@ def _validate_similarity_entry(cache_root: Path, source: Path) -> None:
         if cache.entry_path(identity).resolve() != source.resolve():
             raise ValueError("similarity cache entry path differs from its identity")
         cache.load(identity)
+        return identity
     except (TypeError, ValueError, RuntimeError) as exc:
         raise CacheBundleIntegrityError(
             f"similarity cache entry is invalid: {source}"
+        ) from exc
+
+
+def _validate_existing_similarity_conflict(
+    operation: _InstallOperation,
+    *,
+    cache_root: Path,
+    target: Path,
+) -> None:
+    """Require both conflicting matrices to decode under one exact identity."""
+    from trec_rag.similarity_cache import SimilarityCache
+
+    staged_cache_root = operation.staged_path
+    for _part in operation.relative_path.parts:
+        staged_cache_root = staged_cache_root.parent
+    try:
+        identity = _validate_similarity_entry(staged_cache_root, operation.staged_path)
+        destination_cache = SimilarityCache(cache_root)
+        if destination_cache.entry_path(identity).resolve() != target.resolve():
+            raise ValueError("destination similarity path differs from source identity")
+        destination_cache.load(identity)
+    except (CacheBundleError, OSError, TypeError, ValueError, RuntimeError) as exc:
+        raise CacheBundleIntegrityError(
+            f"destination similarity entry is invalid: {target}"
         ) from exc
 
 
@@ -536,10 +810,11 @@ def _validate_canonical_entry(source: Path) -> None:
         or not isinstance(content, str)
         or hashlib.sha256(content.encode("utf-8")).hexdigest()
         != value["content_sha256"]
-        or _canonical_json(_strict_json(content.encode("utf-8"), "canonical content"))[:-1]
+        or _canonical_json(_strict_json(content.encode("utf-8"), "canonical content"))[
+            :-1
+        ]
         != content.encode("utf-8")
-        or _require_digest(request_sha256, "canonical request sha256")
-        != source.stem
+        or _require_digest(request_sha256, "canonical request sha256") != source.stem
         or isinstance(value["status"], bool)
         or not isinstance(value["status"], int)
         or not isinstance(response_hashes, list)
@@ -579,11 +854,15 @@ def _validated_retrieval_files(
     if v2_root.is_symlink() or not v2_root.is_dir():
         raise CacheBundleIntegrityError("retrieval v2 cache root is unsafe")
     allowed: set[Path] = set()
-    transport_manifests = sorted(v2_root.glob("[0-9a-f][0-9a-f]/*/transport-manifest.json"))
+    transport_manifests = sorted(
+        v2_root.glob("[0-9a-f][0-9a-f]/*/transport-manifest.json")
+    )
     for manifest_path in transport_manifests:
         try:
             manifest = _require_exact_fields(
-                _strict_json(manifest_path.read_bytes(), "retrieval transport manifest"),
+                _strict_json(
+                    manifest_path.read_bytes(), "retrieval transport manifest"
+                ),
                 {
                     "gzip_length",
                     "gzip_sha256",
@@ -605,8 +884,7 @@ def _validated_retrieval_files(
                 identity.index_id != config.retrieval.index
                 or identity.corpus_epoch != config.retrieval.corpus_epoch
                 or identity.hits != config.retrieval.documents_per_query
-                or
-                identity.request_key != manifest["request_key"]
+                or identity.request_key != manifest["request_key"]
                 or entry.name != identity.request_key
                 or entry.parent.name != identity.request_key[:2]
                 or manifest["query_sha256"] != identity.query_sha256
@@ -668,9 +946,7 @@ def _validated_retrieval_files(
                 if cache.lookup_complete(identity, derivation, query_text) is None:
                     raise ValueError("retrieval derivation is incomplete")
                 hits = derivation_manifest_path.parent / "hits.json"
-                allowed.update(
-                    {derivation_manifest_path.resolve(), hits.resolve()}
-                )
+                allowed.update({derivation_manifest_path.resolve(), hits.resolve()})
         except (OSError, TypeError, ValueError, RuntimeError) as exc:
             raise CacheBundleIntegrityError(
                 f"retrieval document closure or cache entry is invalid: {manifest_path}"
@@ -721,7 +997,10 @@ def _collect_cache_members(
         if _is_forbidden(relative):
             continue
         top_level = relative.parts[0].casefold()
-        if top_level == "retrieval" and source.resolve() not in validated_retrieval_files:
+        if (
+            top_level == "retrieval"
+            and source.resolve() not in validated_retrieval_files
+        ):
             raise CacheBundleIntegrityError(
                 "retrieval document closure/cache contains an unsealed or "
                 f"undeclared file: {source}"
@@ -730,15 +1009,18 @@ def _collect_cache_members(
             _validate_planning_entry(cache_root, source, topic_id)
         elif top_level == "similarity-cache-v1":
             _validate_similarity_entry(cache_root, source)
-        elif top_level == "canonical" and "validated" in {
-            part.casefold() for part in relative.parts
-        }:
+        elif top_level == "canonical":
+            if (
+                len(relative.parts) != 4
+                or relative.parts[2].casefold() != "validated"
+                or not relative.name.endswith(".json")
+            ):
+                raise CacheBundleIntegrityError(
+                    f"canonical cache contains an undeclared portable path: {source}"
+                )
+            _require_digest(relative.stem, "canonical request sha256")
             _validate_canonical_entry(source)
-        kind = (
-            "similarity"
-            if top_level in {"similarity", "similarity-cache-v1"}
-            else "immutable"
-        )
+        kind = "similarity" if top_level == "similarity-cache-v1" else "immutable"
         members.append(
             _source_member(
                 source,
@@ -808,7 +1090,10 @@ def _score_cache_for_database(score_root: Path, database: Path):
         )
         if not isinstance(context_value, dict):
             raise ValueError("score cache context is not an object")
-        if context_value.pop("context_schema_version", None) != SCORE_CACHE_CONTEXT_VERSION:
+        if (
+            context_value.pop("context_schema_version", None)
+            != SCORE_CACHE_CONTEXT_VERSION
+        ):
             raise ValueError("score cache context schema changed")
         context = ScoreCacheContext(**context_value)
         cache = GlobalScoreCache(score_root, context, read_only=True)
@@ -1007,6 +1292,7 @@ def pack_bundle(
             config=config,
             config_bytes=config_bytes,
             source_config=source_config,
+            topic=selected[0],
             topic_id=topic_id,
             bundle_dir=bundle_dir,
             score_staging=Path(temporary),
@@ -1018,6 +1304,7 @@ def _pack_validated_sources(
     config: FacetPilotConfig,
     config_bytes: bytes,
     source_config: Path,
+    topic: Any,
     topic_id: str,
     bundle_dir: Path,
     score_staging: Path,
@@ -1033,7 +1320,12 @@ def _pack_validated_sources(
         ),
         *_collect_cache_members(config, topic_id),
         *_collect_score_members(config, score_staging),
-        *_collect_topic_members(config, topic_id),
+        *_collect_topic_members(
+            config,
+            topic,
+            config_path=source_config,
+            config_bytes=config_bytes,
+        ),
     ]
     sources.sort(key=lambda member: member.archive_path)
     seen: dict[str, str] = {}
@@ -1043,7 +1335,9 @@ def _pack_validated_sources(
     if sources[0].source_path != source_config or sources[0].sha256 != config_sha256:
         # Sorting may move the config; bind it without relying on its position.
         config_member = next(
-            member for member in sources if member.archive_path == "source-config/config.yaml"
+            member
+            for member in sources
+            if member.archive_path == "source-config/config.yaml"
         )
         if config_member.sha256 != config_sha256:
             raise CacheBundleIntegrityError("source config changed while packing")
@@ -1106,8 +1400,14 @@ def _parse_complete(bundle_dir: Path) -> BundleReceipt:
     marker = bundle_dir / BUNDLE_COMPLETE_NAME
     archive = bundle_dir / BUNDLE_ARCHIVE_NAME
     for path in (marker, archive):
-        if path.is_symlink() or not path.is_file() or not stat.S_ISREG(path.lstat().st_mode):
-            raise CacheBundleIntegrityError(f"bundle is missing regular file {path.name}")
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or not stat.S_ISREG(path.lstat().st_mode)
+        ):
+            raise CacheBundleIntegrityError(
+                f"bundle is missing regular file {path.name}"
+            )
     if marker.stat().st_size > MAX_MANIFEST_BYTES:
         raise CacheBundleIntegrityError("bundle completion marker size limit exceeded")
     marker_bytes = marker.read_bytes()
@@ -1125,7 +1425,9 @@ def _parse_complete(bundle_dir: Path) -> BundleReceipt:
         "bundle completion marker",
     )
     if _canonical_json(value) != marker_bytes:
-        raise CacheBundleIntegrityError("bundle completion marker is not canonical JSON")
+        raise CacheBundleIntegrityError(
+            "bundle completion marker is not canonical JSON"
+        )
     if value["schema_version"] != BUNDLE_SCHEMA_VERSION:
         raise CacheBundleIntegrityError("unsupported bundle completion schema")
     if value["archive"] != BUNDLE_ARCHIVE_NAME:
@@ -1137,14 +1439,14 @@ def _parse_complete(bundle_dir: Path) -> BundleReceipt:
         topic_id=topic_id,
         archive_sha256=_require_digest(value["archive_sha256"], "archive_sha256"),
         archive_size=_require_nonnegative_int(value["archive_size"], "archive_size"),
-        manifest_sha256=_require_digest(
-            value["manifest_sha256"], "manifest_sha256"
-        ),
+        manifest_sha256=_require_digest(value["manifest_sha256"], "manifest_sha256"),
         member_count=_require_nonnegative_int(value["member_count"], "member_count"),
     )
 
 
-def _parse_manifest(value: bytes) -> tuple[str, str, tuple[BundleMember, ...]]:
+def _parse_manifest(
+    value: bytes,
+) -> tuple[str, str, str, tuple[BundleMember, ...]]:
     raw = _require_exact_fields(
         _strict_json(value, "bundle manifest"),
         {
@@ -1166,11 +1468,17 @@ def _parse_manifest(value: bytes) -> tuple[str, str, tuple[BundleMember, ...]]:
         raise CacheBundleIntegrityError("bundle manifest topic is invalid")
     if not isinstance(experiment_id, str) or not experiment_id:
         raise CacheBundleIntegrityError("bundle manifest experiment is invalid")
-    _require_digest(raw["source_config_sha256"], "source_config_sha256")
+    source_config_sha256 = _require_digest(
+        raw["source_config_sha256"], "source_config_sha256"
+    )
     members_raw = raw["members"]
     if not isinstance(members_raw, list) or len(members_raw) > MAX_MEMBERS:
         raise CacheBundleIntegrityError("bundle manifest member count is invalid")
-    seen: dict[str, str] = {unicodedata.normalize("NFC", BUNDLE_MANIFEST_NAME).casefold(): BUNDLE_MANIFEST_NAME}
+    seen: dict[str, str] = {
+        unicodedata.normalize(
+            "NFC", BUNDLE_MANIFEST_NAME
+        ).casefold(): BUNDLE_MANIFEST_NAME
+    }
     members: list[BundleMember] = []
     for index, item in enumerate(members_raw):
         row = _require_exact_fields(
@@ -1200,7 +1508,122 @@ def _parse_manifest(value: bytes) -> tuple[str, str, tuple[BundleMember, ...]]:
         )
     if [member.path for member in members] != sorted(member.path for member in members):
         raise CacheBundleIntegrityError("bundle manifest members are not sorted")
-    return topic_id, experiment_id, tuple(members)
+    for parent, child in zip(members, members[1:]):
+        if child.path.startswith(parent.path + "/"):
+            raise CacheBundleIntegrityError(
+                "bundle member paths have an ancestor collision"
+            )
+    return topic_id, experiment_id, source_config_sha256, tuple(members)
+
+
+def _validate_member_layout(
+    *,
+    topic_id: str,
+    experiment_id: str,
+    source_config_sha256: str,
+    members: Sequence[BundleMember],
+) -> None:
+    """Enforce the exact semantic namespaces emitted by ``pack``."""
+    configs = [member for member in members if member.kind == "config"]
+    if len(configs) != 1 or configs[0].path != "source-config/config.yaml":
+        raise CacheBundleIntegrityError(
+            "bundle requires exactly one authenticated source config"
+        )
+    if configs[0].sha256 != source_config_sha256:
+        raise CacheBundleIntegrityError("source config digest differs from manifest")
+    topic_prefix = ("outputs", experiment_id, topic_id)
+    run_seed_path = PurePosixPath("outputs", experiment_id, _SEED_DECOMPOSITION_RECEIPT)
+    for member in members:
+        path = PurePosixPath(member.path)
+        if member.kind == "config":
+            if path != PurePosixPath("source-config/config.yaml"):
+                raise CacheBundleIntegrityError(
+                    "config kind/path combination is invalid"
+                )
+            continue
+        if path.parts[:1] == ("source-config",):
+            raise CacheBundleIntegrityError(
+                "source-config path has the wrong member kind"
+            )
+        if member.kind == "checkpoint":
+            if path == run_seed_path:
+                continue
+            if path.parts[:3] != topic_prefix or len(path.parts) < 4:
+                raise CacheBundleIntegrityError(
+                    "checkpoint kind/path combination is invalid"
+                )
+            relative = PurePosixPath(*path.parts[3:])
+            if _is_forbidden(relative) and relative != PurePosixPath("records.sqlite3"):
+                raise CacheBundleIntegrityError(
+                    f"checkpoint member path is forbidden: {member.path}"
+                )
+            continue
+        if member.kind == "score":
+            if (
+                len(path.parts) != 2
+                or path.parts[0] != "portable-scores"
+                or not path.name.endswith(".jsonl")
+                or _require_digest(path.stem, "portable score identity") != path.stem
+            ):
+                raise CacheBundleIntegrityError(
+                    "portable score kind/path combination is invalid"
+                )
+            continue
+        if path.parts[:1] != ("cache",) or len(path.parts) < 3:
+            raise CacheBundleIntegrityError("cache kind/path combination is invalid")
+        relative = PurePosixPath(*path.parts[1:])
+        if _is_forbidden(relative):
+            raise CacheBundleIntegrityError(
+                f"cache member path is forbidden: {member.path}"
+            )
+        namespace = relative.parts[0]
+        if namespace == "planning-cache-v1":
+            valid = (
+                member.kind == "immutable"
+                and len(relative.parts) == 3
+                and len(relative.parts[1]) == 2
+                and relative.name.endswith(".json")
+                and _require_digest(relative.stem, "planning cache identity")
+                == relative.stem
+                and relative.parts[1] == relative.stem[:2]
+            )
+        elif namespace == "similarity-cache-v1":
+            valid = (
+                member.kind == "similarity"
+                and len(relative.parts) == 3
+                and len(relative.parts[1]) == 2
+                and relative.name.endswith(".json")
+                and _require_digest(relative.stem, "similarity cache identity")
+                == relative.stem
+                and relative.parts[1] == relative.stem[:2]
+            )
+        elif namespace == "documents":
+            valid = (
+                member.kind == "immutable"
+                and len(relative.parts) == 5
+                and relative.parts[1:3] == ("v1", "sha256")
+                and len(relative.parts[3]) == 2
+                and relative.name.endswith(".utf8")
+                and _require_digest(relative.stem, "document identity") == relative.stem
+                and relative.parts[3] == relative.stem[:2]
+            )
+        elif namespace == "retrieval":
+            valid = member.kind == "immutable" and len(relative.parts) >= 3
+        elif namespace == "canonical":
+            valid = (
+                member.kind == "immutable"
+                and len(relative.parts) == 4
+                and relative.parts[2] == "validated"
+                and relative.name.endswith(".json")
+                and _require_digest(relative.stem, "canonical request identity")
+                == relative.stem
+            )
+        else:
+            valid = False
+        if not valid:
+            raise CacheBundleIntegrityError(
+                f"bundle member kind/path combination is invalid: {member.path}"
+            )
 
 
 def _consume_member(
@@ -1237,7 +1660,9 @@ def _consume_member(
     if count != expected.size:
         raise CacheBundleIntegrityError(f"bundle member size mismatch: {expected.path}")
     if digest.hexdigest() != expected.sha256:
-        raise CacheBundleIntegrityError(f"bundle member digest mismatch: {expected.path}")
+        raise CacheBundleIntegrityError(
+            f"bundle member digest mismatch: {expected.path}"
+        )
 
 
 def _verify_archive(
@@ -1245,7 +1670,7 @@ def _verify_archive(
     receipt: BundleReceipt,
     *,
     extraction_root: Path | None = None,
-) -> tuple[str, tuple[BundleMember, ...]]:
+) -> tuple[str, str, tuple[BundleMember, ...]]:
     if archive_path.stat().st_size > MAX_COMPRESSED_BYTES:
         raise CacheBundleIntegrityError("compressed bundle size limit exceeded")
     archive_size, archive_digest = _file_receipt(archive_path)
@@ -1254,9 +1679,7 @@ def _verify_archive(
     with archive_path.open("rb") as compressed_source:
         decompressor = zstandard.ZstdDecompressor(
             max_window_size=MAX_ZSTD_WINDOW_BYTES
-        ).stream_reader(
-            compressed_source, read_across_frames=True
-        )
+        ).stream_reader(compressed_source, read_across_frames=True)
         bounded = _BoundedReader(decompressor, MAX_DECOMPRESSED_BYTES)
         try:
             with tarfile.open(fileobj=bounded, mode="r|") as archive:
@@ -1264,11 +1687,14 @@ def _verify_archive(
                 declared: tuple[BundleMember, ...] | None = None
                 topic_id = ""
                 experiment_id = ""
+                source_config_sha256 = ""
                 seen: dict[str, str] = {}
                 member_index = -1
                 for member_index, info in enumerate(archive):
                     if member_index > MAX_MEMBERS:
-                        raise CacheBundleIntegrityError("archive member-count limit exceeded")
+                        raise CacheBundleIntegrityError(
+                            "archive member-count limit exceeded"
+                        )
                     name = _validate_archive_path(info.name, seen)
                     if not info.isfile() or info.issym() or info.islnk():
                         raise CacheBundleIntegrityError(
@@ -1295,25 +1721,46 @@ def _verify_archive(
                             f"archive member body is unavailable: {name}"
                         )
                     if member_index == 0:
-                        if name != BUNDLE_MANIFEST_NAME or info.size > MAX_MANIFEST_BYTES:
+                        if (
+                            name != BUNDLE_MANIFEST_NAME
+                            or info.size > MAX_MANIFEST_BYTES
+                        ):
                             raise CacheBundleIntegrityError(
                                 "bundle manifest must be the bounded first archive member"
                             )
                         manifest_bytes = extracted.read(MAX_MANIFEST_BYTES + 1)
                         if len(manifest_bytes) != info.size:
-                            raise CacheBundleIntegrityError("bundle manifest size mismatch")
-                        if hashlib.sha256(manifest_bytes).hexdigest() != receipt.manifest_sha256:
-                            raise CacheBundleIntegrityError("bundle manifest digest mismatch")
-                        topic_id, experiment_id, declared = _parse_manifest(manifest_bytes)
+                            raise CacheBundleIntegrityError(
+                                "bundle manifest size mismatch"
+                            )
+                        if (
+                            hashlib.sha256(manifest_bytes).hexdigest()
+                            != receipt.manifest_sha256
+                        ):
+                            raise CacheBundleIntegrityError(
+                                "bundle manifest digest mismatch"
+                            )
+                        (
+                            topic_id,
+                            experiment_id,
+                            source_config_sha256,
+                            declared,
+                        ) = _parse_manifest(manifest_bytes)
                         if topic_id != receipt.topic_id:
-                            raise CacheBundleIntegrityError("bundle topic identity mismatch")
+                            raise CacheBundleIntegrityError(
+                                "bundle topic identity mismatch"
+                            )
                         if len(declared) != receipt.member_count:
-                            raise CacheBundleIntegrityError("bundle member count mismatch")
+                            raise CacheBundleIntegrityError(
+                                "bundle member count mismatch"
+                            )
                         continue
                     assert declared is not None
                     declared_index = member_index - 1
                     if declared_index >= len(declared):
-                        raise CacheBundleIntegrityError(f"undeclared archive member: {name}")
+                        raise CacheBundleIntegrityError(
+                            f"undeclared archive member: {name}"
+                        )
                     expected = declared[declared_index]
                     if name != expected.path:
                         raise CacheBundleIntegrityError(
@@ -1332,7 +1779,9 @@ def _verify_archive(
                 if manifest_bytes is None or declared is None:
                     raise CacheBundleIntegrityError("bundle archive has no manifest")
                 if member_index != len(declared):
-                    raise CacheBundleIntegrityError("bundle archive is missing declared members")
+                    raise CacheBundleIntegrityError(
+                        "bundle archive is missing declared members"
+                    )
                 # tarfile stops at its end markers; consume the decompressor so
                 # hidden bytes or concatenated zstd frames cannot sit behind a
                 # valid declared archive.
@@ -1340,8 +1789,7 @@ def _verify_archive(
                     pass
                 logical_bytes = 512 + ((len(manifest_bytes) + 511) // 512) * 512
                 logical_bytes += sum(
-                    512 + ((member.size + 511) // 512) * 512
-                    for member in declared
+                    512 + ((member.size + 511) // 512) * 512 for member in declared
                 )
                 expected_tar_bytes = (
                     (logical_bytes + 1024 + tarfile.RECORDSIZE - 1)
@@ -1351,15 +1799,232 @@ def _verify_archive(
                     raise CacheBundleIntegrityError(
                         "bundle has trailing or non-canonical decompressed bytes"
                     )
+                _validate_member_layout(
+                    topic_id=topic_id,
+                    experiment_id=experiment_id,
+                    source_config_sha256=source_config_sha256,
+                    members=declared,
+                )
         except (tarfile.TarError, zstandard.ZstdError, EOFError) as exc:
             raise CacheBundleIntegrityError("bundle archive stream is invalid") from exc
         finally:
             decompressor.close()
-    return experiment_id, declared
+    return experiment_id, source_config_sha256, declared
+
+
+def _portable_cache_path(
+    config_bytes: bytes, section: str, field: str
+) -> PurePosixPath:
+    try:
+        raw = yaml.safe_load(config_bytes)
+        value = raw[section][field]
+    except (KeyError, TypeError, yaml.YAMLError) as exc:
+        raise CacheBundleIntegrityError("source config cache path is invalid") from exc
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise CacheBundleIntegrityError("source config cache path is invalid")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise CacheBundleIntegrityError("source config cache path is not portable")
+    parts = path.parts[1:] if path.parts[:1] == ("cache",) else path.parts
+    if not parts:
+        raise CacheBundleIntegrityError("source config cache path is invalid")
+    return PurePosixPath(*parts)
+
+
+def _staged_config(
+    extraction_root: Path,
+    *,
+    experiment_id: str,
+) -> tuple[FacetPilotConfig, bytes]:
+    config_path = extraction_root / "source-config/config.yaml"
+    config_bytes = config_path.read_bytes()
+    # ``find_repo_root`` needs a local boundary; this marker lives only in the
+    # isolated verifier temporary directory and is never an archive member.
+    (extraction_root / "AGENTS.md").write_bytes(b"bundle validation root\n")
+    try:
+        loaded = load_facet_pilot_config(config_path, source_bytes=config_bytes)
+    except (OSError, TypeError, ValueError) as exc:
+        raise CacheBundleIntegrityError(
+            "authenticated source config is invalid"
+        ) from exc
+    if loaded.experiment.id != experiment_id:
+        raise CacheBundleIntegrityError(
+            "source config experiment differs from bundle manifest"
+        )
+    retrieval_relative = _portable_cache_path(config_bytes, "retrieval", "cache_dir")
+    score_relative = _portable_cache_path(config_bytes, "passage", "score_cache_dir")
+    staged = replace(
+        loaded,
+        root_dir=extraction_root,
+        retrieval=replace(
+            loaded.retrieval,
+            cache_dir=extraction_root / "cache" / retrieval_relative,
+        ),
+        passage=replace(
+            loaded.passage,
+            score_cache_dir=extraction_root / "cache" / score_relative,
+        ),
+    )
+    return staged, config_bytes
+
+
+def _validate_document_member(source: Path) -> str:
+    digest = source.stem
+    if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+        raise CacheBundleIntegrityError("document cache identity differs from content")
+    try:
+        source.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CacheBundleIntegrityError("document cache member is not UTF-8") from exc
+    return digest
+
+
+def _validate_extracted_cache(
+    extraction_root: Path,
+    *,
+    config: FacetPilotConfig,
+    topic_id: str,
+    members: Sequence[BundleMember],
+) -> None:
+    cache_root = extraction_root / "cache"
+    cache_members = [
+        member
+        for member in members
+        if PurePosixPath(member.path).parts[:1] == ("cache",)
+    ]
+    retrieval_sources: set[Path] = set()
+    document_digests: set[str] = set()
+    for member in cache_members:
+        relative = PurePosixPath(*PurePosixPath(member.path).parts[1:])
+        source = cache_root.joinpath(*relative.parts)
+        namespace = relative.parts[0]
+        if namespace == "planning-cache-v1":
+            _validate_planning_entry(cache_root, source, topic_id)
+        elif namespace == "similarity-cache-v1":
+            _validate_similarity_entry(cache_root, source)
+        elif namespace == "canonical":
+            _validate_canonical_entry(source)
+        elif namespace == "documents":
+            document_digests.add(_validate_document_member(source))
+        elif namespace == "retrieval":
+            retrieval_sources.add(source.resolve())
+        else:  # layout validation should make this unreachable
+            raise CacheBundleIntegrityError("bundle cache namespace changed")
+
+    allowed_retrieval = _validated_retrieval_files(config, cache_root)
+    if retrieval_sources != allowed_retrieval:
+        raise CacheBundleIntegrityError(
+            "retrieval cache bundle differs from its authenticated entry closure"
+        )
+    expected_documents: set[str] = set()
+    retrieval_root = cache_root / "retrieval"
+    if retrieval_root.exists():
+        for manifest_path in sorted(retrieval_root.rglob("derivation-manifest.json")):
+            value = _strict_json(
+                manifest_path.read_bytes(), "retrieval derivation manifest"
+            )
+            if not isinstance(value, dict) or not isinstance(
+                value.get("document_closure"), list
+            ):
+                raise CacheBundleIntegrityError(
+                    "retrieval derivation document closure is invalid"
+                )
+            expected_documents.update(
+                _require_digest(item, "retrieval document closure digest")
+                for item in value["document_closure"]
+            )
+    if document_digests != expected_documents:
+        raise CacheBundleIntegrityError(
+            "document cache bundle differs from retrieval closure"
+        )
+
+    for member in members:
+        if member.kind == "score":
+            source = extraction_root.joinpath(*PurePosixPath(member.path).parts)
+            _portable_score_context_and_rows(source)
+
+
+def _validate_extracted_checkpoint(
+    extraction_root: Path,
+    *,
+    config: FacetPilotConfig,
+    config_bytes: bytes,
+    topic_id: str,
+    members: Sequence[BundleMember],
+) -> None:
+    from trec_rag.topic_dispatch import TopicJob, read_topic_receipt
+
+    topic_root = config.output_dir / topic_id
+    expected: set[str] = set()
+    prefix = PurePosixPath("outputs", config.experiment.id, topic_id)
+    for phase in ("retrieval", "scoring", "canonical"):
+        for source in _checkpoint_manifest_sources(topic_root, phase):
+            relative = PurePosixPath(source.relative_to(topic_root).as_posix())
+            expected.add((prefix / relative).as_posix())
+    receipt_path = topic_root / _TOPIC_RECEIPT
+    _require_regular_source(receipt_path, topic_root)
+    expected.add((prefix / _TOPIC_RECEIPT).as_posix())
+    for source, source_root in _decomposition_sources(config, topic_root):
+        if source_root == config.output_dir:
+            expected.add(
+                PurePosixPath("outputs", config.experiment.id, source.name).as_posix()
+            )
+        else:
+            expected.add(
+                (
+                    prefix / PurePosixPath(source.relative_to(topic_root).as_posix())
+                ).as_posix()
+            )
+
+    actual = {member.path for member in members if member.kind == "checkpoint"}
+    if actual != expected:
+        raise CacheBundleIntegrityError(
+            "checkpoint members differ from authenticated receipt closure"
+        )
+    config_path = extraction_root / "source-config/config.yaml"
+    try:
+        job = TopicJob(
+            topic_id=topic_id,
+            run_id=config.run_id,
+            config_path=config_path.resolve(),
+            config_bytes=config_bytes,
+            config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+            topic_root=topic_root.resolve(),
+        )
+        receipt = read_topic_receipt(job)
+    except (OSError, TypeError, ValueError) as exc:
+        raise CacheBundleIntegrityError(
+            "checkpoint dispatch receipt is invalid"
+        ) from exc
+    if receipt is None:
+        raise CacheBundleIntegrityError("checkpoint dispatch receipt is missing")
+
+
+def _validate_extracted_semantics(
+    extraction_root: Path,
+    *,
+    topic_id: str,
+    experiment_id: str,
+    members: Sequence[BundleMember],
+) -> None:
+    config, config_bytes = _staged_config(extraction_root, experiment_id=experiment_id)
+    _validate_extracted_cache(
+        extraction_root,
+        config=config,
+        topic_id=topic_id,
+        members=members,
+    )
+    _validate_extracted_checkpoint(
+        extraction_root,
+        config=config,
+        config_bytes=config_bytes,
+        topic_id=topic_id,
+        members=members,
+    )
 
 
 def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
-    """Boundedly stream and authenticate a bundle without extracting it."""
+    """Authenticate structurally, then semantically stage in isolation."""
     root = Path(bundle_dir)
     if root.is_symlink() or not root.is_dir():
         raise CacheBundleIntegrityError("bundle directory is missing or unsafe")
@@ -1371,7 +2036,33 @@ def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
             f"{sorted(actual_names - expected_names)!r}"
         )
     receipt = _parse_complete(root)
-    experiment_id, members = _verify_archive(root / BUNDLE_ARCHIVE_NAME, receipt)
+    experiment_id, source_config_sha256, members = _verify_archive(
+        root / BUNDLE_ARCHIVE_NAME, receipt
+    )
+    # Hostile input completes an extraction-free pass first.  Only then is the
+    # same authenticated stream staged under an isolated temporary directory
+    # for cache/checkpoint semantic validation.
+    with tempfile.TemporaryDirectory(prefix="trec-rag-bundle-verify-") as temporary:
+        extraction_root = Path(temporary)
+        staged_experiment, staged_config_sha256, staged_members = _verify_archive(
+            root / BUNDLE_ARCHIVE_NAME,
+            receipt,
+            extraction_root=extraction_root,
+        )
+        if (
+            staged_experiment != experiment_id
+            or staged_config_sha256 != source_config_sha256
+            or staged_members != members
+        ):
+            raise CacheBundleIntegrityError(
+                "bundle changed between structural and semantic verification"
+            )
+        _validate_extracted_semantics(
+            extraction_root,
+            topic_id=receipt.topic_id,
+            experiment_id=experiment_id,
+            members=members,
+        )
     return VerifiedBundle(
         bundle_dir=root.resolve(),
         topic_id=receipt.topic_id,
@@ -1379,6 +2070,7 @@ def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
         archive_sha256=receipt.archive_sha256,
         archive_size=receipt.archive_size,
         manifest_sha256=receipt.manifest_sha256,
+        source_config_sha256=source_config_sha256,
         members=members,
     )
 
@@ -1407,7 +2099,9 @@ def _validate_destination_root(path: str | Path, label: str) -> Path:
 
 def _secure_mkdir(path: Path) -> None:
     if not path.is_absolute():
-        raise CacheBundleIntegrityError("secure directory creation requires an absolute path")
+        raise CacheBundleIntegrityError(
+            "secure directory creation requires an absolute path"
+        )
     current = Path(path.anchor)
     for part in path.parts[1:]:
         current = current / part
@@ -1525,7 +2219,9 @@ def _existing_target_receipt(target: Path, root: Path) -> tuple[int, str] | None
     try:
         relative = target.relative_to(root)
     except ValueError as exc:
-        raise CacheBundleIntegrityError("merge target escaped its destination root") from exc
+        raise CacheBundleIntegrityError(
+            "merge target escaped its destination root"
+        ) from exc
     current = root
     if not current.exists():
         return None
@@ -1558,13 +2254,18 @@ def _install_create_only(operation: _InstallOperation, target: Path) -> bool:
     )
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as sink, operation.staged_path.open("rb") as source:
+        with (
+            os.fdopen(descriptor, "wb") as sink,
+            operation.staged_path.open("rb") as source,
+        ):
             os.fchmod(sink.fileno(), 0o600)
             shutil.copyfileobj(source, sink, length=_COPY_CHUNK)
             sink.flush()
             os.fsync(sink.fileno())
         if _file_receipt(temporary) != (operation.member.size, operation.member.sha256):
-            raise CacheBundleIntegrityError("staged merge member changed during install")
+            raise CacheBundleIntegrityError(
+                "staged merge member changed during install"
+            )
         try:
             os.link(temporary, target)
         except FileExistsError:
@@ -1640,18 +2341,26 @@ def _prepare_operations(
             manifest_sha256=bundle.manifest_sha256,
             member_count=len(bundle.members),
         )
-        experiment_id, extracted_members = _verify_archive(
+        experiment_id, source_config_sha256, extracted_members = _verify_archive(
             bundle.bundle_dir / BUNDLE_ARCHIVE_NAME,
             receipt,
             extraction_root=extracted,
         )
-        if experiment_id != bundle.experiment_id or extracted_members != bundle.members:
-            raise CacheBundleIntegrityError("bundle changed between verification and staging")
+        if (
+            experiment_id != bundle.experiment_id
+            or source_config_sha256 != bundle.source_config_sha256
+            or extracted_members != bundle.members
+        ):
+            raise CacheBundleIntegrityError(
+                "bundle changed between verification and staging"
+            )
         for member in bundle.members:
             path = PurePosixPath(member.path)
             if member.kind == "config":
                 if path.parts[:1] != ("source-config",):
-                    raise CacheBundleIntegrityError("config member has an invalid archive path")
+                    raise CacheBundleIntegrityError(
+                        "config member has an invalid archive path"
+                    )
                 continue
             if member.kind == "score":
                 # Imported through the score-cache transaction adapter, never
@@ -1678,7 +2387,10 @@ def _prepare_operations(
                 )
             if member.kind == "checkpoint" and target_root_name != "outputs":
                 raise CacheBundleIntegrityError("checkpoint member is outside outputs")
-            if member.kind in {"immutable", "similarity"} and target_root_name != "cache":
+            if (
+                member.kind in {"immutable", "similarity"}
+                and target_root_name != "cache"
+            ):
                 raise CacheBundleIntegrityError("cache member is outside cache")
             relative = PurePosixPath(*path.parts[1:])
             operation = _InstallOperation(
@@ -1712,7 +2424,9 @@ def _portable_score_context_and_rows(source: Path):
     raw = source.read_bytes()
     lines = raw.splitlines()
     if not lines or raw != b"\n".join(lines) + b"\n":
-        raise CacheBundleIntegrityError("portable score JSONL is not newline terminated")
+        raise CacheBundleIntegrityError(
+            "portable score JSONL is not newline terminated"
+        )
     metadata = _require_exact_fields(
         _strict_json(lines[0], "portable score metadata"),
         {"context", "context_sha256", "portable_schema_version", "type"},
@@ -1724,7 +2438,10 @@ def _portable_score_context_and_rows(source: Path):
     if not isinstance(context_value, dict):
         raise CacheBundleIntegrityError("portable score context is not an object")
     context_payload = dict(context_value)
-    if context_payload.pop("context_schema_version", None) != SCORE_CACHE_CONTEXT_VERSION:
+    if (
+        context_payload.pop("context_schema_version", None)
+        != SCORE_CACHE_CONTEXT_VERSION
+    ):
         raise CacheBundleIntegrityError("portable score context schema changed")
     try:
         context = ScoreCacheContext(**context_payload)
@@ -1756,7 +2473,9 @@ def _portable_score_context_and_rows(source: Path):
         )
         score_hex = record["score_hex"]
         if not isinstance(score_hex, str):
-            raise CacheBundleIntegrityError("portable score value is not float.hex text")
+            raise CacheBundleIntegrityError(
+                "portable score value is not float.hex text"
+            )
         try:
             score = float.fromhex(score_hex)
         except ValueError as exc:
@@ -1764,7 +2483,9 @@ def _portable_score_context_and_rows(source: Path):
         if score.hex() != score_hex:
             raise CacheBundleIntegrityError("portable score value is not canonical")
         if prior_key is not None and cache_key <= prior_key:
-            raise CacheBundleIntegrityError("portable score rows are not uniquely sorted")
+            raise CacheBundleIntegrityError(
+                "portable score rows are not uniquely sorted"
+            )
         prior_key = cache_key
         rows.append(
             {
@@ -1825,8 +2546,9 @@ def _preflight_score_operations(
         target_path = (cache_root / "reranker").joinpath(*context.path_parts)
         if _existing_target_receipt(target_path, cache_root) is None:
             continue
-        target = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
+        target = None
         try:
+            target = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
             found = target.lookup_many(
                 [
                     {
@@ -1837,8 +2559,13 @@ def _preflight_score_operations(
                     for row in rows
                 ]
             )
+        except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
+            raise CacheBundleIntegrityError(
+                f"destination score database is invalid: {target_path}"
+            ) from exc
         finally:
-            target.close()
+            if target is not None:
+                target.close()
         for row, existing in zip(rows, found, strict=True):
             if existing is None or existing.hex() == row["score_hex"]:
                 continue
@@ -1887,6 +2614,55 @@ def _import_score_operation(
         )
     finally:
         cache.close()
+
+
+def _reconcile_completed_score_operation(
+    operation: _ScoreOperation,
+    *,
+    cache_root: Path,
+    conflict_policy: str,
+) -> None:
+    """Re-import and prove every portable row after a completed-merge retry."""
+    from trec_rag.rerank_score_cache import GlobalScoreCache
+
+    context, rows = _portable_score_context_and_rows(operation.staged_path)
+    try:
+        _import_score_operation(
+            operation,
+            cache_root=cache_root,
+            conflict_policy=conflict_policy,
+        )
+        cache = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
+        try:
+            found = cache.lookup_many(
+                [
+                    {
+                        "cache_key": row["cache_key"],
+                        "query_sha256": row["query_sha256"],
+                        "text_sha256": row["text_sha256"],
+                    }
+                    for row in rows
+                ]
+            )
+        finally:
+            cache.close()
+    except CacheBundleConflictError:
+        raise
+    except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
+        raise CacheBundleIntegrityError(
+            f"completed merge score state is invalid: {operation.member.path}"
+        ) from exc
+    if any(value is None for value in found):
+        raise CacheBundleIntegrityError(
+            f"completed merge is missing portable scores: {operation.member.path}"
+        )
+    if conflict_policy == "strict" and any(
+        value is None or value.hex() != row["score_hex"]
+        for row, value in zip(rows, found, strict=True)
+    ):
+        raise CacheBundleIntegrityError(
+            f"completed merge portable scores differ: {operation.member.path}"
+        )
 
 
 def _read_merge_receipt(path: Path) -> MergeReceipt:
@@ -1955,7 +2731,9 @@ def merge_bundles(
         verified = verify_bundle(raw_bundle)
         prior = unique.get(verified.archive_sha256)
         if prior is not None and prior != verified:
-            raise CacheBundleIntegrityError("duplicate archive digest has conflicting identity")
+            raise CacheBundleIntegrityError(
+                "duplicate archive digest has conflicting identity"
+            )
         unique[verified.archive_sha256] = verified
     bundles = tuple(
         sorted(unique.values(), key=lambda item: (item.topic_id, item.archive_sha256))
@@ -2004,7 +2782,15 @@ def merge_bundles(
                 missing.append(operation)
             elif existing == expected:
                 identical += 1
-            elif score_conflicts == "keep-existing" and operation.member.kind == "similarity":
+            elif (
+                score_conflicts == "keep-existing"
+                and operation.member.kind == "similarity"
+            ):
+                _validate_existing_similarity_conflict(
+                    operation,
+                    cache_root=cache_destination,
+                    target=target,
+                )
                 key = (operation.target_root_name, operation.relative_path.as_posix())
                 kept.add(key)
                 conflicts.append(
@@ -2020,9 +2806,7 @@ def merge_bundles(
                     }
                 )
             else:
-                raise CacheBundleConflictError(
-                    f"immutable merge conflict at {target}"
-                )
+                raise CacheBundleConflictError(f"immutable merge conflict at {target}")
 
         prepare_payload = {
             "bundles": [
@@ -2060,6 +2844,12 @@ def merge_bundles(
             prior = _read_merge_receipt(complete_path)
             if prior.merge_id != merge_id:
                 raise CacheBundleIntegrityError("merge completion identity changed")
+            for operation in score_operations:
+                _reconcile_completed_score_operation(
+                    operation,
+                    cache_root=cache_destination,
+                    conflict_policy=score_conflicts,
+                )
             return prior
 
         _secure_mkdir(cache_destination)
@@ -2087,7 +2877,9 @@ def merge_bundles(
             target = operation.target(cache_destination, outputs_destination)
             installed += int(_install_create_only(operation, target))
             if publication_hook is not None:
-                publication_hook(f"installed:{operation.target_root_name}/{operation.relative_path.as_posix()}")
+                publication_hook(
+                    f"installed:{operation.target_root_name}/{operation.relative_path.as_posix()}"
+                )
 
         conflicts_bytes = _canonical_json(
             {
