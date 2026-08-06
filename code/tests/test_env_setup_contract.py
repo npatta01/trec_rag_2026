@@ -219,7 +219,7 @@ def test_cuda_group_pins_the_versions_the_rocm_group_resolves_to() -> None:
     for pin in (
         "sentence-transformers==5.6.0",
         "transformers==5.13.0",
-        "numpy==2.5.1",
+        "numpy==2.3.3",
         "torch==2.9.1 ",
     ):
         assert pin in pyproject, f"cuda group must pin {pin}"
