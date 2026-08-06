@@ -10,6 +10,7 @@ from trec_rag.reranker_depth_evaluation import (
     evaluate_max_passage_systems,
     load_window_artifact,
     paired_bootstrap_interval,
+    write_rankings,
     write_evaluation,
 )
 
@@ -91,6 +92,8 @@ def test_load_window_artifact_aggregates_max_and_validates_population(tmp_path: 
     assert artifact.model == "example/a"
     assert artifact.topic_ids == ("1", "2")
     assert artifact.documents["1"]["d1"].max_score == 0.7
+    assert artifact.documents["1"]["d1"].max_chunk_index == 1
+    assert artifact.documents["1"]["d1"].chunk_scores == (0.1, 0.7)
     assert artifact.documents["1"]["d1"].chunk_count == 2
     assert artifact.total_documents == 4
     assert artifact.total_chunks == 6
@@ -164,6 +167,8 @@ def test_evaluate_max_passage_systems_uses_same_candidates_and_repository_ndcg(
     assert depth["baseline"]["metrics"]["ndcg@10"] == pytest.approx(0.8154648768)
     assert depth["systems"]["a"]["metrics"]["ndcg@10"] == pytest.approx(0.8154648768)
     assert depth["systems"]["b"]["metrics"]["ndcg@10"] == pytest.approx(0.8154648768)
+    assert depth["systems"]["a"]["metrics"]["precision@10"] == pytest.approx(0.1)
+    assert depth["systems"]["b"]["metrics"]["precision@20"] == pytest.approx(0.05)
     assert depth["comparison"]["top_k_overlap"]["1"]["mean_overlap_fraction"] == 0.0
     assert depth["comparison"]["topic_wins"] == {"a": 1, "b": 1, "ties": 0}
     assert set(depth["comparison"]["per_topic_delta"]) == {"1", "2"}
@@ -230,4 +235,79 @@ def test_write_evaluation_emits_metrics_and_topic_csv(tmp_path: Path) -> None:
     assert rows == [
         {"depth": "2", "topic_id": "1", "a": "0.2", "b": "0.4", "b_minus_a": "0.2"},
         {"depth": "2", "topic_id": "2", "a": "0.3", "b": "0.1", "b_minus_a": "-0.2"},
+    ]
+
+
+def test_write_rankings_emits_document_and_passage_rows(tmp_path: Path) -> None:
+    path = tmp_path / "scores.jsonl"
+    _write_jsonl(
+        path,
+        _window_rows(
+            "example/a",
+            {
+                "1:d1": [0.1, 0.7],
+                "1:d2": [0.6],
+                "2:d1": [0.9],
+                "2:d2": [0.2, 0.3],
+            },
+        ),
+    )
+    artifact = load_window_artifact(path, expected_depth=2)
+
+    write_rankings({"a": artifact}, tmp_path / "out")
+
+    document_rows = [
+        json.loads(line)
+        for line in (tmp_path / "out/a_document_rankings.jsonl").read_text().splitlines()
+    ]
+    passage_rows = [
+        json.loads(line)
+        for line in (tmp_path / "out/a_passage_rankings.jsonl").read_text().splitlines()
+    ]
+    assert document_rows[0] == {
+        "bm25_rank": 1,
+        "chunk_count": 2,
+        "docid": "d1",
+        "document_text_sha256": "text-1-d1",
+        "max_passage_score": 0.7,
+        "query_sha256": "query-1",
+        "rerank_rank": 1,
+        "system": "a",
+        "topic_id": "1",
+        "winning_chunk_index": 1,
+    }
+    assert passage_rows[:3] == [
+        {
+            "bm25_rank": 1,
+            "chunk_count": 2,
+            "chunk_index": 1,
+            "docid": "d1",
+            "is_document_max": True,
+            "passage_rank": 1,
+            "score": 0.7,
+            "system": "a",
+            "topic_id": "1",
+        },
+        {
+            "bm25_rank": 2,
+            "chunk_count": 1,
+            "chunk_index": 0,
+            "docid": "d2",
+            "is_document_max": True,
+            "passage_rank": 2,
+            "score": 0.6,
+            "system": "a",
+            "topic_id": "1",
+        },
+        {
+            "bm25_rank": 1,
+            "chunk_count": 2,
+            "chunk_index": 0,
+            "docid": "d1",
+            "is_document_max": False,
+            "passage_rank": 3,
+            "score": 0.1,
+            "system": "a",
+            "topic_id": "1",
+        },
     ]

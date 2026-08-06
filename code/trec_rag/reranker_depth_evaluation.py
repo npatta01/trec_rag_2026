@@ -7,6 +7,7 @@ import csv
 import json
 import math
 import random
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -32,6 +33,8 @@ IDENTITY_FIELDS = (
 METRICS = (
     "ndcg@10",
     "ndcg@20",
+    "precision@10",
+    "precision@20",
     "judged_count@10",
     "judged_rate@10",
     "judged_count@20",
@@ -49,7 +52,9 @@ class WindowDocument:
     docid: str
     bm25_rank: int
     max_score: float
+    max_chunk_index: int
     chunk_count: int
+    chunk_scores: tuple[float, ...]
     query_sha256: str
     document_text_sha256: str
 
@@ -149,12 +154,18 @@ def load_window_artifact(
         chunk_count = counts.pop()
         if set(per_doc) != set(range(chunk_count)):
             raise ValueError(f"{path}: incomplete chunks for {(topic_id, docid)}")
+        chunk_scores = tuple(per_doc[index][0] for index in range(chunk_count))
+        max_chunk_index, max_score = max(
+            enumerate(chunk_scores), key=lambda item: (item[1], -item[0])
+        )
         documents.setdefault(topic_id, {})[docid] = WindowDocument(
             topic_id=topic_id,
             docid=docid,
             bm25_rank=ranks.pop(),
-            max_score=max(value[0] for value in values),
+            max_score=max_score,
+            max_chunk_index=max_chunk_index,
             chunk_count=chunk_count,
+            chunk_scores=chunk_scores,
             query_sha256=query_hashes.pop(),
             document_text_sha256=document_hashes.pop(),
         )
@@ -398,6 +409,68 @@ def write_evaluation(report: Mapping[str, object], output_dir: Path) -> None:
     csv_tmp.replace(output_dir / "topic_metrics.csv")
 
 
+def write_rankings(
+    systems: Mapping[str, WindowArtifact],
+    output_dir: Path,
+) -> None:
+    """Write auditable full-depth document and passage rankings for each system."""
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for label, artifact in systems.items():
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", label):
+            raise ValueError(f"unsafe system label for ranking filename: {label!r}")
+        document_tmp = output_dir / f".{label}_document_rankings.jsonl.tmp"
+        passage_tmp = output_dir / f".{label}_passage_rankings.jsonl.tmp"
+        with (
+            document_tmp.open("w", encoding="utf-8") as document_sink,
+            passage_tmp.open("w", encoding="utf-8") as passage_sink,
+        ):
+            for topic_id in artifact.topic_ids:
+                documents = sorted(
+                    artifact.documents[topic_id].values(),
+                    key=lambda row: (-row.max_score, row.bm25_rank, row.docid),
+                )
+                for rerank_rank, row in enumerate(documents, start=1):
+                    payload = {
+                        "system": label,
+                        "topic_id": topic_id,
+                        "docid": row.docid,
+                        "bm25_rank": row.bm25_rank,
+                        "rerank_rank": rerank_rank,
+                        "max_passage_score": row.max_score,
+                        "winning_chunk_index": row.max_chunk_index,
+                        "chunk_count": row.chunk_count,
+                        "query_sha256": row.query_sha256,
+                        "document_text_sha256": row.document_text_sha256,
+                    }
+                    document_sink.write(json.dumps(payload, sort_keys=True) + "\n")
+
+                passages = sorted(
+                    (
+                        (score, row, chunk_index)
+                        for row in artifact.documents[topic_id].values()
+                        for chunk_index, score in enumerate(row.chunk_scores)
+                    ),
+                    key=lambda item: (-item[0], item[1].bm25_rank, item[1].docid, item[2]),
+                )
+                for passage_rank, (score, row, chunk_index) in enumerate(passages, start=1):
+                    payload = {
+                        "system": label,
+                        "topic_id": topic_id,
+                        "docid": row.docid,
+                        "bm25_rank": row.bm25_rank,
+                        "passage_rank": passage_rank,
+                        "chunk_index": chunk_index,
+                        "chunk_count": row.chunk_count,
+                        "score": score,
+                        "is_document_max": chunk_index == row.max_chunk_index,
+                    }
+                    passage_sink.write(json.dumps(payload, sort_keys=True) + "\n")
+        document_tmp.replace(output_dir / f"{label}_document_rankings.jsonl")
+        passage_tmp.replace(output_dir / f"{label}_passage_rankings.jsonl")
+
+
 def _system_argument(value: str) -> tuple[str, Path]:
     label, separator, path = value.partition("=")
     if not separator or not label or not path:
@@ -438,6 +511,7 @@ def main() -> int:
         bootstrap_samples=args.bootstrap_samples,
         bootstrap_seed=args.bootstrap_seed,
     )
+    write_rankings(artifacts, args.output_dir)
     write_evaluation(report, args.output_dir)
     print(json.dumps({"output_dir": str(args.output_dir), "topic_count": report["topic_count"]}))
     return 0

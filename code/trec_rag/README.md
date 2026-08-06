@@ -1558,6 +1558,14 @@ candidate depths:
   --output-dir outputs/rag25-reranker-1k-comparison-v1
 ```
 
+The output contains aggregate and per-topic nDCG, precision, judged coverage,
+paired uncertainty, and cross-model top-k overlap. It also preserves auditable
+full-depth rankings: `<label>_document_rankings.jsonl` records each document's
+BM25 rank, max-passage score, reranked position, and winning chunk, while
+`<label>_passage_rankings.jsonl` records every scored window and its within-topic
+passage rank. The original artifact-v2 JSONL remains the source of truth for
+the full window identity and scoring provenance.
+
 ### Modal compute and local promotion
 
 `code/tools/modal_rerank_score_cache.py` runs the same score builder on an
