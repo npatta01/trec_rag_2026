@@ -96,7 +96,7 @@
 
 - [ ] **Step 2: Report expected calls and paths, then run the baseline pipeline once**
 
-  Run: `.venv/bin/python -m trec_rag.pipeline --config configs/rag25_bm25_full_query_v1.yaml`
+  Run: `.venv/bin/python -m trec_rag.pipeline --config configs/rag25_bm25_full_query_1k_20260806.yaml`
 
 - [ ] **Step 3: Validate retrieval output**
 

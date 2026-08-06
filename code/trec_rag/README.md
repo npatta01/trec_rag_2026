@@ -1269,7 +1269,7 @@ Run:
 
 ```bash
 .venv/bin/python -m trec_rag.pipeline \
-  --config configs/rag25_bm25_full_query_v1.yaml
+  --config configs/rag25_bm25_full_query_1k_20260806.yaml
 ```
 
 Run the BM25 plus coverage-aware reranker config after the score artifacts have

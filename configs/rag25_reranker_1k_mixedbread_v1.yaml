@@ -19,6 +19,7 @@ retrievers:
     query_variants: [original]
     hits: 1000
     index: climbmix-400b
+    corpus_epoch: climbmix-400b-operator-archive-facet-2025-v2-sha256-2ccad901eb908ac14747bafd2069f7c8aa96ecaaa8cc30457ff47c73ce3bf81f
     cache: true
 
 ranking:
