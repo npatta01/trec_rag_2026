@@ -28,7 +28,7 @@ from trec_rag.query_understanding import build_query_variants
 from trec_rag.ranking import passthrough_rank
 from trec_rag.remote_config import RemotePyseriniConfig
 from trec_rag.repo_env import load_repo_env, repo_cache_root, shared_checkout_root
-from trec_rag.retrievers import cache_path, normalize_retrieved_candidates, request_cache_key
+from trec_rag.retrievers import PyseriniRemoteRetriever
 from trec_rag.topics import Topic, load_topics
 
 
@@ -1662,22 +1662,19 @@ def _load_cached_candidates(
     cache_dir: Path,
     index_url: str,
 ) -> list[RetrievedCandidate]:
-    request_key = request_cache_key(retriever, query, index_url=index_url)
-    candidate_cache = cache_dir / cache_path(
-        query.topic_id,
-        query.variant_name,
-        retriever.name,
-        request_key,
+    cache_reader = PyseriniRemoteRetriever(
+        retriever,
+        cache_dir=cache_dir,
+        corpus_epoch=retriever.corpus_epoch,
+        offline=True,
     )
-    if not candidate_cache.exists():
-        raise FileNotFoundError(
-            f"missing retrieval cache for topic={query.topic_id}: {candidate_cache}"
+    cache_identity = cache_reader.identity
+    if cache_identity["index_url"] != index_url:
+        raise ValueError(
+            "retrieval cache endpoint differs from the configured endpoint "
+            f"({cache_identity['index_url']} != {index_url})"
         )
-    payload = json.loads(candidate_cache.read_text(encoding="utf-8"))
-    response = payload.get("response")
-    if not isinstance(response, dict):
-        raise ValueError(f"cache file missing response object: {candidate_cache}")
-    return normalize_retrieved_candidates(response, query=query, retriever_name=retriever.name)
+    return cache_reader.retrieve(query)
 
 
 def _queries_by_topic(config: PipelineConfig) -> dict[str, QueryVariant]:

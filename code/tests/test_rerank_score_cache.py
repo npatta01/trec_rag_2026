@@ -14,16 +14,25 @@ import pytest
 
 import trec_rag.rerank_score_cache as score_cache_module
 from trec_rag.chunking import TextChunk
-from trec_rag.pipeline_models import RetrievedCandidate
+from trec_rag.document_store import DocumentStore
+from trec_rag.pipeline_config import RetrieverConfig
+from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate
 from trec_rag.ranking import coverage_aware_long_doc_rank
 from trec_rag.rerank_score_cache import (
     GlobalScoreCache,
     ScoreCacheContext,
     _document_artifact_row,
+    _load_cached_candidates,
     _score_document_rows,
     _score_window_rows,
     _seed_document_score_cache,
     _scores_to_list,
+)
+from trec_rag.retrieval_cache import (
+    DerivationIdentity,
+    OrganizerTextNormalizer,
+    RetrievalCache,
+    TransportIdentity,
 )
 from trec_rag.topics import Topic
 
@@ -115,6 +124,73 @@ def _candidate() -> RetrievedCandidate:
         score=12.0,
         text="Silicon Valley Bank failed after a rapid deposit run and bond losses.",
     )
+
+
+def test_load_cached_candidates_reads_authenticated_v2_retrieval_cache(
+    tmp_path, monkeypatch
+):
+    cache_dir = tmp_path / "cache" / "retrieval" / "pyserini_remote"
+    endpoint = "https://pyserini.test/v1/climbmix-400b/search"
+    query = QueryVariant("14", "original", "the exact narrative", "original_topic")
+    retriever = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=1000,
+        index="climbmix-400b",
+        corpus_epoch="test-corpus-epoch",
+    )
+    normalizer = OrganizerTextNormalizer()
+    retrieval_cache = RetrievalCache(
+        cache_dir,
+        DocumentStore(tmp_path / "cache" / "documents" / "v1"),
+        normalizer,
+    )
+    identity = TransportIdentity.from_query(
+        query_text=query.query_text,
+        index_id=retriever.index,
+        endpoint_identity=endpoint,
+        corpus_epoch=retriever.corpus_epoch,
+        hits=retriever.hits,
+    )
+    raw_response = json.dumps(
+        {
+            "api": "v1",
+            "index": "climbmix-400b",
+            "query": {"text": query.query_text},
+            "candidates": [
+                {"rank": 1, "docid": "doc-1", "score": 3.5, "doc": "exact body"}
+            ],
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    retrieval_cache.commit(
+        identity,
+        DerivationIdentity.from_normalizer(normalizer),
+        query.query_text,
+        raw_response,
+    )
+    monkeypatch.setenv("INDEX_URL", endpoint)
+
+    candidates = _load_cached_candidates(
+        query=query,
+        retriever=retriever,
+        cache_dir=cache_dir,
+        index_url=endpoint,
+    )
+
+    assert candidates == [
+        RetrievedCandidate(
+            topic_id="14",
+            variant_name="original",
+            retriever_name="climbmix_bm25",
+            query_text="the exact narrative",
+            docid="doc-1",
+            rank=1,
+            score=3.5,
+            text="exact body",
+        )
+    ]
 
 
 def test_document_scores_reuse_global_content_cache(tmp_path):
