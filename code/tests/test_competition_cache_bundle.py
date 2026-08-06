@@ -39,6 +39,7 @@ from trec_rag.competition_cache_bundle import (
     CacheBundleIntegrityError,
     MERGE_STATE_DIRECTORY,
     assert_no_incomplete_cache_bundle_merge,
+    incomplete_merge_journals,
     merge_bundles,
     pack_bundle,
     verify_bundle,
@@ -710,6 +711,18 @@ def test_verify_rejects_duplicate_case_and_canonical_collisions(
         verify_bundle(bundle)
 
 
+def test_verify_rejects_nonadjacent_ancestor_collision(tmp_path: Path) -> None:
+    paths = ("a", "a-foo", "a/b")
+    bundle = _write_manual_bundle(
+        tmp_path / "bundle",
+        declarations=[_declaration(path, path.encode()) for path in paths],
+        entries=[(_tar_entry(path, path.encode()), path.encode()) for path in paths],
+    )
+
+    with pytest.raises(CacheBundleIntegrityError, match="ancestor collision"):
+        verify_bundle(bundle)
+
+
 def test_verify_rejects_undeclared_archive_member(tmp_path: Path) -> None:
     body = b"undeclared"
     bundle = _write_manual_bundle(
@@ -1178,6 +1191,88 @@ def test_completed_merge_fails_closed_on_corrupt_portable_score_database(
         )
 
 
+def test_completed_merge_rejects_impossible_canonical_receipt_counts(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "merged-cache").resolve()
+    outputs_root = (tmp_path / "merged-outputs").resolve()
+    receipt = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=(bundle,),
+    )
+    forged = json.loads(receipt.completion_path.read_bytes())
+    forged["installed_count"] = 999_999
+    receipt.completion_path.write_bytes(_canonical_json(forged))
+    prepare_path = receipt.completion_path.parent / "prepare.json"
+
+    assert incomplete_merge_journals(cache_root) == (prepare_path,)
+    with pytest.raises(CacheBundleIntegrityError, match="completion|receipt|count"):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+        )
+
+
+def test_completed_merge_rejects_its_flagged_current_journal(tmp_path: Path) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "merged-cache").resolve()
+    outputs_root = (tmp_path / "merged-outputs").resolve()
+    receipt = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=(bundle,),
+    )
+    forged = json.loads(receipt.completion_path.read_bytes())
+    forged["prepare_sha256"] = "0" * 64
+    receipt.completion_path.write_bytes(_canonical_json(forged))
+    prepare_path = receipt.completion_path.parent / "prepare.json"
+
+    assert incomplete_merge_journals(cache_root) == (prepare_path,)
+    with pytest.raises(CacheBundleIntegrityError, match="completion|receipt|journal"):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+        )
+
+
+def test_completed_merge_rejects_nonregular_receipt_before_recovery_mutation(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "merged-cache").resolve()
+    outputs_root = (tmp_path / "merged-outputs").resolve()
+    receipt = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=(bundle,),
+    )
+    outside = tmp_path / "forged-complete.json"
+    outside.write_bytes(receipt.completion_path.read_bytes())
+    receipt.completion_path.unlink()
+    receipt.completion_path.symlink_to(outside)
+    publication_events: list[str] = []
+
+    with pytest.raises(CacheBundleIntegrityError, match="completion|receipt|regular"):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+            publication_hook=publication_events.append,
+        )
+
+    assert publication_events == []
+
+
 def test_score_conflicts_are_strict_by_default_and_keep_existing_is_audited(
     tmp_path: Path,
 ) -> None:
@@ -1295,6 +1390,57 @@ def test_keep_existing_is_limited_to_similarity_and_audits_numerical_conflict(
     assert [(row["kind"], row["resolution"]) for row in audit["conflicts"]] == [
         ("similarity", "kept-existing")
     ]
+
+
+def test_completed_keep_existing_merge_rejects_changed_similarity_target(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    model_identity = {
+        "backend": "sentence-transformers",
+        "embedding_representation": "normalized-float32",
+        "local_files_only": True,
+        "model": "fixture/minilm",
+        "model_revision": "revision",
+        "score_kind": "cosine-similarity",
+    }
+    identity = build_similarity_cache_identity(
+        model_identity=model_identity,
+        texts=("first", "second"),
+    )
+    source_cache = SimilarityCache(config.parent / "cache")
+    source_cache.store(identity, ((1.0, 0.25), (0.25, 1.0)))
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "destination-cache").resolve()
+    destination_cache = SimilarityCache(cache_root)
+    destination = destination_cache.store(identity, ((1.0, 0.5), (0.5, 1.0)))
+    outputs_root = (tmp_path / "destination-outputs").resolve()
+    receipt = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=(bundle,),
+        score_conflicts="keep-existing",
+    )
+    conflict_path = receipt.completion_path.parent / "conflicts.json"
+    original_conflict_bytes = conflict_path.read_bytes()
+    replacement = SimilarityCache(tmp_path / "replacement-cache").store(
+        identity,
+        ((1.0, 0.75), (0.75, 1.0)),
+    )
+    destination.write_bytes(replacement.read_bytes())
+
+    with pytest.raises(
+        CacheBundleIntegrityError, match="completion|conflict|destination"
+    ):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+            score_conflicts="keep-existing",
+        )
+
+    assert conflict_path.read_bytes() == original_conflict_bytes
 
 
 def test_keep_existing_rejects_malformed_destination_similarity_before_mutation(

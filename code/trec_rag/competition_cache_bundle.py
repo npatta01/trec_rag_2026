@@ -1508,8 +1508,16 @@ def _parse_manifest(
         )
     if [member.path for member in members] != sorted(member.path for member in members):
         raise CacheBundleIntegrityError("bundle manifest members are not sorted")
-    for parent, child in zip(members, members[1:]):
-        if child.path.startswith(parent.path + "/"):
+    canonical_paths = {
+        unicodedata.normalize("NFC", member.path).casefold() for member in members
+    }
+    for member in members:
+        canonical = PurePosixPath(unicodedata.normalize("NFC", member.path).casefold())
+        if any(
+            parent.as_posix() in canonical_paths
+            for parent in canonical.parents
+            if parent != PurePosixPath(".")
+        ):
             raise CacheBundleIntegrityError(
                 "bundle member paths have an ancestor collision"
             )
@@ -2151,6 +2159,117 @@ def _write_durable_create_only(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _validate_merge_journal_content(
+    *,
+    state_name: str,
+    prepare_value: object,
+    prepare_bytes: bytes,
+    conflicts_value: object,
+    conflicts_bytes: bytes,
+    completion_value: object,
+    completion_receipt: MergeReceipt,
+) -> None:
+    prepare = _require_exact_fields(
+        prepare_value,
+        {
+            "bundles",
+            "cache_root",
+            "merge_id",
+            "operations",
+            "outputs_root",
+            "schema_version",
+            "score_conflicts",
+        },
+        "merge prepare journal",
+    )
+    conflicts = _require_exact_fields(
+        conflicts_value,
+        {"conflicts", "merge_id", "schema_version"},
+        "merge conflict audit",
+    )
+    if _canonical_json(prepare) != prepare_bytes:
+        raise CacheBundleIntegrityError("merge prepare journal is not canonical")
+    if _canonical_json(conflicts) != conflicts_bytes:
+        raise CacheBundleIntegrityError("merge conflict audit is not canonical")
+    if (
+        prepare["schema_version"] != BUNDLE_SCHEMA_VERSION
+        or conflicts["schema_version"] != BUNDLE_SCHEMA_VERSION
+        or prepare["merge_id"] != state_name
+        or conflicts["merge_id"] != state_name
+        or completion_receipt.merge_id != state_name
+    ):
+        raise CacheBundleIntegrityError("merge journal identity changed")
+    bundles = prepare["bundles"]
+    operations = prepare["operations"]
+    conflict_rows = conflicts["conflicts"]
+    if not isinstance(bundles, list) or not isinstance(operations, list):
+        raise CacheBundleIntegrityError("merge prepare journal lists are invalid")
+    if not isinstance(conflict_rows, list):
+        raise CacheBundleIntegrityError("merge conflict audit list is invalid")
+    install_operation_keys: set[tuple[str, str]] = set()
+    score_operation_count = 0
+    for operation in operations:
+        if not isinstance(operation, dict):
+            raise CacheBundleIntegrityError("merge prepare operation is invalid")
+        target_root = operation.get("target_root")
+        relative_path = operation.get("relative_path")
+        if target_root == "score-import" and operation.get("kind") == "score":
+            score_operation_count += 1
+        elif target_root in {"cache", "outputs"} and isinstance(relative_path, str):
+            install_operation_keys.add((target_root, relative_path))
+        else:
+            raise CacheBundleIntegrityError("merge prepare operation target is invalid")
+    kept_similarity_keys: set[tuple[str, str]] = set()
+    similarity_row_count = 0
+    for row in conflict_rows:
+        if not isinstance(row, dict):
+            raise CacheBundleIntegrityError("merge conflict row is invalid")
+        if row.get("kind") != "similarity":
+            continue
+        similarity_row_count += 1
+        target_root = row.get("target_root")
+        relative_path = row.get("relative_path")
+        key = (target_root, relative_path)
+        if (
+            row.get("resolution") != "kept-existing"
+            or not isinstance(target_root, str)
+            or not isinstance(relative_path, str)
+            or key not in install_operation_keys
+        ):
+            raise CacheBundleIntegrityError(
+                "merge similarity conflict does not match an operation"
+            )
+        kept_similarity_keys.add(key)
+    if len(kept_similarity_keys) != similarity_row_count:
+        raise CacheBundleIntegrityError("merge similarity conflict is duplicated")
+    complete = _require_exact_fields(
+        completion_value,
+        {
+            "bundle_count",
+            "conflicts_sha256",
+            "identical_count",
+            "installed_count",
+            "kept_conflict_count",
+            "merge_id",
+            "operation_count",
+            "prepare_sha256",
+            "schema_version",
+            "score_import_count",
+        },
+        "merge completion receipt",
+    )
+    if (
+        completion_receipt.bundle_count != len(bundles)
+        or completion_receipt.operation_count != len(operations)
+        or completion_receipt.installed_count + completion_receipt.identical_count
+        != len(install_operation_keys) - len(kept_similarity_keys)
+        or completion_receipt.kept_conflict_count != len(conflict_rows)
+        or completion_receipt.score_import_count != score_operation_count
+        or complete["schema_version"] != BUNDLE_SCHEMA_VERSION
+    ):
+        raise CacheBundleIntegrityError("merge completion counters are invalid")
+
+
 def incomplete_merge_journals(cache_root: str | Path) -> tuple[Path, ...]:
     """Return prepare journals that have no valid committed completion receipt."""
     root = Path(cache_root)
@@ -2173,8 +2292,10 @@ def incomplete_merge_journals(cache_root: str | Path) -> tuple[Path, ...]:
             incomplete.append(prepare)
             continue
         try:
-            prepare_value = _strict_json(prepare.read_bytes(), "merge prepare journal")
-            completion_receipt = _read_merge_receipt(complete)
+            prepare_bytes = prepare.read_bytes()
+            complete_bytes = complete.read_bytes()
+            prepare_value = _strict_json(prepare_bytes, "merge prepare journal")
+            completion_receipt = _parse_merge_receipt(complete, complete_bytes)
             if (
                 not isinstance(prepare_value, dict)
                 or prepare_value.get("merge_id") != state.name
@@ -2182,24 +2303,33 @@ def incomplete_merge_journals(cache_root: str | Path) -> tuple[Path, ...]:
             ):
                 incomplete.append(prepare)
                 continue
-            complete_value = _strict_json(
-                complete.read_bytes(), "merge completion receipt"
-            )
+            complete_value = _strict_json(complete_bytes, "merge completion receipt")
             if (
                 not isinstance(complete_value, dict)
                 or complete_value.get("prepare_sha256")
-                != hashlib.sha256(prepare.read_bytes()).hexdigest()
+                != hashlib.sha256(prepare_bytes).hexdigest()
             ):
                 incomplete.append(prepare)
                 continue
             conflicts = state / MERGE_CONFLICTS_NAME
-            if (
-                conflicts.is_symlink()
-                or not conflicts.is_file()
-                or hashlib.sha256(conflicts.read_bytes()).hexdigest()
-                != complete_value.get("conflicts_sha256")
+            if conflicts.is_symlink() or not conflicts.is_file():
+                incomplete.append(prepare)
+                continue
+            conflicts_bytes = conflicts.read_bytes()
+            if hashlib.sha256(conflicts_bytes).hexdigest() != complete_value.get(
+                "conflicts_sha256"
             ):
                 incomplete.append(prepare)
+                continue
+            _validate_merge_journal_content(
+                state_name=state.name,
+                prepare_value=prepare_value,
+                prepare_bytes=prepare_bytes,
+                conflicts_value=_strict_json(conflicts_bytes, "merge conflict audit"),
+                conflicts_bytes=conflicts_bytes,
+                completion_value=complete_value,
+                completion_receipt=completion_receipt,
+            )
         except (CacheBundleError, OSError):
             incomplete.append(prepare)
     return tuple(incomplete)
@@ -2665,9 +2795,9 @@ def _reconcile_completed_score_operation(
         )
 
 
-def _read_merge_receipt(path: Path) -> MergeReceipt:
+def _parse_merge_receipt(path: Path, body: bytes) -> MergeReceipt:
     raw = _require_exact_fields(
-        _strict_json(path.read_bytes(), "merge completion receipt"),
+        _strict_json(body, "merge completion receipt"),
         {
             "bundle_count",
             "conflicts_sha256",
@@ -2682,7 +2812,7 @@ def _read_merge_receipt(path: Path) -> MergeReceipt:
         },
         "merge completion receipt",
     )
-    if _canonical_json(raw) != path.read_bytes():
+    if _canonical_json(raw) != body:
         raise CacheBundleIntegrityError("merge completion receipt is not canonical")
     if raw["schema_version"] != BUNDLE_SCHEMA_VERSION:
         raise CacheBundleIntegrityError("merge completion schema changed")
@@ -2706,6 +2836,91 @@ def _read_merge_receipt(path: Path) -> MergeReceipt:
             raw["score_import_count"], "score_import_count"
         ),
     )
+
+
+def _read_regular_merge_state(
+    path: Path,
+    label: str,
+    *,
+    expected_size: int | None = None,
+) -> bytes:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise CacheBundleIntegrityError(f"completed merge {label} is missing") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise CacheBundleIntegrityError(
+            f"completed merge {label} is not a regular file"
+        )
+    if expected_size is not None and metadata.st_size != expected_size:
+        raise CacheBundleIntegrityError(
+            f"completed merge {label} size differs from current content"
+        )
+    if expected_size is None and metadata.st_size > MAX_MANIFEST_BYTES:
+        raise CacheBundleIntegrityError(f"completed merge {label} size limit exceeded")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise CacheBundleIntegrityError(
+            f"completed merge {label} could not be read"
+        ) from exc
+
+
+def _authenticate_completed_merge(
+    *,
+    complete_path: Path,
+    prepare_path: Path,
+    conflicts_path: Path,
+    expected_prepare: bytes,
+    expected_conflicts: bytes,
+    merge_id: str,
+    bundle_count: int,
+    install_operation_count: int,
+    operation_count: int,
+    kept_operation_count: int,
+    conflict_count: int,
+    score_operation_count: int,
+) -> MergeReceipt:
+    """Authenticate a completion receipt from current inputs and postconditions."""
+    actual_prepare = _read_regular_merge_state(
+        prepare_path,
+        "prepare journal",
+        expected_size=len(expected_prepare),
+    )
+    if actual_prepare != expected_prepare:
+        raise CacheBundleIntegrityError(
+            "completed merge prepare journal differs from current inputs"
+        )
+    actual_conflicts = _read_regular_merge_state(
+        conflicts_path,
+        "conflict audit",
+        expected_size=len(expected_conflicts),
+    )
+    if actual_conflicts != expected_conflicts:
+        raise CacheBundleIntegrityError(
+            "completed merge conflict audit differs from current destinations"
+        )
+    complete_bytes = _read_regular_merge_state(complete_path, "completion receipt")
+    receipt = _parse_merge_receipt(complete_path, complete_bytes)
+    raw = _strict_json(complete_bytes, "merge completion receipt")
+    if not isinstance(raw, dict):
+        raise CacheBundleIntegrityError("merge completion receipt is not an object")
+    expected_install_outcomes = install_operation_count - kept_operation_count
+    if (
+        receipt.merge_id != merge_id
+        or receipt.bundle_count != bundle_count
+        or receipt.operation_count != operation_count
+        or receipt.installed_count + receipt.identical_count
+        != expected_install_outcomes
+        or receipt.kept_conflict_count != conflict_count
+        or receipt.score_import_count != score_operation_count
+        or raw["prepare_sha256"] != hashlib.sha256(expected_prepare).hexdigest()
+        or raw["conflicts_sha256"] != hashlib.sha256(expected_conflicts).hexdigest()
+    ):
+        raise CacheBundleIntegrityError(
+            "completed merge receipt differs from authenticated merge content"
+        )
+    return receipt
 
 
 def merge_bundles(
@@ -2834,16 +3049,53 @@ def merge_bundles(
         prepare_sha256 = hashlib.sha256(prepare_bytes).hexdigest()
         state_root = cache_destination / MERGE_STATE_DIRECTORY / merge_id
         prepare_path = state_root / MERGE_PREPARE_NAME
+        conflicts_path = state_root / MERGE_CONFLICTS_NAME
         complete_path = state_root / MERGE_COMPLETE_NAME
+        conflicts_bytes = _canonical_json(
+            {
+                "conflicts": conflicts,
+                "merge_id": merge_id,
+                "schema_version": BUNDLE_SCHEMA_VERSION,
+            }
+        )
+        conflicts_sha256 = hashlib.sha256(conflicts_bytes).hexdigest()
 
-        if complete_path.is_file() and not complete_path.is_symlink():
+        try:
+            complete_metadata = complete_path.lstat()
+        except FileNotFoundError:
+            completed = False
+        except OSError as exc:
+            raise CacheBundleIntegrityError(
+                "merge completion receipt could not be inspected"
+            ) from exc
+        else:
+            if stat.S_ISLNK(complete_metadata.st_mode) or not stat.S_ISREG(
+                complete_metadata.st_mode
+            ):
+                raise CacheBundleIntegrityError(
+                    "merge completion receipt is not a regular file"
+                )
+            completed = True
+
+        if completed:
             if missing:
                 raise CacheBundleIntegrityError(
                     "completed merge receipt has a missing immutable destination"
                 )
-            prior = _read_merge_receipt(complete_path)
-            if prior.merge_id != merge_id:
-                raise CacheBundleIntegrityError("merge completion identity changed")
+            prior = _authenticate_completed_merge(
+                complete_path=complete_path,
+                prepare_path=prepare_path,
+                conflicts_path=conflicts_path,
+                expected_prepare=prepare_bytes,
+                expected_conflicts=conflicts_bytes,
+                merge_id=merge_id,
+                bundle_count=len(bundles),
+                install_operation_count=len(operations),
+                operation_count=len(operations) + len(score_operations),
+                kept_operation_count=len(kept),
+                conflict_count=len(conflicts),
+                score_operation_count=len(score_operations),
+            )
             for operation in score_operations:
                 _reconcile_completed_score_operation(
                     operation,
@@ -2875,22 +3127,15 @@ def merge_bundles(
             if key in kept:
                 continue
             target = operation.target(cache_destination, outputs_destination)
-            installed += int(_install_create_only(operation, target))
+            created = _install_create_only(operation, target)
+            installed += int(created)
+            identical += int(not created)
             if publication_hook is not None:
                 publication_hook(
                     f"installed:{operation.target_root_name}/{operation.relative_path.as_posix()}"
                 )
 
-        conflicts_bytes = _canonical_json(
-            {
-                "conflicts": conflicts,
-                "merge_id": merge_id,
-                "schema_version": BUNDLE_SCHEMA_VERSION,
-            }
-        )
-        conflicts_path = state_root / MERGE_CONFLICTS_NAME
         _write_durable_create_only(conflicts_path, conflicts_bytes)
-        conflicts_sha256 = hashlib.sha256(conflicts_bytes).hexdigest()
         complete_bytes = _canonical_json(
             {
                 "bundle_count": len(bundles),
@@ -2908,7 +3153,20 @@ def merge_bundles(
         _write_durable_create_only(complete_path, complete_bytes)
         if publication_hook is not None:
             publication_hook("complete")
-        return _read_merge_receipt(complete_path)
+        return _authenticate_completed_merge(
+            complete_path=complete_path,
+            prepare_path=prepare_path,
+            conflicts_path=conflicts_path,
+            expected_prepare=prepare_bytes,
+            expected_conflicts=conflicts_bytes,
+            merge_id=merge_id,
+            bundle_count=len(bundles),
+            install_operation_count=len(operations),
+            operation_count=len(operations) + len(score_operations),
+            kept_operation_count=len(kept),
+            conflict_count=len(conflicts),
+            score_operation_count=len(score_operations),
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
