@@ -1,0 +1,60 @@
+experiment:
+  id: rag25_reranker_1k_model_comparison_v1
+  runtime_id: dstack_a40_cuda_v2
+  run_date: 2026-08-06
+  split: dev
+  description: Full RAG25 top-1,000 original-narrative BM25 reranker comparison between pinned Mixedbread and GTE ModernBERT models.
+
+config:
+  retriever: pyserini_remote
+  index: climbmix-400b
+  query_source: original_narrative
+  hits: 1000
+  ranking: max_passage_score
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  topic_count: 22
+
+scope:
+  topic_count: 22
+  candidate_depths:
+    - 50
+    - 100
+    - 200
+    - 500
+    - 1000
+  metric: ndcg@10
+  baseline: BM25 candidate order
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+
+counts:
+  retrieved_rows: 22000
+  window_rows_per_model: 237089
+  document_rows_per_model: 22000
+
+local_artifacts:
+  output_dir: outputs/rag25_reranker_1k_comparison_v1/full_a40
+  cache_dir: cache/retrieval/pyserini_remote and model-separated reranker caches
+
+remote:
+  run_name: rag25-reranker-1k-a40-20260806-v2
+  gpu: NVIDIA A40 48GB
+  result_prefix: hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/rag25-reranker-1k-a40-20260806-v2
+  successful_cost_usd: 0.9032
+  total_cost_including_failed_preflight_usd: 0.9518
+
+metrics:
+  ndcg_at_10: 0.5250539667
+  notes: Depth-100 Mixedbread nDCG@10; see metrics.json and notes.md for all depths and both systems.
+
+tracked_record_files:
+  manifest: manifest.yaml
+  config: config.yaml
+  notes: notes.md
+  metrics: metrics.json
+  topic_metrics: topic_metrics.csv
+
+notes: Learned evidence; source record generated on codex/rag25-reranker-1k.
