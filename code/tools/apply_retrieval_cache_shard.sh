@@ -123,7 +123,7 @@ project_python="$REPO_ROOT/.venv/bin/python"
 project_hf="$REPO_ROOT/.venv/bin/hf"
 [[ -x $project_python && -x $project_hf ]] || die "the locked project .venv with hf is required"
 dstack_bin=$(command -v dstack) || die "dstack is required"
-installed_dstack_version=$($dstack_bin version 2>/dev/null) || die "could not read dstack version"
+installed_dstack_version=$($dstack_bin --version 2>/dev/null) || die "could not read dstack version"
 [[ $installed_dstack_version == "$DSTACK_VERSION" ]] || die "dstack $DSTACK_VERSION is required (found $installed_dstack_version)"
 
 temp_parent=${TMPDIR:-/tmp}

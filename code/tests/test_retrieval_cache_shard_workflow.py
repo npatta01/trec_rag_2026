@@ -401,7 +401,7 @@ def _fake_dstack(tmp_path: Path) -> tuple[Path, Path]:
     fake.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-if [[ ${1:-} == version ]]; then
+if [[ ${1:-} == --version ]]; then
   printf '0.20.29\\n'
   exit 0
 fi
