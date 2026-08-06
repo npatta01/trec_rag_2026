@@ -21,7 +21,7 @@ cacheable. Both retrieval modes meet only at the existing typed
 content-addressed document/retrieval/reranker caches, deterministic ZIP/JSON,
 OpenRouter DeepSeek, Pyserini REST, Mixedbread ROCm reranking.
 
-## Current status (2026-08-05)
+## Current status (2026-08-06)
 
 - Tasks 1-9 are implemented, including independent-review fixes for official
   topic identity, exact Git revision validation, TopicRecords receipts,
@@ -33,11 +33,23 @@ OpenRouter DeepSeek, Pyserini REST, Mixedbread ROCm reranking.
   now exercises production cache/dependency wiring, a real TopicRecords
   publication, grounded projection, topic sealing, and aggregate export while
   replacing only external provider/GPU boundaries.
-- Task 10 steps 1-2 are complete. The authenticated warm cache was merged
-  conflict-safely into this isolated checkout's cache: 35 retrieval entries,
-  25,616 documents, 171,568 reranker scores, and the pinned Mixedbread model
-  snapshot now validate. The ignored smoke config, live `rag2026-0` run, and
-  sealed-output validation remain pending.
+- Task 10 is complete. The production-shaped `rag2026-0` agentic smoke ran from
+  2026-08-05 20:49:34 through 2026-08-06 00:46:37 with the canonical
+  20-researcher, 3-concurrent, 100-retrieval-call, no-time-deadline budget. It
+  finished `complete` with `coverage_sufficient`, used the coordinator-selected
+  grounded synthesis, and published 103 retrieval documents with 63 documents
+  admitted to the generation citation domain.
+- The authenticated export loader rederived and byte-compared the sealed TREC
+  run, deterministic full-text ZIP, generation handoff, and manifest. The
+  production RAG handoff loader accepted exactly `rag2026-0`; hosted RAG
+  generation was not run. The final cache contains 119 validated retrieval
+  transports (35 pre-run plus 84 new), 64,379 documents, and 530,652
+  topic-passage reranker scores.
+- Remaining tooling limitation: `competition_debug_report` only accepts
+  `facet_pilot_config_v2` and fixed-pipeline per-topic checkpoints, so it cannot
+  render an `agentic_retrieval_config_v1` run. Its failure was non-mutating; the
+  agentic export and generation-handoff production loaders supplied the sealed
+  validation instead.
 
 ## Global constraints
 
@@ -650,7 +662,7 @@ ID, rerunning the 19 successes, or losing shared cache reuse.
 - Target: the main/shared checkout's ignored `cache/` tree.
 - Smoke topic: `rag2026-0` only.
 
-- [ ] **Step 1: Audit source and destination before mutation.**
+- [x] **Step 1: Audit source and destination before mutation.**
 
   Count source retrieval transports, score rows by exact cache context,
   content-addressed documents, and model snapshot files. Verify retrieval
@@ -658,7 +670,7 @@ ID, rerunning the 19 successes, or losing shared cache reuse.
   document SHA filenames/content, and the pinned model revision. Inventory the
   target and reject any same-key/different-byte collision.
 
-- [ ] **Step 2: Import conflict-safely with source untouched.**
+- [x] **Step 2: Import conflict-safely with source untouched.**
 
   Publish only validated immutable retrieval transport pairs; logically import
   score rows through `GlobalScoreCache.import_scores`; admit document text
@@ -667,14 +679,14 @@ ID, rerunning the 19 successes, or losing shared cache reuse.
   partial files. Re-run validation against the target and record counts/hashes
   privately.
 
-- [ ] **Step 3: Create ignored local smoke configs.**
+- [x] **Step 3: Create ignored local smoke configs.**
 
   Copy the canonical agentic config to `configs/local/`, give it a fresh
   one-topic experiment ID/output namespace, and keep all semantic retrieval,
   model, and budget identities unchanged. Prepare a matching ignored RAG config
   only for handoff-load validation; do not invoke hosted RAG generation.
 
-- [ ] **Step 4: Preflight and report before external calls.**
+- [x] **Step 4: Preflight and report before external calls.**
 
   Verify clean tracked tree, exact committed HEAD, pinned submodules, secrets by
   name only, ROCm access, offline pinned model load, one selected topic, fresh
@@ -682,7 +694,7 @@ ID, rerunning the 19 successes, or losing shared cache reuse.
   reuse versus adaptive-query misses, that coordinator/researcher OpenRouter
   calls remain live, and the private output path.
 
-- [ ] **Step 5: Run the one-topic smoke.**
+- [x] **Step 5: Run the one-topic smoke.**
 
   ```bash
   .venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
@@ -699,7 +711,7 @@ ID, rerunning the 19 successes, or losing shared cache reuse.
     --resume --topic rag2026-0
   ```
 
-- [ ] **Step 6: Validate the sealed output.**
+- [x] **Step 6: Validate the sealed output.**
 
   Read the outer manifest last; verify artifact hashes, one-topic cohort,
   variable-depth TREC ordering, deterministic full-text ZIP, no raw-passage
@@ -707,5 +719,5 @@ ID, rerunning the 19 successes, or losing shared cache reuse.
   counters, and private permissions. Do not run `competition_rag` hosted
   generation.
 
-- [ ] **Step 7: Use `superpowers:verification-before-completion`, then report
+- [x] **Step 7: Use `superpowers:verification-before-completion`, then report
   the exact result, cache reuse, artifact paths, and any remaining limitation.**
