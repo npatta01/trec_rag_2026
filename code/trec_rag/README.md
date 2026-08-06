@@ -234,69 +234,149 @@ planning, retrieval, evidence, and canonicalization; they belong only in
 post-seal evaluation. Outputs include source text and generated claims, so keep
 `outputs/` ignored and private.
 
-### Splitting one run across hosts
+### Sharding retrieval across dstack hosts
 
-Topic selection plus per-topic sealing make it practical to run part of a run on
-a rented GPU box and finish it locally. Partition the topics with
-`--topic-subset`, never overlap the two sets, and copy the remote work back
-before the final local run. Sealed topics revalidate and are skipped, the
-remaining topics run locally, and the export is regenerated over every selected
-topic, so the organizer TSV, full-text ZIP, and handoff never need manual
-merging.
+Do not copy live cache directories or SQLite databases between machines. Pack
+each completed topic with `trec_rag.competition_cache_bundle`, publish the two
+immutable bundle files, verify them after download, and merge through the bundle
+API. The archive carries the authenticated topic checkpoint, content-addressed
+retrieval/document/planning/canonical/similarity entries, and portable reranker
+JSONL. It excludes locks, WAL files, raw provider responses, qrels, gold data,
+RAG answers, and model weights.
 
-The downloadable artifact is **two directories**, not one:
+The checked-in dstack task is
+`.dstack/rag26-retrieval-cache-shard.yaml`. It sends the current local worktree
+through dstack's Git repo transport, including local commits and changes relative
+to the tracking branch. The remote wrapper commits that applied patch only in
+the disposable checkout, verifies a clean `HEAD`, installs the locked CUDA
+environment against the image's existing Python, and runs exactly one selected
+topic. No branch push is required.
 
-| Path | Required | Why |
+The wrapper downloads and then resolves both public snapshots offline before
+retrieval:
+
+| Snapshot | Revision | Loaded by |
 | --- | --- | --- |
-| `outputs/<experiment.id>/<topic-id>/` | yes | sealed per-topic checkpoints, ledger, and receipts |
-| `cache/documents/v1/` | yes | content-addressed document text the export reads for every row |
-| `cache/retrieval/pyserini_remote/` | no | avoids re-querying the hosted index if a topic is rerun |
-| `cache/canonical/<prompt-version>/` | no | avoids re-paying for hosted canonical calls on a rerun |
-| `cache/reranker/` | **no — do not copy** | the score database path is derived from the scoring context, so both hosts write the same filename with different contents and a copy clobbers local scores |
+| `mixedbread-ai/mxbai-rerank-base-v2` | `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` | passage scoring |
+| `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | evidence selection |
 
-Skipping `cache/documents/v1/` is the quiet failure: the checkpoints validate
-and the export then fails on missing document text. Both required directories
-are content-addressed or topic-scoped, so they merge by copy.
+Model weights are temporary public assets and are not uploaded in the shard.
+Successful bundles go to this private Hugging Face Bucket layout, with the
+archive uploaded first and `bundle-complete.json` last:
 
-Both hosts must agree on the things the checkpoints seal, or resume fails
-closed:
+```text
+hf://buckets/Npatta01/trec_mlm_2026/
+  trec_rag_2026/experiments/<run-id>/<topic-id>/
+    bundle.tar.zst
+    bundle-complete.json
+```
 
-- **The same config bytes.** The YAML SHA-256 is sealed into every dispatch and
-  projection receipt, so `experiment.id` and every other field must be
-  byte-identical on both hosts.
-- **`passage.device` pinned, not `auto`.** The resolved device string is part of
-  the sealed passage-search identity, and the exporting host recomputes it.
-  `auto` resolving to `cpu` remotely and `cuda` locally rejects the download.
-  The checked-in config pins `cuda`, which both ROCm and NVIDIA report.
-- **The same `INDEX_URL`.** It is part of the retriever identity and is required
-  even for a resume-and-export pass that issues no queries.
-- **A clean tracked worktree containing real git metadata.** The runner rejects
-  a dirty tree and reads `HEAD` for the recorded commit, so ship a checkout
-  rather than a file tarball.
-- **No commit change inside a topic.** All phases of one topic must share a
-  commit; different topics may carry different commits.
-- **Both pinned model snapshots pre-cached.** The retrieval path loads two, each
-  at a pinned revision with `local_files_only=True`, and each must resolve from
-  the cache alone before a run starts:
+The wrapper refuses a non-private bucket or non-empty topic prefix. It does not
+delete or overwrite remote files. After both uploads it lists the prefix,
+downloads both files, compares their bytes, and runs the bundle verifier in the
+foreground. A dstack success without that round trip is not a completed shard.
 
-  | Snapshot | Revision | Loaded by |
-  | --- | --- | --- |
-  | `mixedbread-ai/mxbai-rerank-base-v2` | `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` | passage scoring |
-  | `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | evidence selection |
+Run the credential-free wrapper preflight locally before looking at offers:
 
-  `code/tools/setup_cuda_env.sh` fetches both and re-resolves each with
-  `local_files_only=True`. Caching only the reranker is the trap: selection runs
-  *after* passage scoring, so the missing MiniLM surfaces as a late failure with
-  the expensive stage already paid for.
+```bash
+HF_CLI_MODE=direct bash code/tools/run_retrieval_cache_shard.sh \
+  --preflight \
+  --topic rag2026-0 \
+  --run-id nonagentic-two-topic-20260806
+```
 
-Set up a rented NVIDIA box with `code/tools/setup_env.sh`, which now detects
-CUDA as well as ROCm and syncs the `cuda` dependency group. That group pins the
-same `sentence-transformers`, `transformers`, and `numpy` versions the `rocm`
-group resolves to, so reranker score-cache entries stay interchangeable and the
-recorded backend version stays honest. The two groups are declared conflicting,
-so `uv.lock` carries separate CUDA and ROCm resolution forks. Regenerate it on a
-ROCm host whenever either group changes, because `repo.radeon.com` must be
-reachable while uv resolves both forks.
+The dstack task accepts only the named secrets `HF_TOKEN`, `INDEX_URL`,
+`PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY`. Configure them in the dstack
+project; never put their values in the YAML or command line. Preview each topic
+without submitting it and retain the complete offers output:
+
+```bash
+echo "n" | dstack apply \
+  -f .dstack/rag26-retrieval-cache-shard.yaml \
+  -n rag26-cache-rag2026-0 \
+  -- --topic rag2026-0 --run-id nonagentic-two-topic-20260806
+
+echo "n" | dstack apply \
+  -f .dstack/rag26-retrieval-cache-shard.yaml \
+  -n rag26-cache-rag2026-1 \
+  -- --topic rag2026-1 --run-id nonagentic-two-topic-20260806
+```
+
+The task requests one on-demand `A5000`, `L4`, `RTX3090`, or `RTX4090` with at
+least 24 GB VRAM, 32 GB RAM, and 100 GB disk. It has a `$1.00/hour` ceiling, a
+five-hour running limit, a 30-minute retry only for `no-capacity`, and zero idle
+retention. Previewing is read-only. Launch detached with `-y -d` only after the
+two offers and expected hosted work have been explicitly approved.
+
+Download each completed private prefix to a separate local directory and verify
+before touching the shared cache:
+
+```bash
+shard_root="$(pwd)/outputs/private-cache-shards/nonagentic-two-topic-20260806"
+mkdir -p "$shard_root/rag2026-0" "$shard_root/rag2026-1"
+
+hf buckets sync \
+  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0 \
+  "$shard_root/rag2026-0"
+hf buckets sync \
+  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-1 \
+  "$shard_root/rag2026-1"
+
+.venv/bin/python -m trec_rag.competition_cache_bundle verify \
+  "$shard_root/rag2026-0"
+.venv/bin/python -m trec_rag.competition_cache_bundle verify \
+  "$shard_root/rag2026-1"
+```
+
+Merge only verified bundles. The merge stages every source, journals intent,
+installs immutable files create-only, imports portable scores transactionally,
+and publishes its completion last. `keep-existing` permits only validated
+finite reranker/similarity values for the same identity; it records, but never
+averages, small cross-device numerical differences:
+
+```bash
+.venv/bin/python -m trec_rag.competition_cache_bundle merge \
+  --cache-root "$(pwd)/cache" \
+  --outputs-root "$(pwd)/outputs" \
+  --score-conflicts keep-existing \
+  "$shard_root/rag2026-0" \
+  "$shard_root/rag2026-1"
+```
+
+An incomplete merge journal makes competition retrieval fail closed. Re-run the
+same merge after fixing the reported filesystem problem; do not delete the
+journal by hand.
+
+For the local proof, copy the canonical retrieval config under ignored
+`configs/local/`, assign a new experiment ID such as
+`nonagentic-two-topic-local-replay-20260806`, and run the same two topics with
+offline cache-only mode. Keep the real `INDEX_URL` because it is part of the
+retrieval identity, but mask credentials so a regression cannot reach a hosted
+service:
+
+```bash
+OPENROUTER_API_KEY=offline-disabled \
+PYSERINI_API_TOKEN=offline-disabled \
+HF_TOKEN=offline-disabled \
+TREC_RAG_CACHE_ROOT="$(pwd)/cache" \
+.venv/bin/python-rocm -m trec_rag.competition_retrieval \
+  configs/local/nonagentic-two-topic-local-replay-20260806.yaml \
+  --offline-cache-only \
+  --topic rag2026-0 --topic rag2026-1
+```
+
+Success requires authenticated per-topic and root cache-operation receipts with
+zero misses, network/provider calls, and model batches. It should be fast because
+it performs validated cache reads and local projection only, but there is no
+wall-time guarantee. A missing or corrupt cache entry fails before publishing a
+success receipt.
+
+The CUDA dependency group pins the same `sentence-transformers`, `transformers`,
+and `numpy` versions the ROCm group resolves to, so reranker cache identities
+remain interchangeable. The two groups are declared conflicting, so `uv.lock`
+carries separate CUDA and ROCm resolution forks. Regenerate it on a ROCm host
+whenever either group changes, because `repo.radeon.com` must be reachable while
+uv resolves both forks.
 
 `code/tools/verify_torch_groups.sh` proves three things without installing
 anything:

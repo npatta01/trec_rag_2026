@@ -1,0 +1,42 @@
+type: task
+name: rag26-retrieval-cache-shard
+
+image: huggingface/trl@sha256:4de10fa68e4f4e060cb41885044208e2a44715fc0d52ce83bb071b1fc6d63db1
+entrypoint: /bin/bash -c
+shell: bash
+working_dir: /dstack/run/trec_rag_2026
+
+# A local repo transport clones the tracking branch, then applies every local
+# commit/change as one binary patch. The wrapper seals that applied patch in an
+# ephemeral commit before the competition runner records HEAD.
+repos:
+  - local_path: ..
+    path: /dstack/run/trec_rag_2026
+    if_exists: error
+
+env:
+  - HF_TOKEN=${{ secrets.HF_TOKEN }}
+  - INDEX_URL=${{ secrets.INDEX_URL }}
+  - PYSERINI_API_TOKEN=${{ secrets.PYSERINI_API_TOKEN }}
+  - OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+  - HF_CLI_MODE=direct
+
+commands:
+  - 'bash code/tools/run_retrieval_cache_shard.sh ${{ run.args }}'
+
+resources:
+  gpu:
+    name: [A5000, L4, RTX3090, RTX4090]
+    count: 1
+    memory: 24GB..
+  memory: 32GB..
+  disk: 100GB
+
+backends: [runpod, vastai]
+spot_policy: on-demand
+max_price: 1.0
+max_duration: 5h
+idle_duration: 0s
+retry:
+  on_events: [no-capacity]
+  duration: 30m
