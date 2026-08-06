@@ -351,6 +351,30 @@ def test_incomplete_topic_completion_publishes_and_reopens_with_valid_passages(t
     assert snapshot.passages[0].passage_id == result.passages[0].passage_id
 
 
+@pytest.mark.parametrize("stopping_reason", ["budget_exhausted", "agent_completed"])
+def test_grounded_partial_completion_preserves_its_bounded_stop(
+    tmp_path: Path,
+    stopping_reason: str,
+) -> None:
+    builder, store = _task3_builder(tmp_path)
+    result = _task3_passage_result()
+    builder.add_facets(
+        (
+            topic_records_module.FacetRecord("facet-a", "primary facet", "initial"),
+            topic_records_module.FacetRecord("facet-b", "supporting facet", "initial"),
+        )
+    )
+    builder.add_passage_search(result)
+
+    builder.set_completion("complete", stopping_reason)
+    builder.publish({"run_id": "r1"})
+
+    with _task3_open_published(tmp_path, store) as records:
+        snapshot = records.topic_snapshot()
+    assert snapshot.status == "complete"
+    assert snapshot.stopping_reason == stopping_reason
+
+
 def test_evidence_validation_failure_publishes_as_an_incomplete_topic(
     tmp_path: Path,
 ) -> None:

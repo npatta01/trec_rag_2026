@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from dataclasses import replace
 import json
 from threading import Lock
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 from deepagents.middleware.subagents import SubAgent
 from langchain.agents.middleware import (
@@ -76,6 +76,57 @@ _CLOSEOUT_DIRECTIVE = (
     "After recording the write-up, call complete_retrieval as the only terminal "
     "action."
 )
+
+
+class CloseoutAttemptsExhausted(RuntimeError):
+    """The coordinator provider failed on every directed closeout attempt."""
+
+
+def is_operational_provider_stop(exc: Exception) -> bool:
+    """Classify retryable provider/transport stops without swallowing code bugs."""
+    status_code = getattr(exc, "status_code", None)
+    if not isinstance(status_code, int) or isinstance(status_code, bool):
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and not isinstance(status_code, bool):
+        return status_code == 429 or status_code >= 500
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    module = type(exc).__module__.split(".", 1)[0]
+    name = type(exc).__name__.lower()
+    if module in {
+        "httpcore",
+        "httpx",
+        "langchain_openrouter",
+        "openai",
+        "openrouter",
+        "requests",
+    } and any(
+        marker in name
+        for marker in (
+            "connect",
+            "connection",
+            "network",
+            "noresponse",
+            "ratelimit",
+            "serviceunavailable",
+            "timeout",
+            "transport",
+        )
+    ):
+        return True
+    if isinstance(exc, RuntimeError):
+        detail = str(exc).lower()
+        return any(
+            marker in detail
+            for marker in (
+                "provider unavailable",
+                "provider timeout",
+                "rate limit",
+                "service unavailable",
+            )
+        )
+    return False
 
 
 class ResearchTaskEnvelope(BaseModel):
@@ -202,6 +253,8 @@ def _failure_reason(failure: BaseException | None) -> str:
     """
     if failure is None:
         return "no_bundle_returned"
+    if isinstance(failure, Exception) and is_operational_provider_stop(failure):
+        return "retrieval_unavailable"
     name = type(failure).__name__
     detail = str(failure)
     if name in {"RemotePyseriniThrottled", "RetrievalTransportError"} or (
@@ -211,6 +264,14 @@ def _failure_reason(failure: BaseException | None) -> str:
     if "StructuredOutput" in name or "Validation" in name:
         return "invalid_structured_output"
     return "researcher_error"
+
+
+def _is_recoverable_researcher_failure(failure: Exception) -> bool:
+    """Keep only expected outage/structured-output failures inside the graph."""
+    return _failure_reason(failure) in {
+        "retrieval_unavailable",
+        "invalid_structured_output",
+    }
 
 
 class _RoleToolFilterMiddleware(AgentMiddleware):
@@ -286,14 +347,13 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         self._budget_config = budget_config
         self._closure_lock = Lock()
         self._merge_turns_granted: set[int] = set()
-        self._synthesis_granted = False
-        # Separate from _synthesis_granted on purpose: bouncing a voluntary
-        # exit must not consume the end-of-budget synthesis reserve, which
-        # can still refresh drafts with evidence gathered afterwards.
-        self._exit_bounced = False
+        self._closeout_lock = Lock()
+        # Voluntary-exit bounces and end-of-budget synthesis are two entrances
+        # to the same closeout. They therefore share one two-attempt budget.
+        self._closeout_attempts = 0
 
     def wrap_model_call(self, request: ModelRequest, handler):
-        """Send one voluntary exit back for a closeout before letting it end.
+        """Give an unfinished closeout at most two directed provider calls.
 
         A coordinator that replies with no tool call ends the run, and nothing
         guarded that path: two live runs finished with every need holding
@@ -302,36 +362,144 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         the documented contract for this middleware hook, and this middleware
         is innermost, so the discarded reply is invisible to everything else.
 
-        Exactly once per run. A gate that can fire repeatedly livelocks, and
-        the loop continues afterwards, so the model may research further and a
-        later exit passes untouched.
+        Voluntary-exit bounces and budget-directed synthesis share the same
+        two attempts. A tool-calling response returns immediately; the live
+        predicate decides on the next graph turn whether that update succeeded.
         """
         filtered = self._filter_tools(request)
+        if self._is_directed_closeout(filtered):
+            return self._invoke_closeout(filtered, handler)
         response = handler(filtered)
         bounced = self._closeout_bounce(filtered, response)
         if bounced is None:
             return response
-        response = handler(bounced)
-        if self._budget is not None and not _has_tool_calls(response):
-            self._budget.note_closeout_refused()
-        return response
+        return self._invoke_closeout(bounced, handler)
 
     async def awrap_model_call(self, request: ModelRequest, handler):
         filtered = self._filter_tools(request)
+        if self._is_directed_closeout(filtered):
+            return await self._ainvoke_closeout(filtered, handler)
         response = await handler(filtered)
         bounced = self._closeout_bounce(filtered, response)
         if bounced is None:
             return response
-        response = await handler(bounced)
-        if self._budget is not None and not _has_tool_calls(response):
-            self._budget.note_closeout_refused()
+        return await self._ainvoke_closeout(bounced, handler)
+
+    def _invoke_closeout(self, request: ModelRequest, handler: Callable) -> Any:
+        """Run one claimed closeout attempt and its sole allowed retry."""
+        try:
+            response = handler(request)
+        except Exception as exc:
+            retry = self._retry_after_closeout_failure(request, exc)
+        else:
+            retry = self._retry_after_invalid_closeout(request, response)
+            if retry is None:
+                return response
+        try:
+            response = handler(retry)
+        except Exception as exc:
+            self._raise_failed_closeout(exc)
+        if not _has_tool_calls(response):
+            self._note_closeout_refused()
         return response
+
+    async def _ainvoke_closeout(
+        self, request: ModelRequest, handler: Callable
+    ) -> Any:
+        """Async equivalent of _invoke_closeout."""
+        try:
+            response = await handler(request)
+        except Exception as exc:
+            retry = self._retry_after_closeout_failure(request, exc)
+        else:
+            retry = self._retry_after_invalid_closeout(request, response)
+            if retry is None:
+                return response
+        try:
+            response = await handler(retry)
+        except Exception as exc:
+            self._raise_failed_closeout(exc)
+        if not _has_tool_calls(response):
+            self._note_closeout_refused()
+        return response
+
+    def _retry_after_closeout_failure(
+        self, request: ModelRequest, exc: Exception
+    ) -> ModelRequest:
+        if not is_operational_provider_stop(exc):
+            raise exc
+        retry = self._closeout_retry(request)
+        if retry is None:
+            self._raise_failed_closeout(exc)
+        return retry
+
+    def _retry_after_invalid_closeout(
+        self, request: ModelRequest, response: object
+    ) -> ModelRequest | None:
+        if _has_tool_calls(response):
+            return None
+        retry = self._closeout_retry(request)
+        if retry is None:
+            self._note_closeout_refused()
+        return retry
+
+    def _raise_failed_closeout(self, exc: Exception) -> NoReturn:
+        if not is_operational_provider_stop(exc):
+            raise exc
+        self._note_closeout_refused()
+        raise CloseoutAttemptsExhausted(
+            "directed closeout provider attempts exhausted"
+        ) from exc
+
+    def _is_directed_closeout(self, request: ModelRequest) -> bool:
+        """Recognize only requests constructed from the closeout directive."""
+        message = request.system_message
+        content = getattr(message, "content", None)
+        return (
+            request.tool_choice == "update_retrieval_state"
+            and isinstance(content, str)
+            and _CLOSEOUT_DIRECTIVE in content
+        )
+
+    def _note_closeout_refused(self) -> None:
+        if self._budget is not None:
+            self._budget.note_closeout_refused()
+
+    def _claim_closeout_attempt(self) -> int | None:
+        """Claim one of the two closeout attempts shared by every entrance."""
+        with self._closeout_lock:
+            if self._closeout_attempts >= 2:
+                return None
+            self._closeout_attempts += 1
+            return self._closeout_attempts
+
+    def _closeout_retry(self, request: ModelRequest) -> ModelRequest | None:
+        attempt = self._claim_closeout_attempt()
+        if attempt is None:
+            return None
+        return self._directed(
+            request,
+            ["update_retrieval_state"],
+            "update_retrieval_state",
+            self._closeout_instruction(attempt),
+        )
+
+    @staticmethod
+    def _closeout_instruction(attempt: int) -> str:
+        if attempt == 1:
+            return _CLOSEOUT_DIRECTIVE
+        return (
+            _CLOSEOUT_DIRECTIVE
+            + " The first closeout attempt failed or was not accepted: needs "
+            "that hold grounded evidence still have no recorded selection. "
+            "Record it now with valid nugget ids; this is the final attempt."
+        )
 
     def _closeout_bounce(
         self, filtered: ModelRequest, response: object
     ) -> ModelRequest | None:
         """Decide whether this reply is an unaccounted exit worth bouncing."""
-        if self._exit_bounced or self._closeout_pending is None:
+        if self._closeout_pending is None:
             return None
         # Only the free phase. Every directed branch sets tool_choice and the
         # terminal branch empties the tool list; a silent reply on either is
@@ -345,14 +513,16 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
                 return None
         except Exception:
             return None
-        self._exit_bounced = True
+        attempt = self._claim_closeout_attempt()
+        if attempt is None:
+            return None
         if self._budget is not None:
             self._budget.note_exit_bounced()
         return self._directed(
             filtered,
             ["update_retrieval_state"],
             "update_retrieval_state",
-            _CLOSEOUT_DIRECTIVE
+            self._closeout_instruction(attempt)
             + " You replied without calling a tool while needs that hold "
             "grounded evidence still have no recorded selection. Record that "
             "closeout now; the run continues afterwards.",
@@ -398,13 +568,13 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
                 return self._directed(filtered, *self._closure_directive(pending_round))
             if stop_code is None and not research_turns_spent:
                 return filtered
-            if not self._synthesis_granted:
-                self._synthesis_granted = True
+            synthesis = self._synthesis_directive()
+            if synthesis is not None:
                 return self._directed(
                     filtered,
                     ["update_retrieval_state"],
                     "update_retrieval_state",
-                    _CLOSEOUT_DIRECTIVE,
+                    synthesis,
                 )
         return self._directed(
             filtered,
@@ -412,6 +582,30 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
             None,
             "Return the grounded partial result immediately. Do not call more tools.",
         )
+
+    def _synthesis_directive(self) -> str | None:
+        """Claim one shared closeout attempt, or None once both are spent.
+
+        The first attempt is unconditional. Later attempts are spent only while
+        needs holding grounded evidence still have no recorded selection, so a
+        closeout that landed is never asked for twice. The configured reserve
+        determines when synthesis starts; the shared closeout bound stays two.
+        """
+        if self._closeout_attempts and not self._closeout_still_pending():
+            return None
+        attempt = self._claim_closeout_attempt()
+        if attempt is None:
+            return None
+        return self._closeout_instruction(attempt)
+
+    def _closeout_still_pending(self) -> bool:
+        """Whether grounded needs remain unselected; unknown counts as settled."""
+        if self._closeout_pending is None:
+            return False
+        try:
+            return bool(self._closeout_pending())
+        except Exception:
+            return False
 
     def _closure_directive(self, round_index: int) -> tuple[list[str], str, str]:
         """Grant one merge turn per open round, then compel its explicit close."""
@@ -856,6 +1050,10 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                         try:
                             result = handler(request)
                         except Exception as exc:
+                            if not _is_recoverable_researcher_failure(exc):
+                                raise
+                            if _failure_reason(exc) == "retrieval_unavailable":
+                                self._budget.note_retrieval_unavailable()
                             self._record_dispatch_outcome(
                                 dispatch_span,
                                 code="RESEARCH_TASK_FAILED",
@@ -917,6 +1115,10 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                         try:
                             result = await handler(request)
                         except Exception as exc:
+                            if not _is_recoverable_researcher_failure(exc):
+                                raise
+                            if _failure_reason(exc) == "retrieval_unavailable":
+                                self._budget.note_retrieval_unavailable()
                             self._record_dispatch_outcome(
                                 dispatch_span,
                                 code="RESEARCH_TASK_FAILED",

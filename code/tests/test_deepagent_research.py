@@ -5,6 +5,8 @@ import json
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 
+import httpx
+import openai
 import pytest
 from deepagents.middleware.subagents import TaskToolSchema
 from langchain.agents import create_agent
@@ -53,6 +55,12 @@ ALL_TOOLS = (
     "grep",
     "execute",
     "write_todos",
+)
+
+_NoResponseError = type(
+    "NoResponseError",
+    (Exception,),
+    {"__module__": "langchain_openrouter"},
 )
 
 
@@ -462,11 +470,14 @@ def test_failed_researcher_returns_an_empty_bundle_naming_the_cause() -> None:
     assert "still uncovered" in payload["retry_guidance"]
 
 
-def test_failure_reason_survives_an_exception_with_no_message() -> None:
+def test_structured_output_failure_reason_survives_an_exception_with_no_message() -> None:
     middleware = ResearchTaskBudgetMiddleware(ResearchBudget(ResearchBudgetConfig()))
 
+    class StructuredOutputFailure(ValueError):
+        pass
+
     def explode(_request: ToolCallRequest) -> ToolMessage:
-        raise ValueError()
+        raise StructuredOutputFailure()
 
     payload = json.loads(
         middleware.wrap_tool_call(
@@ -474,7 +485,7 @@ def test_failure_reason_survives_an_exception_with_no_message() -> None:
         ).content
     )
 
-    assert payload["failure_reason"] == "researcher_error"
+    assert payload["failure_reason"] == "invalid_structured_output"
 
 
 @pytest.mark.parametrize("subagent_type", ["general-purpose", None])
@@ -721,7 +732,7 @@ def test_async_task_middleware_allows_focused_work_after_soft_deadline() -> None
 
 
 @pytest.mark.parametrize("is_async", [False, True])
-def test_task_middleware_converts_ordinary_handler_failure_and_releases_slot(
+def test_task_middleware_records_transient_provider_failure_and_releases_slot(
     is_async: bool,
 ) -> None:
     budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1))
@@ -731,13 +742,13 @@ def test_task_middleware_converts_ordinary_handler_failure_and_releases_slot(
     if is_async:
 
         async def async_handler(_request: ToolCallRequest) -> ToolMessage:
-            raise RuntimeError("private provider detail")
+            raise RuntimeError("provider unavailable: private provider detail")
 
         result = asyncio.run(middleware.awrap_tool_call(request, async_handler))
     else:
 
         def sync_handler(_request: ToolCallRequest) -> ToolMessage:
-            raise RuntimeError("private provider detail")
+            raise RuntimeError("provider unavailable: private provider detail")
 
         result = middleware.wrap_tool_call(request, sync_handler)
 
@@ -755,6 +766,7 @@ def test_task_middleware_converts_ordinary_handler_failure_and_releases_slot(
         "unresolved_gaps",
     }
     assert payload["code"] == "RESEARCH_TASK_FAILED"
+    assert payload["failure_reason"] == "retrieval_unavailable"
     assert payload["must_stop"] is False
     assert payload["research_task_id"] == "R1-N1"
     assert payload["budget_snapshot"]["active_researchers"] == 1
@@ -764,6 +776,7 @@ def test_task_middleware_converts_ordinary_handler_failure_and_releases_slot(
     assert current_research_task() is None
     assert budget.snapshot().active_researchers == 0
     assert budget.snapshot().completed_researchers == 1
+    assert budget.retrieval_unavailable() is True
 
     sibling = middleware.wrap_tool_call(
         task_request(
@@ -777,6 +790,60 @@ def test_task_middleware_converts_ordinary_handler_failure_and_releases_slot(
     assert isinstance(sibling, ToolMessage)
     assert sibling.status == "success"
     assert str(sibling.content).startswith("bundle")
+
+
+@pytest.mark.parametrize(
+    "failure_factory",
+    (
+        lambda: httpx.ConnectError(
+            "connection failed",
+            request=httpx.Request("POST", "https://provider.invalid/v1/chat"),
+        ),
+        lambda: _NoResponseError("provider returned no response"),
+    ),
+    ids=("httpx-connect", "openrouter-no-response"),
+)
+def test_task_middleware_records_transport_failure_as_retrieval_unavailable(
+    failure_factory: Callable[[], Exception],
+) -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    middleware = ResearchTaskBudgetMiddleware(budget)
+
+    message = middleware.wrap_tool_call(
+        task_request(description=task_description()),
+        lambda _request: (_ for _ in ()).throw(failure_factory()),
+    )
+
+    payload = json.loads(message.content)
+    assert payload["failure_reason"] == "retrieval_unavailable"
+    assert budget.retrieval_unavailable() is True
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_task_middleware_does_not_swallow_programming_failure(is_async: bool) -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1))
+    middleware = ResearchTaskBudgetMiddleware(budget)
+    request = task_request(description=task_description())
+
+    if is_async:
+
+        async def async_handler(_request: ToolCallRequest) -> ToolMessage:
+            raise ValueError("programming conflict")
+
+        with pytest.raises(ValueError, match="programming conflict"):
+            asyncio.run(middleware.awrap_tool_call(request, async_handler))
+    else:
+
+        def sync_handler(_request: ToolCallRequest) -> ToolMessage:
+            raise ValueError("programming conflict")
+
+        with pytest.raises(ValueError, match="programming conflict"):
+            middleware.wrap_tool_call(request, sync_handler)
+
+    assert current_research_task() is None
+    assert budget.snapshot().active_researchers == 0
+    assert budget.snapshot().completed_researchers == 1
+    assert budget.retrieval_unavailable() is False
 
 
 def test_task_middleware_does_not_catch_base_exception() -> None:
@@ -1117,10 +1184,16 @@ def test_a_voluntary_exit_is_bounced_once_into_a_forced_closeout() -> None:
 
     seen = _silent_turn(middleware)
 
-    assert len(seen) == 2, "the silent exit was not sent back"
+    assert len(seen) == 3, "the silent exit and invalid closeout were not retried"
     assert seen[0]["choice"] is None
-    assert seen[1]["tools"] == ["update_retrieval_state"]
-    assert seen[1]["choice"] == "update_retrieval_state"
+    assert [turn["tools"] for turn in seen[1:]] == [
+        ["update_retrieval_state"],
+        ["update_retrieval_state"],
+    ]
+    assert [turn["choice"] for turn in seen[1:]] == [
+        "update_retrieval_state",
+        "update_retrieval_state",
+    ]
     assert "draft_nugget_ids" in seen[1]["system"]
     assert budget.exit_bounced() is True
     assert budget.closeout_refused() is True
@@ -1129,7 +1202,7 @@ def test_a_voluntary_exit_is_bounced_once_into_a_forced_closeout() -> None:
 def test_the_bounce_fires_at_most_once_so_it_cannot_livelock() -> None:
     budget, middleware = _bounce_middleware(lambda: True)
 
-    assert len(_silent_turn(middleware)) == 2
+    assert len(_silent_turn(middleware)) == 3
     assert len(_silent_turn(middleware)) == 1
 
 
@@ -1192,19 +1265,330 @@ def test_the_bounce_is_disabled_without_a_predicate() -> None:
     assert len(_silent_turn(middleware)) == 1
 
 
-def test_the_bounce_does_not_consume_the_synthesis_reserve() -> None:
-    """Separate flags: end-of-budget synthesis must still get its turn."""
+def test_the_bounce_and_synthesis_share_two_closeout_attempts() -> None:
     config = ResearchBudgetConfig(max_main_models=10, synthesis_reserve_turns=2)
     budget = ResearchBudget(config)
     middleware = MainToolFilterMiddleware(budget, config, closeout_pending=lambda: True)
 
-    assert len(_silent_turn(middleware, run_count=0)) == 2
+    assert len(_silent_turn(middleware, run_count=0)) == 3
 
     late = _silent_turn(
         middleware,
         run_count=config.max_main_models - 1 - config.synthesis_reserve_turns,
     )
-    assert late[0]["choice"] == "update_retrieval_state"
+    assert late[0]["tools"] == []
+    assert late[0]["choice"] is None
+
+
+def _synthesis_middleware(pending, *, config=None):
+    """Middleware whose next turns land in the end-of-budget synthesis window."""
+    config = config or ResearchBudgetConfig(max_main_models=10, synthesis_reserve_turns=2)
+    budget = ResearchBudget(config)
+    middleware = MainToolFilterMiddleware(budget, config, closeout_pending=pending)
+    first_synthesis_turn = config.max_main_models - 1 - config.synthesis_reserve_turns
+    return config, middleware, first_synthesis_turn
+
+
+def test_an_invalid_closeout_gets_one_second_directed_synthesis_retry() -> None:
+    """One live run wrote an unusable closeout and the run ended with no selection."""
+    config, middleware, first_turn = _synthesis_middleware(lambda: True)
+
+    seen = _silent_turn(middleware, run_count=first_turn)
+
+    assert [turn["tools"] for turn in seen] == [
+        ["update_retrieval_state"],
+        ["update_retrieval_state"],
+    ], (
+        "a closeout that left grounded needs unselected must get a second turn"
+    )
+    assert seen[1]["choice"] == "update_retrieval_state"
+    assert "still have no recorded selection" in str(seen[1]["system"]), (
+        "the retry must tell the coordinator its first write-up did not land"
+    )
+
+
+def test_a_directed_closeout_provider_failure_gets_one_retry() -> None:
+    config, middleware, first_turn = _synthesis_middleware(lambda: True)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": first_turn},
+    )
+    seen: list[ModelRequest] = []
+
+    def handler(filtered: ModelRequest) -> ModelResponse:
+        seen.append(filtered)
+        if len(seen) == 1:
+            raise RuntimeError("provider unavailable")
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "update_retrieval_state",
+                            "args": {"delta": {}},
+                            "id": "closeout-2",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    response = middleware.wrap_model_call(request, handler)
+
+    assert len(seen) == 2
+    assert [turn.tool_choice for turn in seen] == [
+        "update_retrieval_state",
+        "update_retrieval_state",
+    ]
+    assert response.result[0].tool_calls[0]["name"] == "update_retrieval_state"
+
+
+@pytest.mark.parametrize(
+    "failure_factory",
+    (
+        lambda: httpx.ConnectError(
+            "connection failed",
+            request=httpx.Request("POST", "https://provider.invalid/v1/chat"),
+        ),
+        lambda: _NoResponseError("provider returned no response"),
+    ),
+    ids=("httpx-connect", "openrouter-no-response"),
+)
+def test_a_directed_closeout_transport_failure_gets_one_retry(
+    failure_factory: Callable[[], Exception],
+) -> None:
+    _config, middleware, first_turn = _synthesis_middleware(lambda: True)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": first_turn},
+    )
+    calls = 0
+
+    def handler(_filtered: ModelRequest) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise failure_factory()
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "update_retrieval_state",
+                            "args": {"delta": {}},
+                            "id": "closeout-2",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    response = middleware.wrap_model_call(request, handler)
+
+    assert calls == 2
+    assert response.result[0].tool_calls[0]["name"] == "update_retrieval_state"
+
+
+@pytest.mark.parametrize("status_code", [429, 503])
+def test_a_directed_closeout_transient_http_failure_gets_one_retry(
+    status_code: int,
+) -> None:
+    _config, middleware, first_turn = _synthesis_middleware(lambda: True)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": first_turn},
+    )
+    provider_request = httpx.Request("POST", "https://provider.invalid/v1/chat")
+    failure = httpx.HTTPStatusError(
+        "transient provider status",
+        request=provider_request,
+        response=httpx.Response(status_code, request=provider_request),
+    )
+    calls = 0
+
+    def handler(_filtered: ModelRequest) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise failure
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "update_retrieval_state",
+                            "args": {"delta": {}},
+                            "id": "closeout-2",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    response = middleware.wrap_model_call(request, handler)
+
+    assert calls == 2
+    assert response.result[0].tool_calls[0]["name"] == "update_retrieval_state"
+
+
+@pytest.mark.parametrize(
+    "failure_factory",
+    [
+        lambda: httpx.HTTPStatusError(
+            "bad request",
+            request=httpx.Request("POST", "https://provider.invalid/v1/chat"),
+            response=httpx.Response(
+                400,
+                request=httpx.Request("POST", "https://provider.invalid/v1/chat"),
+            ),
+        ),
+        lambda: openai.AuthenticationError(
+            "authentication failed",
+            response=httpx.Response(
+                401,
+                request=httpx.Request("POST", "https://provider.invalid/v1/chat"),
+            ),
+            body={},
+        ),
+        lambda: openai.PermissionDeniedError(
+            "permission denied",
+            response=httpx.Response(
+                403,
+                request=httpx.Request("POST", "https://provider.invalid/v1/chat"),
+            ),
+            body={},
+        ),
+    ],
+    ids=("http-400", "authentication", "permission"),
+)
+def test_a_directed_closeout_permanent_provider_failure_is_not_retried(
+    failure_factory: Callable[[], Exception],
+) -> None:
+    _config, middleware, first_turn = _synthesis_middleware(lambda: True)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": first_turn},
+    )
+    failure = failure_factory()
+    calls = 0
+
+    def handler(_filtered: ModelRequest) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    with pytest.raises(type(failure)) as caught:
+        middleware.wrap_model_call(request, handler)
+
+    assert caught.value is failure
+    assert calls == 1
+
+
+def test_a_directed_closeout_programming_failure_is_not_retried() -> None:
+    config, middleware, first_turn = _synthesis_middleware(lambda: True)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": first_turn},
+    )
+    calls = 0
+
+    def handler(_filtered: ModelRequest) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        raise ValueError("programming conflict")
+
+    with pytest.raises(ValueError, match="programming conflict"):
+        middleware.wrap_model_call(request, handler)
+
+    assert calls == 1
+
+
+def test_a_valid_closeout_gets_no_redundant_synthesis_retry() -> None:
+    pending = {"value": True}
+    config, middleware, first_turn = _synthesis_middleware(lambda: pending["value"])
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": first_turn},
+    )
+    calls = 0
+
+    def handler(_filtered: ModelRequest) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "update_retrieval_state",
+                            "args": {"delta": {}},
+                            "id": "closeout-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    middleware.wrap_model_call(request, handler)
+    pending["value"] = False
+    second = observe_turn(middleware, run_model_call_count=first_turn + 1)
+
+    assert calls == 1
+    assert second["tools"] == [], "a recorded closeout must not be asked for again"
+    assert "Return the grounded partial result" in str(second["system"])
+
+
+def test_a_still_invalid_closeout_cannot_get_a_third_synthesis_attempt() -> None:
+    config, middleware, first_turn = _synthesis_middleware(lambda: True)
+
+    assert len(_silent_turn(middleware, run_count=first_turn)) == 2
+    # Still below the model ceiling, so only the shared attempt bound can stop this.
+    third = observe_turn(middleware, run_model_call_count=first_turn + 1)
+
+    assert third["tools"] == [], "two synthesis attempts is the whole reserve"
+    assert third["tool_choice"] is None
+
+
+def test_the_closeout_attempt_bound_never_exceeds_two() -> None:
+    config, middleware, first_turn = _synthesis_middleware(
+        lambda: True,
+        config=ResearchBudgetConfig(max_main_models=10, synthesis_reserve_turns=3),
+    )
+
+    first = _silent_turn(middleware, run_count=first_turn)
+    after = observe_turn(middleware, run_model_call_count=first_turn + 1)
+
+    assert [turn["tools"] for turn in first] == [
+        ["update_retrieval_state"],
+        ["update_retrieval_state"],
+    ]
+    assert after["tools"] == []
 
 
 def test_real_langgraph_loop_terminates_after_explicit_completion() -> None:
@@ -1295,11 +1679,13 @@ def test_real_langgraph_loop_keeps_an_incomplete_completion_in_the_loop() -> Non
 
 def test_real_langgraph_silent_exit_is_redirected_by_the_closeout_guard() -> None:
     calls: list[str] = []
+    pending = {"value": True}
 
     @tool
     def update_retrieval_state() -> str:
         """Record the forced closeout write-up."""
         calls.append("update")
+        pending["value"] = False
         return "{\"ok\":true}"
 
     model = ToolAwareFakeMessagesListChatModel(
@@ -1323,7 +1709,7 @@ def test_real_langgraph_silent_exit_is_redirected_by_the_closeout_guard() -> Non
         model=model,
         tools=[update_retrieval_state],
         middleware=[
-            MainToolFilterMiddleware(closeout_pending=lambda: True),
+            MainToolFilterMiddleware(closeout_pending=lambda: pending["value"]),
         ],
     )
 
