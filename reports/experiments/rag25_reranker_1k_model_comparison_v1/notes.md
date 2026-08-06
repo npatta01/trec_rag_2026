@@ -24,6 +24,14 @@ observed operating point in this post-hoc depth sweep is therefore a shallow
 winner. This experiment does not establish that a GTE-first/Mixedbread-second
 cascade would work; that remains a follow-up.
 
+> **Read this comparison with caution:** the qrels do not cover every document
+> in the 1,000-document candidate pools. Unjudged documents are treated as
+> nonrelevant by this evaluator, so the reported nDCG/precision values are
+> pool-based observations, not definitive judgments of model quality. In
+> particular, the depth-1,000 decline is partly entangled with judgment
+> coverage; use the depth-100 result as a hypothesis to validate, not as a
+> settled winner.
+
 ## Effectiveness by candidate depth
 
 Candidate depth means the first `N` documents in the same BM25 pool are scored
