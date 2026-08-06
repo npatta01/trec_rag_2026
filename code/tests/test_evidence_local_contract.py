@@ -7,6 +7,7 @@ import pytest
 
 import trec_rag.evidence_local as evidence_local
 from trec_rag.evidence_local import (
+    LocalCacheAccounting,
     MINILM_MODEL,
     MINILM_REVISION,
     MIXEDBREAD_MODEL,
@@ -186,3 +187,57 @@ def test_minilm_resolves_device_and_computes_pinned_offline_cosine(monkeypatch) 
     })]
     assert matrix[0] == pytest.approx((1.0, 0.8))
     assert matrix[1] == pytest.approx((0.8, 1.0))
+
+
+def test_minilm_similarity_cache_replays_without_loading_model(tmp_path) -> None:
+    """Catches a warm portable matrix cache loading the local embedding model."""
+    class Model:
+        def encode(self, texts, **_kwargs):
+            assert tuple(texts) == ("first", "second")
+            return ((1.0, 0.0), (0.0, 1.0))
+
+    online = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: Model(),
+        device="cpu",
+        batch_size=1,
+        cache_root=tmp_path / "cache",
+    )
+    first = online.cosine_matrix(("first", "second"))
+
+    offline = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: pytest.fail("cache hit must not load model"),
+        device="cpu",
+        batch_size=7,
+        cache_root=tmp_path / "cache",
+        cache_only=True,
+    )
+    second = offline.cosine_matrix(("first", "second"))
+
+    assert second == pytest.approx(first)
+    assert online.accounting == LocalCacheAccounting(
+        cache_hits=0, cache_misses=1, model_batches=2
+    )
+    assert offline.accounting == LocalCacheAccounting(
+        cache_hits=1, cache_misses=0, model_batches=0
+    )
+
+
+def test_minilm_cache_only_miss_is_side_effect_free_and_model_lazy(tmp_path) -> None:
+    """Catches a missing offline matrix creating cache state or loading a model."""
+    from trec_rag.similarity_cache import SimilarityCacheMiss
+
+    root = tmp_path / "absent"
+    similarity = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: pytest.fail("offline miss must not load model"),
+        device="cpu",
+        cache_root=root,
+        cache_only=True,
+    )
+
+    with pytest.raises(SimilarityCacheMiss, match="similarity cache miss"):
+        similarity.cosine_matrix(("first", "second"))
+
+    assert similarity.accounting == LocalCacheAccounting(
+        cache_hits=0, cache_misses=1, model_batches=0
+    )
+    assert not root.exists()
