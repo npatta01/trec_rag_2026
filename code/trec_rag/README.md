@@ -836,21 +836,27 @@ general-purpose subagent. `write_todos` is intentionally not installed: the
 need/facet/nugget state and immutable result are the retrieval workflow's
 auditable state, not a general task tracker.
 
-### Fixed researcher budget
+### Default SDK researcher budget
 
-The following invocation-local limits are fixed defaults. Pass a
-`ResearchBudgetConfig` to the constructor or `from_env` only for a deliberate
-POC experiment; they are not environment variables.
+The following invocation-local defaults match the canonical agentic competition
+budget in `configs/rag26_competition_agentic_retrieval_v1.yaml`. The strict
+competition config is the authoritative run contract; it does not accept
+elapsed-time deadline fields. Pass a different `ResearchBudgetConfig` to the
+SDK only for a deliberate test or POC experiment. These limits are not
+environment variables.
 
 | Limit | Default |
 | --- | ---: |
-| Researcher invocations / concurrent researchers | 10 / 3 |
+| Researcher invocations / concurrent researchers | 20 / 3 |
 | Combined researcher search + snippet attempts | 100 |
 | Tool calls / searches / snippets per researcher | 20 / 8 / 16 |
-| Model calls, researcher / main coordinator | 30 / 40 |
-| Soft warning / hard admission deadline | 30 min / 60 min |
+| Model calls, researcher / main coordinator | 30 / 80 |
+| Soft warning / hard admission deadline | none / none |
 | Consecutive no-yield calls per researcher | 3 |
 | Consecutive no-progress rounds | 2 |
+
+Elapsed time remains observable. It cannot warn, stop, or refuse competition
+work unless a non-competition caller explicitly supplies finite SDK deadlines.
 
 The original narrative is never rewritten for its deterministic first search.
 Each researcher receives compact task JSON containing its task ID, round,
