@@ -1509,6 +1509,55 @@ Validate only the ROCm/PyTorch environment:
 .venv/bin/python-rocm -m trec_rag.rocm_probe
 ```
 
+### RAG25 top-1,000 reranker comparison
+
+The two experiment configs below score the same original-narrative BM25
+top-1,000 candidate pools with separate pinned cross-encoder identities:
+
+- `configs/rag25_reranker_1k_mixedbread_v1.yaml`
+- `configs/rag25_reranker_1k_gte_modernbert_v1.yaml`
+
+First populate the model-independent shared retrieval cache:
+
+```bash
+.venv/bin/python -m trec_rag.pipeline \
+  --config configs/rag25_bm25_full_query_v1.yaml
+```
+
+Then materialize raw-logit window scores. Use `--limit-per-topic 100` as the
+full-population gate before changing it to `1000` for the complete run:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.rerank_score_cache \
+  --config configs/rag25_reranker_1k_mixedbread_v1.yaml \
+  --score-kind window --limit-per-topic 100 --device cuda \
+  --sleep-between-topics 0
+
+.venv/bin/python-rocm -m trec_rag.rerank_score_cache \
+  --config configs/rag25_reranker_1k_gte_modernbert_v1.yaml \
+  --score-kind window --limit-per-topic 100 --device cuda \
+  --sleep-between-topics 0
+```
+
+Retrieval responses are intentionally shared across linked worktrees because
+their keys contain the exact index and query request identity. Reranker scores
+cannot collide: their content-cache contexts include the model name, exact
+revision, backend version, score representation, dtype, input policy, maximum
+length, score kind, and chunking policy.
+
+After both complete artifacts exist, evaluate maximum passage score at several
+candidate depths:
+
+```bash
+.venv/bin/python -m trec_rag.reranker_depth_evaluation \
+  --system mixedbread=cache/reranker/artifacts/rag25_reranker_1k_comparison_v1/mixedbread_window_scores.jsonl \
+  --system gte=cache/reranker/artifacts/rag25_reranker_1k_comparison_v1/gte_modernbert_window_scores.jsonl \
+  --qrels trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels \
+  --expected-depth 1000 \
+  --depth 50 --depth 100 --depth 200 --depth 500 --depth 1000 \
+  --output-dir outputs/rag25-reranker-1k-comparison-v1
+```
+
 ### Modal compute and local promotion
 
 `code/tools/modal_rerank_score_cache.py` runs the same score builder on an
