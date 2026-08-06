@@ -241,3 +241,45 @@ def test_minilm_cache_only_miss_is_side_effect_free_and_model_lazy(tmp_path) -> 
         cache_hits=0, cache_misses=1, model_batches=0
     )
     assert not root.exists()
+
+
+def test_minilm_loader_failure_does_not_report_phantom_model_batches() -> None:
+    """Catches counting planned batches before a model exists."""
+    similarity = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("loader failed")
+        ),
+        device="cpu",
+        batch_size=1,
+    )
+
+    with pytest.raises(RuntimeError, match="loader failed"):
+        similarity.cosine_matrix(("first", "second"))
+
+    assert similarity.accounting == LocalCacheAccounting(
+        cache_hits=0,
+        cache_misses=1,
+        model_batches=0,
+    )
+
+
+def test_minilm_encode_failure_does_not_report_phantom_model_batches() -> None:
+    """Catches counting planned batches that never return from encode."""
+    class Model:
+        def encode(self, _texts, **_kwargs):
+            raise RuntimeError("encode failed")
+
+    similarity = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: Model(),
+        device="cpu",
+        batch_size=1,
+    )
+
+    with pytest.raises(RuntimeError, match="encode failed"):
+        similarity.cosine_matrix(("first", "second"))
+
+    assert similarity.accounting == LocalCacheAccounting(
+        cache_hits=0,
+        cache_misses=1,
+        model_batches=0,
+    )

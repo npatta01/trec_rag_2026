@@ -305,6 +305,7 @@ class LocalMiniLMSimilarity:
 
     @property
     def accounting(self) -> LocalCacheAccounting:
+        """Report effective batches only after the aggregate encode call returns."""
         return LocalCacheAccounting(
             cache_hits=self._cache_hits,
             cache_misses=self._cache_misses,
@@ -350,7 +351,6 @@ class LocalMiniLMSimilarity:
                 return np.asarray(cached, dtype=np.float64)
         else:
             self._cache_misses += 1
-        self._model_batches += math.ceil(len(rows) / self._batch_size)
         encoded = self._load().encode(
             rows,
             batch_size=self._batch_size,
@@ -358,6 +358,7 @@ class LocalMiniLMSimilarity:
             normalize_embeddings=True,
             show_progress_bar=False,
         )
+        self._model_batches += math.ceil(len(rows) / self._batch_size)
         try:
             vectors = np.asarray(encoded, dtype=np.float64)
         except (TypeError, ValueError, OverflowError) as exc:

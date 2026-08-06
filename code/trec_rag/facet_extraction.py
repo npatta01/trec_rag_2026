@@ -362,6 +362,10 @@ class OpenRouterDeepSeekFacetBackend:
         """Return exact calls made through the hosted transport boundary."""
         return self._transport_invocation_count
 
+    def planning_request_identity(self, topic: Topic) -> PlanningCacheIdentity:
+        """Bind cache publication to this backend's exact fixed request."""
+        return planning_cache_identity(topic)
+
     def extract(self, topic: Topic) -> object:
         if not isinstance(topic, Topic):
             raise TypeError("topic must be a Topic")
@@ -580,8 +584,6 @@ def extract_facets(
             if backend_factory is None:
                 raise TypeError("backend or backend_factory is required")
             backend = backend_factory()
-        if stats is not None:
-            stats["backend_calls"] = 1
         return _invoke_facet_backend(topic, backend, stats)
 
     cache = PlanningCache(planning_cache_root)
@@ -608,8 +610,7 @@ def extract_facets(
             backend = OpenRouterDeepSeekFacetBackend()
         else:
             backend = backend_factory()
-    if stats is not None:
-        stats["backend_calls"] = 1
+    _require_planning_request_identity(backend, topic, identity)
     result = _invoke_facet_backend(topic, backend, stats)
     if not result.used_fallback and result.plan is not None:
         cache.store(identity, _planning_payload(result.plan))
@@ -622,14 +623,38 @@ def _invoke_facet_backend(
     stats: dict[str, int] | None,
 ) -> FacetPlanningResult:
     before = _provider_invocation_count(backend)
+    if stats is not None:
+        stats["backend_calls"] += 1
     result = _extract_facets_uncached(topic, backend)
     after = _provider_invocation_count(backend)
-    if stats is not None:
-        if before is not None and after is not None and after >= before:
-            stats["provider_calls"] += after - before
-        else:
-            stats["provider_calls"] += 1
+    if (
+        stats is not None
+        and before is not None
+        and after is not None
+        and after >= before
+    ):
+        stats["provider_calls"] += after - before
     return result
+
+
+def _require_planning_request_identity(
+    backend: object,
+    topic: Topic,
+    expected: PlanningCacheIdentity,
+) -> None:
+    try:
+        identity_for = getattr(backend, "planning_request_identity", None)
+    except Exception as exc:
+        raise TypeError(
+            "cache-enabled planning backend must expose planning request identity"
+        ) from exc
+    if not callable(identity_for):
+        raise TypeError(
+            "cache-enabled planning backend must expose planning_request_identity(topic)"
+        )
+    actual = identity_for(topic)
+    if not isinstance(actual, PlanningCacheIdentity) or actual != expected:
+        raise ValueError("planning request identity does not match the cache key")
 
 
 def _provider_invocation_count(backend: object) -> int | None:

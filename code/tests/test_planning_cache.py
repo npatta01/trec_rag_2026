@@ -110,8 +110,17 @@ def test_cached_facet_planning_reuses_validated_plan_without_backend_constructio
     topic = Topic("topic-1", "Private title", "Exact organizer narrative.")
 
     class Backend:
+        def __init__(self) -> None:
+            self.transport_invocation_count = 0
+
+        def planning_request_identity(self, received):
+            from trec_rag.facet_extraction import planning_cache_identity
+
+            return planning_cache_identity(received)
+
         def extract(self, received):
             assert received == topic
+            self.transport_invocation_count += 1
             return _payload()
 
     online_stats: dict[str, int] = {}
@@ -195,3 +204,68 @@ def test_cached_facet_planning_revalidates_semantics_before_backend_construction
             cache_only=True,
             backend_factory=lambda: pytest.fail("invalid cache must not construct backend"),
         )
+
+
+def test_cached_facet_planning_rejects_mismatched_backend_identity_before_publish(
+    tmp_path,
+) -> None:
+    """Catches an injected backend result being stored under the pinned request key."""
+    from trec_rag.facet_extraction import extract_facets, planning_cache_identity
+    from trec_rag.topics import Topic
+
+    topic = Topic("topic-1", "Private title", "Exact organizer narrative.")
+    expected = planning_cache_identity(topic)
+    extracted: list[bool] = []
+
+    class Backend:
+        transport_invocation_count = 0
+
+        def planning_request_identity(self, _received):
+            return replace(expected, model="different-model")
+
+        def extract(self, _received):
+            extracted.append(True)
+            return _payload()
+
+    stats: dict[str, int] = {}
+    with pytest.raises(ValueError, match="planning request identity"):
+        extract_facets(
+            topic,
+            planning_cache_root=tmp_path / "cache",
+            backend_factory=Backend,
+            cache_stats=stats,
+        )
+
+    assert extracted == []
+    assert stats == {
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "backend_calls": 0,
+        "provider_calls": 0,
+    }
+    assert not (tmp_path / "cache").exists()
+
+
+def test_planner_pretransport_failure_has_backend_call_but_no_provider_call() -> None:
+    """Catches inventing a provider call for a backend without an exact counter."""
+    from trec_rag.facet_extraction import extract_facets
+    from trec_rag.topics import Topic
+
+    class Backend:
+        def extract(self, _topic):
+            raise RuntimeError("failed before transport")
+
+    stats: dict[str, int] = {}
+    result = extract_facets(
+        Topic("topic-1", "Private title", "Exact organizer narrative."),
+        Backend(),
+        cache_stats=stats,
+    )
+
+    assert result.used_fallback is True
+    assert stats == {
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "backend_calls": 1,
+        "provider_calls": 0,
+    }
