@@ -179,6 +179,7 @@ class PyseriniRemoteRetriever:
         corpus_epoch: str | None = None,
         continuation_ticket: str | None = None,
         offline: bool = False,
+        cache_only: bool = False,
     ) -> None:
         self.config = config
         self.cache_dir = Path(cache_dir)
@@ -220,8 +221,10 @@ class PyseriniRemoteRetriever:
             "PYSERINI_CONTINUATION_TICKET"
         )
         self.offline = offline
+        self.cache_only = cache_only
         self.cache_stats = RetrieverCacheStats()
         self.cache_hit_artifacts: list[dict[str, object]] = []
+        self.transport_calls = 0
 
     @property
     def client(self) -> RemotePyseriniClient:
@@ -476,6 +479,26 @@ class PyseriniRemoteRetriever:
     def retrieve(self, query: QueryVariant) -> list[RetrievedCandidate]:
         identity = self._transport_identity(query)
         derivation = self._derivation_identity()
+        if self.cache_only:
+            cached = self.retrieval_cache.lookup_complete(
+                identity,
+                derivation,
+                query.query_text,
+            )
+            if cached is None:
+                self.cache_stats.misses += 1
+                raise RetrievalCacheMiss(
+                    f"cache-only retrieval miss for request {identity.request_key}"
+                )
+            self.cache_stats.hits += 1
+            self.cache_hit_artifacts.append(
+                {
+                    "request_key": identity.request_key,
+                    "raw_sha256": cached.raw_sha256,
+                    "candidate_count": len(cached.hits),
+                }
+            )
+            return self._materialize(cached, query)
         if self.config.cache or self.offline:
             cached = self.retrieval_cache.lookup(
                 identity,
@@ -1162,6 +1185,7 @@ class PyseriniRemoteRetriever:
                             attempt_id,
                             owner,
                         ):
+                            self.transport_calls += 1
                             raw_result = client.search_raw(
                                 query.query_text,
                                 raw_sink=lambda raw: self._write_raw_attempt(
@@ -1234,6 +1258,7 @@ class PyseriniRemoteRetriever:
                         raise
             else:
                 with self._lease_heartbeat(progress_path, attempt_id, owner):
+                    self.transport_calls += 1
                     response = client.search(query.query_text)
                 raw_result = None
             with self._lease_heartbeat(progress_path, attempt_id, owner):
