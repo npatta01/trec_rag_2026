@@ -11,6 +11,7 @@ dependencies = [
     "requests==2.32.5",
     "requests-ratelimiter==0.7.0",
     "semantic-text-splitter",
+    "zstandard==0.25.0",
     "nuggetizer==0.0.5",
     "openinference-instrumentation-langchain==0.1.67",
     "openinference-semantic-conventions==0.1.30",

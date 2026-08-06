@@ -3559,6 +3559,7 @@ dependencies = [
     { name = "requests" },
     { name = "requests-ratelimiter" },
     { name = "semantic-text-splitter" },
+    { name = "zstandard" },
 ]
 
 [package.dev-dependencies]
@@ -3598,6 +3599,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "requests-ratelimiter", specifier = "==0.7.0" },
     { name = "semantic-text-splitter" },
+    { name = "zstandard", specifier = "==0.25.0" },
 ]
 
 [package.metadata.requires-dev]
