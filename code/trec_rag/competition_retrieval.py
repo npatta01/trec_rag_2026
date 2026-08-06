@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
+import ctypes
 from dataclasses import dataclass, replace
+import errno
 from hashlib import sha256
 import json
 import math
@@ -1160,7 +1162,8 @@ def _run_topic(
     config_sha256: str,
     expected_retriever_identity: Mapping[str, object],
     offline_cache_only: bool = False,
-    offline_source_cache_root: Path | None = None,
+    offline_source_document_store_root: Path | None = None,
+    offline_stage_document_store_root: Path | None = None,
 ) -> _TopicTaskOutcome:
     """Run one configured topic through the private checkpointed workflow."""
     if not isinstance(config, FacetPilotConfig):
@@ -1169,8 +1172,16 @@ def _run_topic(
         raise TypeError("dependencies must be _RuntimeDependencies")
     if not isinstance(offline_cache_only, bool):
         raise TypeError("offline_cache_only must be Boolean")
-    if offline_cache_only and offline_source_cache_root is None:
-        raise ValueError("offline cache replay requires its source cache root")
+    if offline_cache_only and (
+        offline_source_document_store_root is None
+        or offline_stage_document_store_root is None
+    ):
+        raise ValueError("offline cache replay requires source and stage document roots")
+    active_document_store_root = (
+        Path(offline_stage_document_store_root)
+        if offline_cache_only
+        else document_store_dir(config.root_dir)
+    )
     runtime_topic = _runtime_topic(topic)
     before_accounting = _runtime_cache_accounting(dependencies)
     planning_cache_stats: dict[str, int] = {}
@@ -1200,7 +1211,7 @@ def _run_topic(
         runtime_topic,
         retriever=dependencies.retriever,
         scorer=dependencies.document_scorer,
-        document_store_root=document_store_dir(config.root_dir),
+        document_store_root=active_document_store_root,
         retrieval_cache_dir=config.retrieval.cache_dir,
         retrieval_index=config.retrieval.index,
         corpus_epoch=config.retrieval.corpus_epoch,
@@ -1211,11 +1222,7 @@ def _run_topic(
         chunk_max_characters=config.passage.chunk_max_characters,
         chunk_overlap_characters=config.passage.chunk_overlap_characters,
         cache_only=offline_cache_only,
-        offline_source_document_store_root=(
-            Path(offline_source_cache_root) / "documents"
-            if offline_source_cache_root is not None
-            else None
-        ),
+        offline_source_document_store_root=offline_source_document_store_root,
     )
     if passage_search.identity != passage_identity:
         raise ValueError("constructed passage search identity differs from v2 config")
@@ -1247,7 +1254,7 @@ def _run_topic(
         retrieval_depth=config.retrieval.documents_per_query,
         rerank_depth=config.retrieval.documents_per_query,
         selection_k=INTERNAL_FIXED_SELECTION_K,
-        document_store_root=document_store_dir(config.root_dir),
+        document_store_root=active_document_store_root,
         expected_retriever_identity=expected_retriever_identity,
         expected_passage_identity=passage_identity,
     )
@@ -1259,13 +1266,14 @@ def _run_topic(
         dependencies=dependencies,
         offline_cache_only=offline_cache_only,
         cache_stats=canonical_cache_stats,
+        document_store_root=active_document_store_root,
     )
     topic_root = config.output_dir / runtime_topic.id
     with TopicRecords.open(
         topic_root / "records.sqlite3",
         topic_root / "canonical" / "records-manifest.json",
         runtime_topic.id,
-        DocumentStore(document_store_dir(config.root_dir)),
+        DocumentStore(active_document_store_root),
         validation_session=canonical.validation_session,
     ) as records:
         projection_receipt = build_topic_projection(
@@ -1728,9 +1736,15 @@ def _canonical_topic(
     dependencies: _RuntimeDependencies,
     offline_cache_only: bool = False,
     cache_stats: dict[str, int] | None = None,
+    document_store_root: Path | None = None,
 ) -> _CanonicalPhaseResult:
     """Run the local evidence tail and canonical stage for one topic."""
     root = config.output_dir / topic.id
+    active_document_store_root = (
+        document_store_dir(config.root_dir)
+        if document_store_root is None
+        else Path(document_store_root)
+    )
     handoff_root = root / "canonical" / "handoff"
     passage_results = tuple(
         audited.passage_result
@@ -1750,7 +1764,7 @@ def _canonical_topic(
         code_commit=dependencies.code_commit,
         official_topics_sha256=official_topics_sha256,
         passage_results=passage_results,
-        document_store_root=document_store_dir(config.root_dir),
+        document_store_root=active_document_store_root,
     )
     canonical_root = root / "canonical"
     selected_budget = config.nuggets.evidence_budget_per_subnarrative
@@ -1805,7 +1819,7 @@ def _canonical_topic(
         run_id=config.run_id,
         score_cache_root=config.passage.score_cache_dir,
         device=config.passage.device,
-        document_store_root=document_store_dir(config.root_dir),
+        document_store_root=active_document_store_root,
         scorer=dependencies.candidate_scorer,
         facets=(
             FacetRecord("original", topic.narrative, "initial"),
@@ -2688,11 +2702,11 @@ def _nonnegative_counter(value: object) -> int:
 
 def _accounting_values(value: object) -> dict[str, int]:
     if isinstance(value, Mapping):
-        source: object = value
         getter = value.get
     else:
-        source = value
-        getter = lambda name, default=0: getattr(source, name, default)
+        def getter(name: str, default: object = 0) -> object:
+            return getattr(value, name, default)
+
     return {
         "cache_hits": _nonnegative_counter(getter("cache_hits", getter("hits", 0))),
         "cache_misses": _nonnegative_counter(
@@ -2847,6 +2861,8 @@ def _validated_existing_topic_job_receipt(
     expected_config_sha256: str,
     expected_retriever_identity: Mapping[str, object],
     planning_backend: Any | None,
+    operation_mode: str = "online",
+    allow_missing_operation_receipt: bool = False,
 ) -> TopicJobReceipt | None:
     """Recover a projection-only crash into the run-bound dispatch protocol."""
     try:
@@ -2879,6 +2895,16 @@ def _validated_existing_topic_job_receipt(
     if len(validated) != 1 or validated[0] != projection:
         raise ValueError("topic projection validation returned a different receipt")
     status, stopping_reason = _topic_completion_for_dispatch(config, topic)
+    operation_path = config.output_dir / topic.id / "cache-operation-receipt.json"
+    if not operation_path.exists() and allow_missing_operation_receipt:
+        return None
+    _read_topic_cache_operation_receipt(
+        config=config,
+        topic=topic,
+        config_sha256=expected_config_sha256,
+        projection_manifest_sha256=projection.manifest_sha256,
+        mode=operation_mode,
+    )
     return TopicJobReceipt(
         topic_id=topic.id,
         projection_manifest_sha256=projection.manifest_sha256,
@@ -2932,6 +2958,8 @@ def _run_production_topic_job(job: TopicJob) -> TopicJobReceipt:
             expected_config_sha256=job.config_sha256,
             expected_retriever_identity=expected_retriever_identity,
             planning_backend=None,
+            operation_mode="online",
+            allow_missing_operation_receipt=True,
         )
         if recovered is not None:
             return recovered
@@ -2987,17 +3015,75 @@ def _run_production_topic_job(job: TopicJob) -> TopicJobReceipt:
     )
 
 
+def _rename_directory_noreplace(source: Path, destination: Path) -> None:
+    """Atomically rename a directory without replacing any destination entry."""
+    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("offline topic publication requires Linux renameat2")
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_noreplace = 1
+    result = renameat2(
+        at_fdcwd,
+        os.fsencode(source),
+        at_fdcwd,
+        os.fsencode(destination),
+        rename_noreplace,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise FileExistsError(error_number, os.strerror(error_number), destination)
+    raise OSError(error_number, os.strerror(error_number), destination)
+
+
+def _publish_directory_create_only(source: Path, destination: Path) -> None:
+    _rename_directory_noreplace(Path(source), Path(destination))
+    descriptor = os.open(
+        Path(destination).parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _run_offline_topic_staged(
     job: TopicJob,
     topic: Topic,
     config: FacetPilotConfig,
     identity: str,
     dependencies: _RuntimeDependencies,
-    **kwargs: Any,
+    *,
+    config_sha256: str,
+    expected_retriever_identity: Mapping[str, object],
 ) -> _TopicTaskOutcome:
     """Build an offline replay privately and publish its topic tree only on success."""
     if job.topic_root.exists():
-        raise ValueError("offline cache replay requires a fresh topic output namespace")
+        recovered = _validated_existing_topic_job_receipt(
+            config,
+            topic,
+            expected_config_sha256=config_sha256,
+            expected_retriever_identity=expected_retriever_identity,
+            planning_backend=dependencies.planning_backend,
+            operation_mode="offline-cache-only",
+            allow_missing_operation_receipt=False,
+        )
+        if recovered is None:
+            raise ValueError("offline published topic did not validate")
+        projection = read_topic_projection_receipt(config, topic)
+        if projection.manifest_sha256 != recovered.projection_manifest_sha256:
+            raise ValueError("offline projection differs from its validated receipt")
+        return _TopicTaskOutcome(topic.id, True, projection)
     stage_root = Path(
         tempfile.mkdtemp(prefix=f".offline-cache-{topic.id}-", dir=config.root_dir)
     )
@@ -3005,7 +3091,8 @@ def _run_offline_topic_staged(
         source_cache_root = repo_cache_root(config.root_dir)
         stage_cache_root = stage_root / "cache"
         stage_cache_root.mkdir()
-        (stage_cache_root / "documents").mkdir()
+        stage_document_store_root = stage_cache_root / "documents" / "v1"
+        stage_document_store_root.mkdir(parents=True)
         for name in (
             "canonical",
             "planning-cache-v1",
@@ -3026,15 +3113,19 @@ def _run_offline_topic_staged(
             identity,
             dependencies,
             offline_cache_only=True,
-            offline_source_cache_root=source_cache_root,
-            **kwargs,
+            offline_source_document_store_root=(
+                source_cache_root / "documents" / "v1"
+            ),
+            offline_stage_document_store_root=stage_document_store_root,
+            config_sha256=config_sha256,
+            expected_retriever_identity=expected_retriever_identity,
         )
         staged_topic_root = staged_config.output_dir / topic.id
         if not staged_topic_root.is_dir():
             raise RuntimeError("offline cache replay did not produce its topic tree")
         job.topic_root.parent.mkdir(parents=True, exist_ok=True)
         try:
-            os.rename(staged_topic_root, job.topic_root)
+            _publish_directory_create_only(staged_topic_root, job.topic_root)
         except FileExistsError as exc:
             raise ValueError(
                 "offline cache replay topic output appeared during publication"
@@ -3167,6 +3258,10 @@ def _run_official(
             expected_config_sha256=job.config_sha256,
             expected_retriever_identity=expected_retriever_identity,
             planning_backend=resume_planning_backend,
+            operation_mode=(
+                "offline-cache-only" if job.offline_cache_only else "online"
+            ),
+            allow_missing_operation_receipt=False,
         )
         if recovered != sealed:
             raise ValueError("topic dispatch receipt differs from validated projection")
@@ -3225,6 +3320,8 @@ def _run_official(
                     expected_config_sha256=job.config_sha256,
                     expected_retriever_identity=expected_retriever_identity,
                     planning_backend=dependencies.planning_backend,
+                    operation_mode="online",
+                    allow_missing_operation_receipt=True,
                 )
                 if recovered is not None:
                     return recovered

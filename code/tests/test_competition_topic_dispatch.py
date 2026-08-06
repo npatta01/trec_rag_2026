@@ -410,9 +410,11 @@ def test_real_production_worker_crosses_process_boundary_with_pinned_config(
     assert child_pids != {os.getpid()}
 
 
-def test_production_worker_promotes_a_projection_only_crash_without_rerunning_topic(
+@pytest.mark.parametrize("operation_exists", [True, False], ids=("sealed", "missing"))
+def test_production_worker_recovers_projection_only_after_operation_accounting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    operation_exists: bool,
 ) -> None:
     base = load_facet_pilot_config(V2_CONFIG)
     config = replace(
@@ -441,6 +443,28 @@ def test_production_worker_promotes_a_projection_only_crash_without_rerunning_to
             ("decomposition_producer_sha256", producer_sha256),
         ),
     )
+    if operation_exists:
+        competition_retrieval._publish_topic_cache_operation_receipt(
+            config=config,
+            topic=topic,
+            config_sha256=sha256(config_bytes).hexdigest(),
+            projection_manifest_sha256=projection.manifest_sha256,
+            mode="online",
+            phases={
+                phase: {"resumed": True}
+                for phase in ("planning", "retrieval", "scoring", "canonical")
+            },
+            stages={
+                stage: {
+                    "cache_hits": 0,
+                    "cache_misses": 0,
+                    "network_calls": 0,
+                    "provider_calls": 0,
+                    "model_batches": 0,
+                }
+                for stage in competition_retrieval.CACHE_OPERATION_STAGE_NAMES
+            },
+        )
 
     monkeypatch.setattr(
         competition_retrieval,
@@ -494,10 +518,53 @@ def test_production_worker_promotes_a_projection_only_crash_without_rerunning_to
         "_topic_completion_for_dispatch",
         lambda _config, _topic: ("complete", "coverage_sufficient"),
     )
+    runs: list[str] = []
+
+    def rerun_topic(*_args, **_kwargs):
+        runs.append(topic.id)
+        if not operation_exists:
+            competition_retrieval._publish_topic_cache_operation_receipt(
+                config=config,
+                topic=topic,
+                config_sha256=sha256(config_bytes).hexdigest(),
+                projection_manifest_sha256=projection.manifest_sha256,
+                mode="online",
+                phases={
+                    phase: {"resumed": True}
+                    for phase in ("planning", "retrieval", "scoring", "canonical")
+                },
+                stages={
+                    stage: {
+                        "cache_hits": 0,
+                        "cache_misses": 0,
+                        "network_calls": 0,
+                        "provider_calls": 0,
+                        "model_batches": 0,
+                    }
+                    for stage in competition_retrieval.CACHE_OPERATION_STAGE_NAMES
+                },
+            )
+        return SimpleNamespace(topic_id=topic.id, projection_receipt=projection)
+
     monkeypatch.setattr(
         competition_retrieval,
         "_run_topic",
-        lambda *_args, **_kwargs: pytest.fail("sealed projection was rerun"),
+        rerun_topic,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadPassageScorer",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadSentencePairScorer",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "LocalMiniLMSimilarity",
+        lambda *_args, **_kwargs: object(),
     )
     job = TopicJob(
         topic_id=topic.id,
@@ -516,6 +583,71 @@ def test_production_worker_promotes_a_projection_only_crash_without_rerunning_to
 
     assert receipt.projection_manifest_sha256 == projection.manifest_sha256
     assert read_topic_receipt(job) == receipt
+    assert runs == ([] if operation_exists else [topic.id])
+
+
+def test_parent_resume_refuses_dispatch_when_operation_receipt_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches the parent accepting a job seal that root aggregation cannot verify."""
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(base, root_dir=tmp_path)
+    topic = Topic("topic-a", "", "narrative")
+    config_sha256 = "a" * 64
+    producer_sha256 = "b" * 64
+    projection = SimpleNamespace(
+        topic_id=topic.id,
+        manifest_sha256="c" * 64,
+        source_seals=(
+            ("config_sha256", config_sha256),
+            ("decomposition_producer_sha256", producer_sha256),
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "read_topic_projection_receipt",
+        lambda *_args: projection,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_decomposition_producer_sha256",
+        lambda *_args, **_kwargs: producer_sha256,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "validate_retrieval_topic_checkpoints",
+        lambda *_args, **_kwargs: (projection,),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_topic_completion_for_dispatch",
+        lambda *_args: ("complete", "coverage_sufficient"),
+    )
+
+    with pytest.raises(ValueError, match="cache operation topic receipt is missing"):
+        competition_retrieval._validated_existing_topic_job_receipt(
+            config,
+            topic,
+            expected_config_sha256=config_sha256,
+            expected_retriever_identity={"type": "test"},
+            planning_backend=None,
+            operation_mode="online",
+            allow_missing_operation_receipt=False,
+        )
+
+    assert (
+        competition_retrieval._validated_existing_topic_job_receipt(
+            config,
+            topic,
+            expected_config_sha256=config_sha256,
+            expected_retriever_identity={"type": "test"},
+            planning_backend=None,
+            operation_mode="online",
+            allow_missing_operation_receipt=True,
+        )
+        is None
+    )
 
 
 def test_production_worker_refuses_projection_recovery_from_other_config_bytes(

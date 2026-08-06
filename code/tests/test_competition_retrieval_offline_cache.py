@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha256
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from trec_rag import competition_retrieval
-from trec_rag.document_store import DocumentStore
+from trec_rag.document_store import DocumentStore, DocumentStoreIntegrityError
 from trec_rag.facet_extraction import planning_cache_identity
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.planning_cache import PlanningCache
 from trec_rag.topics import Topic
-from trec_rag.topic_dispatch import TopicJob
+from trec_rag.topic_dispatch import TopicJob, TopicJobReceipt
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +49,41 @@ def _job(config, *, offline_cache_only: bool = True) -> TopicJob:
         config_sha256=sha256(config_bytes).hexdigest(),
         topic_root=(config.output_dir / "topic-a").resolve(),
         offline_cache_only=offline_cache_only,
+    )
+
+
+def _tree_snapshot(root: Path) -> tuple[tuple[str, str, bytes | None], ...]:
+    if not root.exists():
+        return ()
+    rows: list[tuple[str, str, bytes | None]] = []
+    for path in sorted(root.rglob("*")):
+        relative = str(path.relative_to(root))
+        if path.is_symlink():
+            rows.append((relative, "symlink", str(path.readlink()).encode()))
+        elif path.is_dir():
+            rows.append((relative, "directory", None))
+        else:
+            rows.append((relative, "file", path.read_bytes()))
+    return tuple(rows)
+
+
+def _fake_projection(topic: Topic, config) -> SimpleNamespace:
+    body = b"offline projection"
+    path = (
+        config.output_dir
+        / topic.id
+        / "canonical"
+        / "retrieval-projection-manifest.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    return SimpleNamespace(
+        topic_id=topic.id,
+        resumed=False,
+        projection_receipt=SimpleNamespace(
+            topic_id=topic.id,
+            manifest_sha256=sha256(body).hexdigest(),
+        ),
     )
 
 
@@ -401,6 +437,227 @@ def test_offline_document_admission_writes_only_to_the_private_stage(
     assert after == before
     assert store.read_text(receipt.content_sha256) == text
     assert DocumentStore(stage_root).read_text(receipt.content_sha256) == text
+
+
+@pytest.mark.parametrize("cache_hit", [True, False], ids=("hit", "miss"))
+def test_offline_stage_uses_versioned_source_cas_and_bypasses_cache_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_hit: bool,
+) -> None:
+    """Catches /documents vs /documents/v1 and env-rerouted staging writes."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    config = _config(checkout)
+    topic = Topic("topic-a", "", "cache replay narrative")
+    job = _job(config)
+    shared_cache = tmp_path / "merged-cache"
+    monkeypatch.setenv("TREC_RAG_CACHE_ROOT", str(shared_cache))
+    source_store = DocumentStore(shared_cache / "documents" / "v1")
+    source_text = "cached source document"
+    source_receipt = source_store.admit_text(source_text)
+    before = _tree_snapshot(shared_cache)
+
+    def fake_run_topic(topic_arg, staged_config, _identity, _dependencies, **kwargs):
+        assert kwargs["offline_source_document_store_root"] == (
+            shared_cache / "documents" / "v1"
+        )
+        stage_document_root = kwargs["offline_stage_document_store_root"]
+        assert stage_document_root == staged_config.root_dir / "cache" / "documents" / "v1"
+        assert not stage_document_root.is_relative_to(shared_cache)
+        store = competition_retrieval._OfflineStagingDocumentStore(
+            source_root=kwargs["offline_source_document_store_root"],
+            stage_root=stage_document_root,
+        )
+        if cache_hit:
+            store.admit_text(source_text, expected_sha256=source_receipt.content_sha256)
+            return _fake_projection(topic_arg, staged_config)
+        store.admit_text("uncached document")
+        raise AssertionError("an uncached document was admitted")
+
+    monkeypatch.setattr(competition_retrieval, "_run_topic", fake_run_topic)
+    dependencies = competition_retrieval._RuntimeDependencies(
+        code_commit="c" * 40,
+        document_scorer=None,
+        candidate_scorer=None,
+        similarity=None,
+        cache_ignore_checker=None,
+    )
+
+    if cache_hit:
+        outcome = competition_retrieval._run_offline_topic_staged(
+            job,
+            topic,
+            config,
+            "d" * 64,
+            dependencies,
+            config_sha256=job.config_sha256,
+            expected_retriever_identity={"type": "test"},
+        )
+        assert outcome.topic_id == topic.id
+        assert job.topic_root.is_dir()
+    else:
+        with pytest.raises(DocumentStoreIntegrityError, match="document"):
+            competition_retrieval._run_offline_topic_staged(
+                job,
+                topic,
+                config,
+                "d" * 64,
+                dependencies,
+                config_sha256=job.config_sha256,
+                expected_retriever_identity={"type": "test"},
+            )
+        assert not job.topic_root.exists()
+
+    assert _tree_snapshot(shared_cache) == before
+
+
+def test_offline_stage_recovers_a_fully_validated_published_topic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches a crash after create-only topic publication but before dispatch."""
+    config = _config(tmp_path)
+    topic = Topic("topic-a", "", "cache replay narrative")
+    job = _job(config)
+    job.topic_root.mkdir(parents=True)
+    projection = SimpleNamespace(topic_id=topic.id, manifest_sha256="e" * 64)
+    validated = TopicJobReceipt(
+        topic_id=topic.id,
+        projection_manifest_sha256=projection.manifest_sha256,
+        status="complete",
+        stopping_reason="coverage_sufficient",
+    )
+    captured: dict[str, object] = {}
+
+    def validate(*_args, **kwargs):
+        captured.update(kwargs)
+        return validated
+
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_validated_existing_topic_job_receipt",
+        validate,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "read_topic_projection_receipt",
+        lambda *_args: projection,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_run_topic",
+        lambda *_args, **_kwargs: pytest.fail("validated topic was rerun"),
+    )
+
+    outcome = competition_retrieval._run_offline_topic_staged(
+        job,
+        topic,
+        config,
+        "d" * 64,
+        competition_retrieval._RuntimeDependencies(
+            code_commit="c" * 40,
+            document_scorer=None,
+            candidate_scorer=None,
+            similarity=None,
+            cache_ignore_checker=None,
+        ),
+        config_sha256=job.config_sha256,
+        expected_retriever_identity={"type": "test"},
+    )
+
+    assert outcome.resumed is True
+    assert outcome.projection_receipt is projection
+    assert captured["operation_mode"] == "offline-cache-only"
+    assert captured["allow_missing_operation_receipt"] is False
+
+
+def test_offline_stage_refuses_a_partial_existing_topic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    topic = Topic("topic-a", "", "cache replay narrative")
+    job = _job(config)
+    job.topic_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_validated_existing_topic_job_receipt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt topic")),
+    )
+
+    with pytest.raises(ValueError, match="corrupt topic"):
+        competition_retrieval._run_offline_topic_staged(
+            job,
+            topic,
+            config,
+            "d" * 64,
+            competition_retrieval._RuntimeDependencies(
+                code_commit="c" * 40,
+                document_scorer=None,
+                candidate_scorer=None,
+                similarity=None,
+                cache_ignore_checker=None,
+            ),
+            config_sha256=job.config_sha256,
+            expected_retriever_identity={"type": "test"},
+        )
+
+
+def test_offline_publication_preserves_a_concurrent_empty_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches os.rename replacing a destination directory created by a racer."""
+    config = _config(tmp_path)
+    topic = Topic("topic-a", "", "cache replay narrative")
+    job = _job(config)
+
+    def fake_run_topic(topic_arg, staged_config, *_args, **_kwargs):
+        outcome = _fake_projection(topic_arg, staged_config)
+        job.topic_root.mkdir(parents=True)
+        return outcome
+
+    monkeypatch.setattr(competition_retrieval, "_run_topic", fake_run_topic)
+
+    with pytest.raises(ValueError, match="appeared during publication"):
+        competition_retrieval._run_offline_topic_staged(
+            job,
+            topic,
+            config,
+            "d" * 64,
+            competition_retrieval._RuntimeDependencies(
+                code_commit="c" * 40,
+                document_scorer=None,
+                candidate_scorer=None,
+                similarity=None,
+                cache_ignore_checker=None,
+            ),
+            config_sha256=job.config_sha256,
+            expected_retriever_identity={"type": "test"},
+        )
+
+    assert job.topic_root.is_dir()
+    assert tuple(job.topic_root.iterdir()) == ()
+
+
+def test_offline_create_only_publication_fsyncs_the_destination_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "sealed.txt").write_text("sealed", encoding="utf-8")
+    destination = tmp_path / "published" / "topic-a"
+    destination.parent.mkdir()
+    fsynced: list[int] = []
+    monkeypatch.setattr(os, "fsync", fsynced.append)
+
+    competition_retrieval._publish_directory_create_only(source, destination)
+
+    assert not source.exists()
+    assert (destination / "sealed.txt").read_text(encoding="utf-8") == "sealed"
+    assert len(fsynced) == 1
 
 
 def test_operation_accounting_rejects_a_dependency_without_exact_counters() -> None:
