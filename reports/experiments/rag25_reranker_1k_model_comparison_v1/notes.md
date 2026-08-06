@@ -143,17 +143,15 @@ validate it on held-out/test topics with explicit judgment-coverage reporting.
 A GTE-first/Mixedbread-second cascade should be treated as a new experiment
 rather than inferred from these rankings.
 
-## Source and reproducibility pointers
+## Source and evidence pointers
 
-- Tracked evaluator and ranking writer: `code/trec_rag/reranker_depth_evaluation.py`
-- Experiment plan and verification receipts:
-  `docs/superpowers/plans/2026-08-06-rag25-reranker-1k.md`
+- Tracked aggregate record: `manifest.yaml`, `config.yaml`, `metrics.json`,
+  and `topic_metrics.csv` in this directory.
 - Private dstack run: `rag25-reranker-1k-a40-20260806-v2`
 - Private result prefix:
   `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/rag25-reranker-1k-a40-20260806-v2`
-- The exact local aggregate output is under the ignored
-  `outputs/rag25_reranker_1k_comparison_v1/full_a40/` directory in the
-  experiment worktree.
+- Raw score/ranking outputs remain in the private ignored experiment workspace;
+  they are not part of this report PR.
 
 Tables are used instead of charts because this is a two-model, five-depth
 audit comparison where exact values, denominators, and caveats are more useful
