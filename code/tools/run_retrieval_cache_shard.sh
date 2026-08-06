@@ -86,15 +86,20 @@ for command_name in bash git python3 uv; do
 done
 
 hf_mode=${HF_CLI_MODE:-direct}
+venv_hf=""
 hf_cli() {
   case "$hf_mode" in
-    direct) hf "$@" ;;
+    direct) "$venv_hf" "$@" ;;
     uvx) uvx hf "$@" ;;
     *) die "HF_CLI_MODE must be direct or uvx" ;;
   esac
 }
 case "$hf_mode" in
-  direct) command -v hf >/dev/null 2>&1 || die "HF_CLI_MODE=direct but hf is unavailable" ;;
+  direct)
+    if $preflight; then
+      command -v hf >/dev/null 2>&1 || die "HF_CLI_MODE=direct but hf is unavailable"
+    fi
+    ;;
   uvx) command -v uvx >/dev/null 2>&1 || die "HF_CLI_MODE=uvx but uvx is unavailable" ;;
   *) die "HF_CLI_MODE must be direct or uvx" ;;
 esac
@@ -107,7 +112,42 @@ cache_root="$work_root/cache"
 bundle_dir="$work_root/bundle"
 remote_prefix="hf://buckets/${BUCKET_ID}/${BUCKET_REPO_PREFIX}/experiments/${run_id}/${topic_id}"
 
+validate_configured_topic() {
+  local interpreter=$1
+  "$interpreter" - "$source_config" "$topic_id" <<'PY'
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+from trec_rag.facet_pilot_config import load_facet_pilot_config, select_configured_topics
+
+source, topic_id = sys.argv[1:]
+loaded = load_facet_pilot_config(Path(source))
+try:
+    selected = select_configured_topics(loaded, topic_ids=(topic_id,))
+except ValueError as exc:
+    raise SystemExit(
+        f"topic {topic_id!r} is absent from the configured topics: {exc}"
+    ) from exc
+if len(selected) != 1 or selected[0].id != topic_id:
+    raise SystemExit(f"topic {topic_id!r} is absent from the configured topics")
+PY
+}
+
 if $preflight; then
+  untracked_files=()
+  while IFS= read -r -d '' untracked_file; do
+    untracked_files+=("$untracked_file")
+  done < <(git ls-files --others --exclude-standard -z)
+  if ((${#untracked_files[@]})); then
+    printf 'ERROR: non-ignored untracked files would enter dstack repo transport:\n' >&2
+    printf '  %s\n' "${untracked_files[@]}" >&2
+    exit 2
+  fi
+  preflight_python="$REPO_ROOT/.venv/bin/python"
+  [[ -x $preflight_python ]] || die "project .venv is required for configured-topic preflight"
+  validate_configured_topic "$preflight_python"
   printf '%s\n' \
     "preflight=ok" \
     "topic_id=$topic_id" \
@@ -155,11 +195,72 @@ uv sync \
   --python "$image_python"
 venv_python="$REPO_ROOT/.venv/bin/python"
 [[ -x $venv_python ]] || die "uv did not create the expected project interpreter"
+venv_hf="$REPO_ROOT/.venv/bin/hf"
+if [[ $hf_mode == direct ]]; then
+  [[ -x $venv_hf ]] || die "the locked project environment did not install hf"
+fi
 
 mkdir -p "$work_root" "$cache_root" "$(dirname "$shard_config")"
 chmod 700 "$work_root" "$cache_root"
 export TREC_RAG_CACHE_ROOT="$cache_root"
 export HF_HOME="$work_root/huggingface"
+
+# Validate the exact topic and generate its isolated one-worker config before
+# downloading models or making any hosted request.
+validate_configured_topic "$venv_python"
+"$venv_python" - "$source_config" "$shard_config" "$experiment_id" "$topic_id" <<'PY'
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+import yaml
+
+from trec_rag.facet_pilot_config import load_facet_pilot_config, select_configured_topics
+
+source, destination, experiment_id, topic_id = sys.argv[1:]
+value = yaml.safe_load(Path(source).read_text(encoding="utf-8"))
+if not isinstance(value, dict) or not isinstance(value.get("experiment"), dict):
+    raise SystemExit("source config has no experiment mapping")
+value["experiment"]["id"] = experiment_id
+execution = value.setdefault("execution", {})
+if not isinstance(execution, dict):
+    raise SystemExit("source config execution value is not a mapping")
+execution["topic_workers"] = 1
+target = Path(destination)
+target.write_text(
+    yaml.safe_dump(value, sort_keys=False, allow_unicode=True),
+    encoding="utf-8",
+)
+loaded = load_facet_pilot_config(target)
+selected = select_configured_topics(loaded, topic_ids=(topic_id,))
+if len(selected) != 1 or selected[0].id != topic_id:
+    raise SystemExit("selected topic is absent from the canonical source")
+PY
+
+# Authenticate storage and reserve an immutable empty prefix before model
+# downloads, CUDA work, or hosted retrieval. All later HF calls use this exact
+# locked CLI executable.
+hf_cli buckets --help >/dev/null
+hf_cli auth whoami --format json >/dev/null
+bucket_info="$work_root/bucket-info.json"
+hf_cli buckets info "$BUCKET_ID" --format json >"$bucket_info"
+"$venv_python" - "$bucket_info" <<'PY'
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+
+value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(value, dict) or value.get("private") is not True:
+    raise SystemExit("the configured Hugging Face Bucket is not private")
+PY
+
+remote_listing_before="$work_root/remote-listing-before.json"
+hf_cli buckets list "$remote_prefix" --recursive --format json >"$remote_listing_before"
+"$venv_python" -m trec_rag.hf_bucket_listing \
+  require-empty "$remote_listing_before"
 
 # Fetch both exact public snapshots before paid retrieval. The second lookup is
 # offline and exercises the same local cache contract used by production.
@@ -205,38 +306,6 @@ if not torch.cuda.is_available():
 print(f"torch.cuda.device_name={torch.cuda.get_device_name(0)}")
 PY
 
-# Give each remote topic a fresh output namespace while preserving every
-# retrieval/model/cache identity from the canonical non-agentic config.
-"$venv_python" - "$source_config" "$shard_config" "$experiment_id" "$topic_id" <<'PY'
-from __future__ import annotations
-
-from pathlib import Path
-import sys
-
-import yaml
-
-from trec_rag.facet_pilot_config import load_facet_pilot_config, select_configured_topics
-
-source, destination, experiment_id, topic_id = sys.argv[1:]
-value = yaml.safe_load(Path(source).read_text(encoding="utf-8"))
-if not isinstance(value, dict) or not isinstance(value.get("experiment"), dict):
-    raise SystemExit("source config has no experiment mapping")
-value["experiment"]["id"] = experiment_id
-execution = value.setdefault("execution", {})
-if not isinstance(execution, dict):
-    raise SystemExit("source config execution value is not a mapping")
-execution["topic_workers"] = 1
-target = Path(destination)
-target.write_text(
-    yaml.safe_dump(value, sort_keys=False, allow_unicode=True),
-    encoding="utf-8",
-)
-loaded = load_facet_pilot_config(target)
-selected = select_configured_topics(loaded, topic_ids=(topic_id,))
-if len(selected) != 1 or selected[0].id != topic_id:
-    raise SystemExit("selected topic is absent from the canonical source")
-PY
-
 "$venv_python" -m trec_rag.competition_retrieval \
   "$shard_config" \
   --topic "$topic_id"
@@ -252,25 +321,12 @@ bundle_completion="$bundle_dir/bundle-complete.json"
 [[ -f $bundle_archive && ! -L $bundle_archive ]] || die "bundle archive is missing"
 [[ -f $bundle_completion && ! -L $bundle_completion ]] || die "bundle completion is missing"
 
-hf_cli auth whoami --format json >/dev/null
-bucket_info="$work_root/bucket-info.json"
-hf_cli buckets info "$BUCKET_ID" --format json >"$bucket_info"
-"$venv_python" - "$bucket_info" <<'PY'
-from __future__ import annotations
-
-import json
-from pathlib import Path
-import sys
-
-value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if not isinstance(value, dict) or value.get("private") is not True:
-    raise SystemExit("the configured Hugging Face Bucket is not private")
-PY
-
-remote_listing_before="$work_root/remote-listing-before.json"
-hf_cli buckets list "$remote_prefix" --recursive --format json >"$remote_listing_before"
+# The early check is not a reservation. Recheck immediately before the first
+# immutable upload so a concurrent writer cannot be silently ignored.
+remote_listing_preupload="$work_root/remote-listing-preupload.json"
+hf_cli buckets list "$remote_prefix" --recursive --format json >"$remote_listing_preupload"
 "$venv_python" -m trec_rag.hf_bucket_listing \
-  require-empty "$remote_listing_before"
+  require-empty "$remote_listing_preupload"
 
 upload_number=0
 upload_one() {

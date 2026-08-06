@@ -172,6 +172,66 @@ def test_wrapper_preflight_is_credential_free_and_reports_exact_nested_argv() ->
     )
 
 
+def test_wrapper_preflight_rejects_a_topic_absent_from_the_config() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            str(WRAPPER_PATH),
+            "--preflight",
+            "--topic",
+            "rag2026-999999",
+            "--run-id",
+            "nonagentic-two-topic-20260806",
+            "--config",
+            "configs/rag26_competition_retrieval_v2.yaml",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "absent from the configured topics" in result.stderr
+
+
+def test_wrapper_preflight_rejects_nonignored_untracked_transport_files() -> None:
+    candidate = REPO_ROOT / ".dstack-preflight-untracked-test"
+    candidate.write_text("transport audit fixture\n", encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(WRAPPER_PATH),
+                "--preflight",
+                "--topic",
+                "rag2026-0",
+                "--run-id",
+                "nonagentic-two-topic-20260806",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        candidate.unlink(missing_ok=True)
+
+    assert result.returncode != 0
+    assert "non-ignored untracked files" in result.stderr
+    assert candidate.name in result.stderr
+
+
+def test_dstack_transport_ignores_both_supported_secret_env_files() -> None:
+    for name in (".env", ".env.local"):
+        result = subprocess.run(
+            ["git", "check-ignore", "--quiet", name],
+            cwd=REPO_ROOT,
+            check=False,
+        )
+        assert result.returncode == 0, f"{name} can enter dstack repo transport"
+
+
 def test_wrapper_rejects_unsafe_identity_before_any_live_work() -> None:
     result = subprocess.run(
         [
@@ -212,6 +272,14 @@ def test_wrapper_encodes_model_upload_and_remote_verification_contract() -> None
     assert "git commit" in script
     assert "git status --porcelain=v1 --untracked-files=all" in script
     assert "TREC_RAG_CACHE_ROOT" in script
+
+    uv_sync = script.index("uv sync")
+    locked_hf = script.index('venv_hf="$REPO_ROOT/.venv/bin/hf"')
+    hf_auth = script.index("hf_cli auth whoami")
+    prefix_guard = script.index("require-empty")
+    model_download = script.index("snapshot_download")
+    retrieval_run = script.index('"$venv_python" -m trec_rag.competition_retrieval')
+    assert uv_sync < locked_hf < hf_auth < prefix_guard < model_download < retrieval_run
 
     archive_upload = script.index('upload_one "$bundle_archive"')
     completion_upload = script.index('upload_one "$bundle_completion"')
