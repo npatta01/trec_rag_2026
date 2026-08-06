@@ -41,6 +41,7 @@ nDCG@10 and candidate-recall results are not a single leaderboard.
 | 2026-07-10 | [`bm25_mixedbread_config_comparison_v1`](reports/experiments/bm25_mixedbread_config_comparison_v1/) | Retained reranking evidence | The reproducible raw-logit run improved nDCG@10 from `0.4140` to `0.5310`, with 18 improved and 4 degraded topics; it is a reranking result, not a first-stage recall replacement. |
 | 2026-07-10 | [`bm25_mixedbread_topic_regression_postmortem_v1`](reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/) | Learned | Topics 224 and 515 remained model-signal limited; warm-cache replay required zero new model calls. |
 | 2026-07-16 | [`all_topic_tethered_facet_validation_v1`](reports/experiments/all_topic_tethered_facet_validation_v1/) | Retained RRF; Rejected DUAL promotion | Primary DUAL won 20 topics and gained 347 known-relevant documents in aggregate at 1,000, but lost 7 on Topic 31 and 3 on Topic 300. Every alternative failed the zero-loss guard. |
+| 2026-08-06 | [`rag25_reranker_1k_model_comparison_v1`](reports/experiments/rag25_reranker_1k_model_comparison_v1/) | **Use with caution; pending PR and held-out validation** | Qrels do not cover every candidate document, and unjudged rows are treated as nonrelevant. The full-depth values are therefore pool-based observations, not definitive model-quality claims: Mixedbread/GTE nDCG@10 was `0.4066`/`0.3373` versus BM25 `0.4140`. At depth 100 the observed difference was not distinguishable from zero (`0.5251` vs `0.5320`). |
 
 ## Tried, learned, rejected, retained
 

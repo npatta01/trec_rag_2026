@@ -1,0 +1,26 @@
+experiment_id: rag25_reranker_1k_model_comparison_v1
+retrieval:
+  config: configs/rag25_bm25_full_query_1k_20260806.yaml
+  query_source: original_narrative
+  index: climbmix-400b
+  hits: 1000
+scoring:
+  backend: sentence-transformers-cross-encoder
+  score_kind: window
+  score_representation: raw_logits
+  inference_dtype: bfloat16
+  chunk_max_characters: 3500
+  chunk_overlap_characters: 350
+  max_length: 1024
+  systems:
+    mixedbread:
+      model: mixedbread-ai/mxbai-rerank-base-v2
+      revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+    gte_modernbert:
+      model: Alibaba-NLP/gte-reranker-modernbert-base
+      revision: f7481e6055501a30fb19d090657df9ec1f79ab2c
+evaluation:
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  candidate_depths: [50, 100, 200, 500, 1000]
+  bootstrap_samples: 10000
+  bootstrap_seed: 20260806
