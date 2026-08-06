@@ -204,3 +204,30 @@ def test_cache_only_retriever_miss_counts_and_fails_before_external_boundary(
     assert retriever.cache_stats.hits == 0
     assert retriever.cache_stats.misses == 1
     assert not cache_root.exists()
+
+
+@pytest.mark.parametrize("ticket_source", ["argument", "environment"])
+def test_cache_only_retriever_rejects_continuation_ticket_before_filesystem_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ticket_source: str
+) -> None:
+    cache_root = tmp_path / "cache"
+    monkeypatch.delenv("INDEX_URL", raising=False)
+
+    def fail_file_lock(*_args, **_kwargs):
+        raise AssertionError("cache-only construction accessed continuation state")
+
+    monkeypatch.setattr("trec_rag.retrievers.FileLock", fail_file_lock)
+    kwargs: dict[str, str] = {}
+    if ticket_source == "argument":
+        kwargs["continuation_ticket"] = "continuation-token"
+    else:
+        monkeypatch.setenv("PYSERINI_CONTINUATION_TICKET", "continuation-token")
+
+    with pytest.raises(
+        ValueError, match="cache-only retrieval cannot use a continuation ticket"
+    ):
+        PyseriniRemoteRetriever(
+            _retriever_config(), cache_dir=cache_root, cache_only=True, **kwargs
+        )
+
+    assert not cache_root.exists()

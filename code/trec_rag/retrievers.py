@@ -181,6 +181,13 @@ class PyseriniRemoteRetriever:
         offline: bool = False,
         cache_only: bool = False,
     ) -> None:
+        resolved_continuation_ticket = continuation_ticket or os.environ.get(
+            "PYSERINI_CONTINUATION_TICKET"
+        )
+        if cache_only and resolved_continuation_ticket:
+            raise ValueError(
+                "cache-only retrieval cannot use a continuation ticket"
+            )
         self.config = config
         self.cache_dir = Path(cache_dir)
         self._client = client
@@ -217,9 +224,7 @@ class PyseriniRemoteRetriever:
         self._checkpoint_derivation = DerivationIdentity.from_normalizer(
             self.retrieval_cache.normalizer
         )
-        self.continuation_ticket = continuation_ticket or os.environ.get(
-            "PYSERINI_CONTINUATION_TICKET"
-        )
+        self.continuation_ticket = resolved_continuation_ticket
         self.offline = offline
         self.cache_only = cache_only
         self.cache_stats = RetrieverCacheStats()
