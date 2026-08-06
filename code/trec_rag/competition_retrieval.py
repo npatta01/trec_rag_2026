@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from types import MappingProxyType
@@ -3045,16 +3046,99 @@ def _rename_directory_noreplace(source: Path, destination: Path) -> None:
     raise OSError(error_number, os.strerror(error_number), destination)
 
 
-def _publish_directory_create_only(source: Path, destination: Path) -> None:
-    _rename_directory_noreplace(Path(source), Path(destination))
-    descriptor = os.open(
-        Path(destination).parent,
-        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-    )
+def _fsync_path(path: Path, *, directory: bool) -> None:
+    flags = os.O_RDONLY
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    else:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _fsync_topic_tree(path: Path) -> None:
+    """Fsync one regular staged topic tree from leaves to its root."""
+    root = Path(path)
+    metadata = root.lstat()
+    if stat.S_ISLNK(metadata.st_mode):
+        raise ValueError(f"offline topic tree contains a symbolic link: {root}")
+    if stat.S_ISREG(metadata.st_mode):
+        _fsync_path(root, directory=False)
+        return
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError(f"offline topic tree contains a non-regular entry: {root}")
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
+        _fsync_topic_tree(child)
+    _fsync_path(root, directory=True)
+
+
+def _durable_mkdirs(path: Path) -> None:
+    """Create an absolute directory path and fsync each new parent entry."""
+    destination = Path(path)
+    if not destination.is_absolute():
+        raise ValueError("durable directory creation requires an absolute path")
+    current = Path(destination.anchor)
+    for part in destination.parts[1:]:
+        child = current / part
+        try:
+            metadata = child.lstat()
+        except FileNotFoundError:
+            try:
+                child.mkdir(mode=0o700)
+            except FileExistsError:
+                metadata = child.lstat()
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(
+                    metadata.st_mode
+                ):
+                    raise ValueError(
+                        f"offline publication directory is unsafe: {child}"
+                    )
+            _fsync_path(current, directory=True)
+        else:
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError(
+                    f"offline publication directory is unsafe: {child}"
+                )
+        current = child
+
+
+def _publish_directory_create_only(source: Path, destination: Path) -> None:
+    source = Path(source)
+    destination = Path(destination)
+    _fsync_topic_tree(source)
+    _durable_mkdirs(destination.parent)
+    _rename_directory_noreplace(source, destination)
+    _fsync_path(source.parent, directory=True)
+    _fsync_path(destination.parent, directory=True)
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    try:
+        Path(left).relative_to(right)
+        return True
+    except ValueError:
+        pass
+    try:
+        Path(right).relative_to(left)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_offline_path_isolation(
+    config: FacetPilotConfig,
+    source_cache_root: Path,
+) -> None:
+    cache_root = Path(source_cache_root).resolve(strict=False)
+    output_root = config.output_dir.resolve(strict=False)
+    stage_parent = config.root_dir.resolve(strict=False)
+    if _paths_overlap(cache_root, output_root) or stage_parent.is_relative_to(
+        cache_root
+    ):
+        raise ValueError("offline cache and output roots overlap")
 
 
 def _run_offline_topic_staged(
@@ -3068,6 +3152,8 @@ def _run_offline_topic_staged(
     expected_retriever_identity: Mapping[str, object],
 ) -> _TopicTaskOutcome:
     """Build an offline replay privately and publish its topic tree only on success."""
+    source_cache_root = repo_cache_root(config.root_dir)
+    _validate_offline_path_isolation(config, source_cache_root)
     if job.topic_root.exists():
         recovered = _validated_existing_topic_job_receipt(
             config,
@@ -3088,7 +3174,6 @@ def _run_offline_topic_staged(
         tempfile.mkdtemp(prefix=f".offline-cache-{topic.id}-", dir=config.root_dir)
     )
     try:
-        source_cache_root = repo_cache_root(config.root_dir)
         stage_cache_root = stage_root / "cache"
         stage_cache_root.mkdir()
         stage_document_store_root = stage_cache_root / "documents" / "v1"
@@ -3123,7 +3208,6 @@ def _run_offline_topic_staged(
         staged_topic_root = staged_config.output_dir / topic.id
         if not staged_topic_root.is_dir():
             raise RuntimeError("offline cache replay did not produce its topic tree")
-        job.topic_root.parent.mkdir(parents=True, exist_ok=True)
         try:
             _publish_directory_create_only(staged_topic_root, job.topic_root)
         except FileExistsError as exc:

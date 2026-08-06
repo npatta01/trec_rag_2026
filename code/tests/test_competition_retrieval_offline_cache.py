@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import errno
 from hashlib import sha256
 import os
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -13,8 +15,16 @@ from trec_rag.document_store import DocumentStore, DocumentStoreIntegrityError
 from trec_rag.facet_extraction import planning_cache_identity
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.planning_cache import PlanningCache
+from trec_rag.retrieval_export import build_topic_projection
 from trec_rag.topics import Topic
 from trec_rag.topic_dispatch import TopicJob, TopicJobReceipt
+from trec_rag.topic_records import TopicRecords
+
+from test_retrieval_export import (
+    _FixtureRetriever,
+    _config_and_topics,
+    _write_sealed_topic,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -85,6 +95,19 @@ def _fake_projection(topic: Topic, config) -> SimpleNamespace:
             manifest_sha256=sha256(body).hexdigest(),
         ),
     )
+
+
+def _zero_operation_stages() -> dict[str, dict[str, int]]:
+    return {
+        stage: {
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "network_calls": 0,
+            "provider_calls": 0,
+            "model_batches": 0,
+        }
+        for stage in competition_retrieval.CACHE_OPERATION_STAGE_NAMES
+    }
 
 
 def test_cli_forwards_offline_cache_only(monkeypatch, capsys) -> None:
@@ -512,6 +535,45 @@ def test_offline_stage_uses_versioned_source_cas_and_bypasses_cache_override(
     assert _tree_snapshot(shared_cache) == before
 
 
+def test_offline_stage_rejects_a_shared_cache_that_contains_its_output_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches an absolute cache override turning private staging into cache state."""
+    config = _config(tmp_path)
+    topic = Topic("topic-a", "", "cache replay narrative")
+    job = _job(config)
+    monkeypatch.setenv("TREC_RAG_CACHE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_run_topic",
+        lambda topic_arg, staged_config, *_args, **_kwargs: _fake_projection(
+            topic_arg,
+            staged_config,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cache.*output.*overlap"):
+        competition_retrieval._run_offline_topic_staged(
+            job,
+            topic,
+            config,
+            "d" * 64,
+            competition_retrieval._RuntimeDependencies(
+                code_commit="c" * 40,
+                document_scorer=None,
+                candidate_scorer=None,
+                similarity=None,
+                cache_ignore_checker=None,
+            ),
+            config_sha256=job.config_sha256,
+            expected_retriever_identity={"type": "test"},
+        )
+
+    assert not job.topic_root.exists()
+    assert not any(path.name.startswith(".offline-cache-") for path in tmp_path.iterdir())
+
+
 def test_offline_stage_recovers_a_fully_validated_published_topic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -570,6 +632,99 @@ def test_offline_stage_recovers_a_fully_validated_published_topic(
     assert outcome.projection_receipt is projection
     assert captured["operation_mode"] == "offline-cache-only"
     assert captured["allow_missing_operation_receipt"] is False
+
+
+def test_offline_stage_reopens_a_real_sealed_topic_tree(tmp_path: Path) -> None:
+    """Exercises projection, TopicRecords, source-chain, and operation validation."""
+    config, topics = _config_and_topics(tmp_path)
+    topic = topics[0]
+    _write_sealed_topic(
+        config.output_dir,
+        topic,
+        selected=("doc-a",),
+        supported=("doc-a",),
+        source_commit="a" * 40,
+    )
+    decomposition_path = config.output_dir / topic.id / "decomposition" / "result.json"
+    decomposition_bytes = decomposition_path.read_bytes()
+    (decomposition_path.parent / "manifest.json").write_bytes(
+        competition_retrieval._json_bytes(
+            {
+                "schema_version": "facet-decomposition-manifest-v1",
+                "planner": competition_retrieval._planner_identity(None),
+                "result_file": "result.json",
+                "result_bytes": len(decomposition_bytes),
+                "result_sha256": sha256(decomposition_bytes).hexdigest(),
+            }
+        )
+    )
+    producer_sha256 = competition_retrieval._decomposition_producer_sha256(
+        topic,
+        config.output_dir,
+        None,
+    )
+    config_bytes = b"real sealed offline recovery fixture\n"
+    config_sha256 = sha256(config_bytes).hexdigest()
+    canonical_complete = config.output_dir / topic.id / "canonical" / "complete.json"
+    provisional_manifest = canonical_complete.read_bytes()
+    canonical_complete.unlink()
+    with TopicRecords.open(
+        config.output_dir / topic.id / "records.sqlite3",
+        config.output_dir / topic.id / "canonical" / "records-manifest.json",
+        topic.id,
+        DocumentStore(competition_retrieval.document_store_dir(config.root_dir)),
+    ) as records:
+        projection = build_topic_projection(
+            config,
+            topic,
+            records,
+            expected_retriever_identity=dict(_FixtureRetriever.identity),
+            decomposition_producer_sha256=producer_sha256,
+            config_sha256=config_sha256,
+            canonical_manifest_bytes=provisional_manifest,
+        )
+    competition_retrieval._publish_topic_cache_operation_receipt(
+        config=config,
+        topic=topic,
+        config_sha256=config_sha256,
+        projection_manifest_sha256=projection.manifest_sha256,
+        mode="offline-cache-only",
+        phases={
+            phase: {"resumed": False}
+            for phase in competition_retrieval._CACHE_OPERATION_PHASE_NAMES
+        },
+        stages=_zero_operation_stages(),
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_bytes(config_bytes)
+    job = TopicJob(
+        topic_id=topic.id,
+        run_id=config.run_id,
+        config_path=config_path.resolve(),
+        config_bytes=config_bytes,
+        config_sha256=config_sha256,
+        topic_root=(config.output_dir / topic.id).resolve(),
+        offline_cache_only=True,
+    )
+
+    outcome = competition_retrieval._run_offline_topic_staged(
+        job,
+        topic,
+        config,
+        competition_retrieval._topics_sha256(topics),
+        competition_retrieval._RuntimeDependencies(
+            code_commit="a" * 40,
+            document_scorer=None,
+            candidate_scorer=None,
+            similarity=None,
+            cache_ignore_checker=None,
+        ),
+        config_sha256=config_sha256,
+        expected_retriever_identity=dict(_FixtureRetriever.identity),
+    )
+
+    assert outcome.resumed is True
+    assert outcome.projection_receipt == projection
 
 
 def test_offline_stage_refuses_a_partial_existing_topic(
@@ -641,23 +796,171 @@ def test_offline_publication_preserves_a_concurrent_empty_destination(
     assert tuple(job.topic_root.iterdir()) == ()
 
 
-def test_offline_create_only_publication_fsyncs_the_destination_parent(
+def test_offline_create_only_publication_fsyncs_tree_and_both_rename_parents(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "sealed.txt").write_text("sealed", encoding="utf-8")
+    source_parent = tmp_path / "private-stage"
+    source = source_parent / "topic-a"
+    nested = source / "canonical"
+    nested.mkdir(parents=True)
+    root_file = source / "records.sqlite3"
+    nested_file = nested / "complete.json"
+    root_file.write_bytes(b"sealed records")
+    nested_file.write_bytes(b"sealed manifest")
     destination = tmp_path / "published" / "topic-a"
     destination.parent.mkdir()
-    fsynced: list[int] = []
-    monkeypatch.setattr(os, "fsync", fsynced.append)
+    fsynced: list[tuple[Path, bool]] = []
+
+    def record_fsync(descriptor: int) -> None:
+        path = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+        fsynced.append((path, stat.S_ISDIR(os.fstat(descriptor).st_mode)))
+
+    monkeypatch.setattr(os, "fsync", record_fsync)
 
     competition_retrieval._publish_directory_create_only(source, destination)
 
     assert not source.exists()
+    assert (destination / "records.sqlite3").read_bytes() == b"sealed records"
+    assert (destination / "canonical" / "complete.json").read_bytes() == (
+        b"sealed manifest"
+    )
+    synced_paths = [path for path, _is_directory in fsynced]
+    for required in (root_file, nested_file, nested, source):
+        assert required in synced_paths
+    assert synced_paths.index(nested_file) < synced_paths.index(nested)
+    assert synced_paths.index(nested) < synced_paths.index(source)
+    assert synced_paths[-2:] == [source_parent, destination.parent]
+    assert dict(fsynced)[root_file] is False
+    assert dict(fsynced)[nested_file] is False
+    assert dict(fsynced)[nested] is True
+    assert dict(fsynced)[source] is True
+
+
+def test_offline_create_only_publication_durably_creates_destination_ancestors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_parent = tmp_path / "private-stage"
+    source = source_parent / "topic-a"
+    source.mkdir(parents=True)
+    (source / "sealed.txt").write_text("sealed", encoding="utf-8")
+    published = tmp_path / "published"
+    experiment = published / "experiment"
+    destination = experiment / "topic-a"
+    fsynced: list[Path] = []
+
+    def record_fsync(descriptor: int) -> None:
+        fsynced.append(Path(os.readlink(f"/proc/self/fd/{descriptor}")))
+
+    monkeypatch.setattr(os, "fsync", record_fsync)
+
+    try:
+        competition_retrieval._publish_directory_create_only(source, destination)
+    except FileNotFoundError as exc:
+        pytest.fail(f"publication did not create destination ancestors: {exc}")
+
     assert (destination / "sealed.txt").read_text(encoding="utf-8") == "sealed"
-    assert len(fsynced) == 1
+    assert tmp_path in fsynced
+    assert published in fsynced
+    assert experiment in fsynced
+
+
+def test_offline_create_only_publication_accepts_a_concurrent_parent_creator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "private-stage" / "topic-a"
+    source.mkdir(parents=True)
+    (source / "sealed.txt").write_text("sealed", encoding="utf-8")
+    published = tmp_path / "published"
+    destination = published / "topic-a"
+    original_mkdir = Path.mkdir
+    raced = False
+
+    def race_mkdir(path: Path, *args: object, **kwargs: object) -> None:
+        nonlocal raced
+        if path == published and not raced:
+            raced = True
+            original_mkdir(path, *args, **kwargs)
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), path)
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", race_mkdir)
+
+    competition_retrieval._publish_directory_create_only(source, destination)
+
+    assert raced is True
+    assert (destination / "sealed.txt").read_text(encoding="utf-8") == "sealed"
+
+
+def test_offline_publication_exdev_leaves_no_topic_or_private_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    topic = Topic("topic-a", "", "cache replay narrative")
+    job = _job(config)
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_run_topic",
+        lambda topic_arg, staged_config, *_args, **_kwargs: _fake_projection(
+            topic_arg,
+            staged_config,
+        ),
+    )
+
+    def reject_cross_device(_source: Path, _destination: Path) -> None:
+        raise OSError(errno.EXDEV, os.strerror(errno.EXDEV))
+
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_rename_directory_noreplace",
+        reject_cross_device,
+    )
+
+    with pytest.raises(OSError) as caught:
+        competition_retrieval._run_offline_topic_staged(
+            job,
+            topic,
+            config,
+            "d" * 64,
+            competition_retrieval._RuntimeDependencies(
+                code_commit="c" * 40,
+                document_scorer=None,
+                candidate_scorer=None,
+                similarity=None,
+                cache_ignore_checker=None,
+            ),
+            config_sha256=job.config_sha256,
+            expected_retriever_identity={"type": "test"},
+        )
+
+    assert caught.value.errno == errno.EXDEV
+    assert not job.topic_root.exists()
+    assert not any(path.name.startswith(".offline-cache-") for path in tmp_path.iterdir())
+
+
+def test_offline_publication_without_renameat2_preserves_the_private_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "private-stage" / "topic-a"
+    source.mkdir(parents=True)
+    (source / "sealed.txt").write_text("sealed", encoding="utf-8")
+    destination = tmp_path / "published" / "topic-a"
+    destination.parent.mkdir()
+    monkeypatch.setattr(
+        competition_retrieval.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+
+    with pytest.raises(RuntimeError, match="requires Linux renameat2"):
+        competition_retrieval._publish_directory_create_only(source, destination)
+
+    assert (source / "sealed.txt").read_text(encoding="utf-8") == "sealed"
+    assert not destination.exists()
 
 
 def test_operation_accounting_rejects_a_dependency_without_exact_counters() -> None:
