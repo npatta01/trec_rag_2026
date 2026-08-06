@@ -106,6 +106,18 @@ def test_scorer_exposes_cumulative_cache_and_model_batch_accounting(tmp_path: Pa
     assert len(model.calls) == 1
 
 
+def test_scorer_does_not_count_model_batch_when_model_loading_fails(tmp_path: Path) -> None:
+    def failing_loader(**_kwargs: object) -> object:
+        raise RuntimeError("model load failed")
+
+    scorer = MixedbreadPassageScorer(tmp_path, model_loader=failing_loader)
+
+    with pytest.raises(RuntimeError, match="model load failed"):
+        scorer.rank("query", chunks("passage"))
+
+    assert scorer.stats == {"cache_hits": 0, "cache_misses": 1, "model_batches": 0}
+
+
 def test_scorer_read_only_mode_never_loads_model_and_accounts_for_misses(tmp_path: Path) -> None:
     seed = MixedbreadPassageScorer(
         tmp_path,

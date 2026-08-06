@@ -207,6 +207,7 @@ class MixedbreadPassageScorer:
 
     @property
     def stats(self) -> dict[str, int]:
+        """Return cumulative cache keys and actual ``model.predict`` invocations."""
         with self._stats_lock:
             return dict(self._stats)
 
@@ -215,9 +216,12 @@ class MixedbreadPassageScorer:
         if any(not isinstance(chunk, TextChunk) for chunk in rows):
             raise TypeError("chunks must contain TextChunk values")
         pairs = tuple((query_text, chunk.text) for chunk in rows)
+        model_batches = 0
 
         def compute_batch(batch: Sequence[tuple[str, str]]) -> tuple[float, ...]:
+            nonlocal model_batches
             model = self._get_model()
+            model_batches += 1
             predicted = model.predict(
                 list(batch),
                 batch_size=self.batch_size,
@@ -238,7 +242,9 @@ class MixedbreadPassageScorer:
         finally:
             with self._stats_lock:
                 for name in self._stats:
-                    self._stats[name] += call_stats.get(name, 0)
+                    self._stats[name] += (
+                        model_batches if name == "model_batches" else call_stats.get(name, 0)
+                    )
         scores = _cached_scores(cached, expected_count=len(rows))
         return tuple(
             ScoredPassage(chunk=chunk, relevance_score=score)
