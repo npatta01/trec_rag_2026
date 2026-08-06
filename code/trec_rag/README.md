@@ -1296,6 +1296,25 @@ rules, and pipeline consumer interface are the same.
 `ragdoll_io.py` and `dev_rag_inputs.py` support scoring generated answers with the organizer
 harness, tracked as the `ragdoll` submodule. Neither is on the competition path.
 
+### `competition_evaluation_report.py`
+
+Builds a private, reproducible evaluation bundle and standalone friendly HTML report from one
+completed retrieval config and its matching completed RAG config. It validates the authenticated
+handoff and generation identity before deriving support tasks, keeps retrieval metrics separate
+from answer/citation metrics, and reports qrels or gold-dependent metrics as unavailable when the
+required inputs are absent.
+
+The durable cache under `cache/ragdoll_support_judge/` is keyed by the effective statement,
+selected evidence, pinned RAGDoll prompt contract/revision, and judge settings—not config paths,
+run IDs, or timestamps. The command never makes hosted calls unless `--run-judge` is explicitly
+present. Start cache-only, use `--run-judge --judge-limit 1` for a one-call probe when authorized,
+then resume against the same cache. Do not run concurrent judging commands against one cache;
+provider failures and detected label conflicts are counted in the private receipt and remain
+resumable. External or legacy judgment files cannot be imported.
+
+RAGDoll is a declared project dependency backed by the pinned `ragdoll/` submodule. Initialize
+the repository submodules as documented in the root README before running environment setup.
+
 ### `ragdoll_io.py`
 
 Derives RAGDoll inputs from a published submission JSONL, writing sidecar files rather than

@@ -2212,7 +2212,7 @@ def test_current_retrieval_projection_keeps_selected_evidence_without_canonical_
             ("rag2026-0", "doc-original"): "bundle_projection",
             ("rag2026-0", "doc-evidence-only"): "bundle_projection",
         },
-        topic_depths={"rag2026-0": (3, 2)},
+        topic_depths={"rag2026-0": (3, 2, "candidate_pool")},
         source_seals={
             "rag2026-0": {
                 "scoring_manifest_sha256": "a" * 64,
@@ -2265,7 +2265,7 @@ def test_current_retrieval_projection_rejects_selected_evidence_document_hash_ch
             ("rag2026-0", "doc-original"): "bundle_projection",
             ("rag2026-0", "doc-evidence-only"): "bundle_projection",
         },
-        topic_depths={"rag2026-0": (3, 2)},
+        topic_depths={"rag2026-0": (3, 2, "candidate_pool")},
         source_seals={
             "rag2026-0": {
                 "scoring_manifest_sha256": "a" * 64,
@@ -2323,7 +2323,7 @@ def test_current_retrieval_projection_requires_exact_selected_evidence_set(
             ("rag2026-0", "doc-original"): "bundle_projection",
             ("rag2026-0", "doc-evidence-only"): "bundle_projection",
         },
-        topic_depths={"rag2026-0": (3, len(run_docids))},
+        topic_depths={"rag2026-0": (3, len(run_docids), "candidate_pool")},
         source_seals={
             "rag2026-0": {
                 "scoring_manifest_sha256": "a" * 64,

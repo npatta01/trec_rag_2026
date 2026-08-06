@@ -213,6 +213,10 @@ class RetrievalOutputReport:
     selected_pool_depth: int
     final_supported_depth: int
     documents: tuple[RetrievalDocumentReport, ...]
+    # Which sealed depth key produced ``selected_pool_depth``. Exports declare either
+    # ``natural_union`` (the deduplicated union across every lane) or ``candidate_pool``.
+    # Downstream reporting must not present one as the other.
+    candidate_pool_kind: str = "candidate_pool"
 
 
 @dataclass(frozen=True)
@@ -380,7 +384,7 @@ class _RootRetrievalArtifacts:
     provenance: Mapping[tuple[str, str], Mapping[str, Any]]
     document_text: Mapping[tuple[str, str], str]
     document_stage: Mapping[tuple[str, str], str]
-    topic_depths: Mapping[str, tuple[int, int]]
+    topic_depths: Mapping[str, tuple[int, int, str]]
     source_seals: Mapping[str, Mapping[str, str]]
     export_schema_version: str
 
@@ -831,14 +835,15 @@ def _load_root_retrieval_artifacts(
         if row["official"] <= 0 or row["official"] != len(run_docids[topic_id]):
             raise ValueError("retrieval export topic depth is invalid")
         if set(row) == {"official", "candidate_pool"}:
-            selected_depth = row.get("candidate_pool")
+            pool_kind = "candidate_pool"
         elif set(row) == {"official", "natural_union"}:
-            selected_depth = row.get("natural_union")
+            pool_kind = "natural_union"
         else:
             raise ValueError("retrieval export topic depth is invalid")
+        selected_depth = row.get(pool_kind)
         if type(selected_depth) is not int or selected_depth < row["official"]:
             raise ValueError("retrieval export topic depth is invalid")
-        depths[topic_id] = (selected_depth, row["official"])
+        depths[topic_id] = (selected_depth, row["official"], pool_kind)
     raw_source_seals = export.get("source_seals")
     source_seals: dict[str, Mapping[str, str]] = {}
     if isinstance(raw_source_seals, Mapping):
@@ -1669,7 +1674,7 @@ def _decode_retrieval_output(
     original_only_fallback: bool = False,
 ) -> RetrievalOutputReport:
     selected_by_id = {row.docid: row for row in selected}
-    selected_depth, final_depth = artifacts.topic_depths[topic.id]
+    selected_depth, final_depth, pool_kind = artifacts.topic_depths[topic.id]
     if selected_depth < len(selected):
         raise ValueError("retrieval export selected-pool depth differs from selected documents")
     selected_evidence_hashes: dict[str, str] = {}
@@ -1861,7 +1866,9 @@ def _decode_retrieval_output(
                 stage=expected_stage,
             )
         )
-    return RetrievalOutputReport(selected_depth, final_depth, tuple(documents))
+    return RetrievalOutputReport(
+        selected_depth, final_depth, tuple(documents), candidate_pool_kind=pool_kind
+    )
 
 
 def _validate_export_manifest(

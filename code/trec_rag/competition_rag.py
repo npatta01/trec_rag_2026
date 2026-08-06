@@ -41,6 +41,9 @@ _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"
 # strict_schema pins provider selection to schema-capable endpoints; json_object is the
 # portable fallback; none sends no response_format at all.
 STRUCTURED_OUTPUT_MODES = frozenset({"strict_schema", "json_object", "none"})
+# The organizer answer cap. Kept here so validation, trimming, and post-run reporting all
+# read one contract value instead of repeating the literal.
+ANSWER_WORD_LIMIT = 1024
 _MAX_REDACTION_NORMALIZATION_ROUNDS = 32
 MAX_SEMANTIC_ATTEMPTS = 2
 _CITATION_VALIDATION_CONTRACT_VERSION = "exact_hint_linked_docids_v1"
@@ -766,8 +769,8 @@ def validate_submission_record(
             for citation in citations
         ):
             raise ValueError(f"{topic_id}: answer[{index}] has an invalid citation")
-    if words > 1024:
-        raise ValueError(f"{topic_id}: answer exceeds 1,024 words")
+    if words > ANSWER_WORD_LIMIT:
+        raise ValueError(f"{topic_id}: answer exceeds {ANSWER_WORD_LIMIT:,} words")
 
 
 def normalize_generated_record(
@@ -903,7 +906,7 @@ def normalize_generated_record(
     }
 
 
-def trim_to_word_limit(record: dict[str, Any], *, max_words: int = 1024) -> dict[str, Any]:
+def trim_to_word_limit(record: dict[str, Any], *, max_words: int = ANSWER_WORD_LIMIT) -> dict[str, Any]:
     """Drop trailing answer objects until the record fits the organizer word cap.
 
     Models track a running word budget poorly: answers land at 950 to 1000 words and tip over
