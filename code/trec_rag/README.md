@@ -317,8 +317,8 @@ bash code/tools/apply_retrieval_cache_shard.sh \
   -- --topic rag2026-1 --run-id nonagentic-two-topic-20260806
 ```
 
-The task requests one on-demand `A5000`, `L4`, `RTX3090`, or `RTX4090` with at
-least 24 GB VRAM, 32 GB RAM, and 100 GB disk. It has a `$1.00/hour` ceiling, a
+The task requests one on-demand `A5000`, `L4`, `RTX3090`, `RTX4090`, `A6000`,
+`A40`, or `L40S` with at least 24 GB VRAM, 32 GB RAM, and 100 GB disk. It has a `$1.00/hour` ceiling, a
 five-hour running limit, a 30-minute retry only for `no-capacity`, and zero idle
 retention. Previewing is read-only. After the two offers and expected hosted
 work have been explicitly approved, replace `--preview` with `--launch`; the

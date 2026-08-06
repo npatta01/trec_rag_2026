@@ -271,7 +271,7 @@ foreground-verifies the remote listing/download/hash.
 It accepts only named dstack secrets `HF_TOKEN`, `INDEX_URL`,
 `PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY`.
 
-Resources: one of `A5000,L4,RTX3090,RTX4090`, at least 24 GB VRAM, 32 GB RAM,
+Resources: one of `A5000,L4,RTX3090,RTX4090,A6000,A40,L40S`, at least 24 GB VRAM, 32 GB RAM,
 100 GB disk, on-demand, `$1.00/hour` maximum, five-hour maximum duration,
 native `no-capacity` retry for 30 minutes, and immediate teardown. Download and
 verify the Mixedbread revision
