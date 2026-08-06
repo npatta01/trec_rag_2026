@@ -57,4 +57,4 @@ tracked_record_files:
   metrics: metrics.json
   topic_metrics: topic_metrics.csv
 
-notes: Record created on a branch; regenerate reports/experiments/runs.csv after merge.
+notes: Learned evidence; source record generated on codex/rag25-reranker-1k.

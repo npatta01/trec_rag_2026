@@ -2,7 +2,8 @@
 
 Run date: 2026-08-06  
 Split: RAG25 development topics (22 topics)  
-Record status: prepared on a branch; do not treat as merged promotion evidence until this PR lands
+Record provenance: generated on branch `codex/rag25-reranker-1k`; treat as learned
+evidence, not a promotion decision, until held-out validation.
 
 ## Technical summary
 
