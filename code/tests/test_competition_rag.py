@@ -13,6 +13,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+import httpx
+import httpx_retries.retry as httpx_retry_module
 import pytest
 
 import trec_rag.competition_rag as competition_rag
@@ -1609,6 +1611,9 @@ def test_truncated_completion_is_rejected_rather_than_shortened(
         max_tokens=10,
         timeout_seconds=5.0,
         transport_max_attempts=1,
+        http_transport=_mock_http_transport(
+            lambda *args, **kwargs: FakeHttpResponse(200, body)
+        ),
     )
     body = {
         "choices": [
@@ -1625,11 +1630,6 @@ def test_truncated_completion_is_rejected_rather_than_shortened(
             }
         ]
     }
-    monkeypatch.setattr(
-        competition_rag.requests, "post", lambda *a, **k: FakeHttpResponse(200, body)
-    )
-    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
-
     with pytest.raises(competition_rag.SemanticCompletionError, match="truncated"):
         generator.complete_json(
             topic_id="rag2026-1",
@@ -1662,6 +1662,9 @@ def test_only_a_stop_finish_reason_is_published(
         max_tokens=100,
         timeout_seconds=5.0,
         transport_max_attempts=1,
+        http_transport=_mock_http_transport(
+            lambda *args, **kwargs: FakeHttpResponse(200, {"choices": [choice]})
+        ),
     )
     choice: dict[str, Any] = {
         "message": {
@@ -1675,13 +1678,6 @@ def test_only_a_stop_finish_reason_is_published(
     }
     if finish_reason is not None:
         choice["finish_reason"] = finish_reason
-    monkeypatch.setattr(
-        competition_rag.requests,
-        "post",
-        lambda *a, **k: FakeHttpResponse(200, {"choices": [choice]}),
-    )
-    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
-
     with pytest.raises(competition_rag.SemanticCompletionError, match="rather than 'stop'"):
         generator.complete_json(
             topic_id="rag2026-1",
@@ -1965,7 +1961,6 @@ def test_openrouter_redacts_its_key_from_persisted_success_envelope(
             ],
         },
     )
-    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key=api_key,
@@ -1975,6 +1970,7 @@ def test_openrouter_redacts_its_key_from_persisted_success_envelope(
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=2,
+        http_transport=_mock_http_transport(lambda *args, **kwargs: response),
     )
 
     asyncio.run(run_generation(config, generator))
@@ -2030,7 +2026,6 @@ def test_percent_encoded_api_key_in_parsed_envelope_never_persists(
             ],
         },
     )
-    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key=api_key,
@@ -2040,6 +2035,7 @@ def test_percent_encoded_api_key_in_parsed_envelope_never_persists(
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=2,
+        http_transport=_mock_http_transport(lambda *args, **kwargs: response),
     )
 
     asyncio.run(run_generation(config, generator))
@@ -2066,7 +2062,32 @@ class FakeHttpResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
-def _openrouter_generator() -> OpenRouterJsonGenerator:
+def _mock_http_transport(post: Any) -> httpx.MockTransport:
+    def handle(request: httpx.Request) -> httpx.Response:
+        response = post(
+            str(request.url),
+            headers=dict(request.headers),
+            json=json.loads(request.content),
+        )
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            content=response.text.encode("utf-8"),
+        )
+
+    return httpx.MockTransport(handle)
+
+
+def _openrouter_generator(
+    post: Any | None = None,
+    *,
+    timeout_seconds: float = 30,
+    transport_max_attempts: int = 3,
+) -> OpenRouterJsonGenerator:
+    if post is None:
+        def post(*args: Any, **kwargs: Any) -> FakeHttpResponse:
+            return _provider_success()
+
     return OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key="secret",
@@ -2074,8 +2095,9 @@ def _openrouter_generator() -> OpenRouterJsonGenerator:
         reasoning_effort="medium",
         temperature=None,
         max_tokens=6000,
-        timeout_seconds=30,
-        transport_max_attempts=3,
+        timeout_seconds=timeout_seconds,
+        transport_max_attempts=transport_max_attempts,
+        http_transport=_mock_http_transport(post),
     )
 
 
@@ -2096,15 +2118,60 @@ def _provider_success() -> FakeHttpResponse:
     )
 
 
-def test_retry_delay_honors_an_http_date_retry_after() -> None:
-    assert (
-        competition_rag._retry_delay(
-            "Wed, 21 Oct 2099 07:28:00 GMT",
-            attempt=3,
-            max_delay=900.0,
-        )
-        == 900.0
+def test_openrouter_uses_an_openai_compatible_http_transport() -> None:
+    captured: dict[str, Any] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers["Authorization"]
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_provider_success().payload)
+
+    generator = OpenRouterJsonGenerator(
+        api_base="https://openrouter.example/v1",
+        api_key="secret",
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=6000,
+        timeout_seconds=30,
+        transport_max_attempts=3,
+        http_transport=httpx.MockTransport(handle),
     )
+
+    generated, raw = generator.complete_json(
+        topic_id="rag2026-1",
+        system_prompt="system",
+        user_prompt="user",
+        response_schema={"type": "object"},
+    )
+
+    assert captured["url"] == "https://openrouter.example/v1/chat/completions"
+    assert captured["authorization"] == "Bearer secret"
+    assert captured["body"]["reasoning"] == {"effort": "medium", "exclude": True}
+    assert captured["body"]["provider"] == {"require_parameters": True}
+    assert generated["answer"][0]["citations"] == ["climbmix-a"]
+    assert raw["id"] == "response-1"
+
+
+def test_openrouter_honors_an_http_date_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [FakeHttpResponse(429, {"error": "slow down"}), _provider_success()]
+    responses[0].headers = {"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"}
+    sleeps: list[float] = []
+    monkeypatch.setattr(httpx_retry_module.time, "sleep", sleeps.append)
+
+    _openrouter_generator(
+        lambda *args, **kwargs: responses.pop(0), timeout_seconds=900
+    ).complete_json(
+        topic_id="rag2026-1",
+        system_prompt="system",
+        user_prompt="user",
+        response_schema={"type": "object"},
+    )
+
+    assert sleeps == [900.0]
 
 
 def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
@@ -2116,8 +2183,7 @@ def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
         captured.update({"url": url, **kwargs})
         return _provider_success()
 
-    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
-    generated, raw = _openrouter_generator().complete_json(
+    generated, raw = _openrouter_generator(fake_post).complete_json(
         topic_id="rag2026-1", system_prompt="system", user_prompt="user", response_schema={"type": "object"}
     )
 
@@ -2127,7 +2193,7 @@ def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
     assert captured["json"]["response_format"]["type"] == "json_schema"
     assert captured["json"]["response_format"]["json_schema"]["strict"] is True
     assert "temperature" not in captured["json"]
-    assert captured["headers"]["Authorization"] == "Bearer secret"
+    assert captured["headers"]["authorization"] == "Bearer secret"
     assert generated["answer"][0]["citations"] == ["climbmix-a"]
     assert raw["id"] == "response-1"
 
@@ -2141,9 +2207,8 @@ def test_malformed_semantic_completion_is_not_retried(monkeypatch: pytest.Monkey
         calls += 1
         return FakeHttpResponse(200, {"choices": [{"finish_reason": "stop", "message": {"content": "not JSON"}}]})
 
-    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
     with pytest.raises(ValueError, match="no repair call") as error:
-        _openrouter_generator().complete_json(
+        _openrouter_generator(fake_post).complete_json(
             topic_id="rag2026-1", system_prompt="system", user_prompt="user", response_schema={"type": "object"}
         )
 
@@ -2169,8 +2234,7 @@ def test_http_200_non_json_gets_one_fresh_semantic_attempt(
         calls += 1
         return responses.pop(0)
 
-    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
-    asyncio.run(run_generation(config, _openrouter_generator()))
+    asyncio.run(run_generation(config, _openrouter_generator(fake_post)))
 
     assert calls == 2
     assert len(list((config.work_dir / "raw").glob("*.failed.json"))) == 1
@@ -2205,8 +2269,7 @@ def test_missing_finish_reason_gets_one_fresh_semantic_attempt(
         calls += 1
         return responses.pop(0)
 
-    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
-    asyncio.run(run_generation(config, _openrouter_generator()))
+    asyncio.run(run_generation(config, _openrouter_generator(fake_post)))
 
     assert calls == 2
     assert config.output_path.exists()
@@ -2236,9 +2299,8 @@ def test_missing_finish_reason_exhausts_two_semantic_attempts(
         calls += 1
         return response
 
-    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
     with pytest.raises(RuntimeError, match="1 topic"):
-        asyncio.run(run_generation(config, _openrouter_generator()))
+        asyncio.run(run_generation(config, _openrouter_generator(fake_post)))
 
     assert calls == 2
     assert len(list((config.work_dir / "raw").glob("*.failed.json"))) == 2
@@ -2269,9 +2331,8 @@ def test_semantic_retry_does_not_repeat_truncation_or_exhausted_transport(
             },
         )
 
-    monkeypatch.setattr(competition_rag.requests, "post", truncated_post)
     with pytest.raises(RuntimeError, match="1 topic"):
-        asyncio.run(run_generation(config, _openrouter_generator()))
+        asyncio.run(run_generation(config, _openrouter_generator(truncated_post)))
     assert calls == 1
 
     calls = 0
@@ -2280,13 +2341,12 @@ def test_semantic_retry_does_not_repeat_truncation_or_exhausted_transport(
         nonlocal calls
         del url, kwargs
         calls += 1
-        raise competition_rag.requests.RequestException("connection lost")
+        raise httpx.ConnectError("connection lost")
 
-    monkeypatch.setattr(competition_rag.requests, "post", failed_transport)
-    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+    monkeypatch.setattr(httpx_retry_module.time, "sleep", lambda _: None)
     other = replace(_pipeline_config(tmp_path / "transport"), topic_ids=("rag2026-1",))
     with pytest.raises(RuntimeError, match="1 topic"):
-        asyncio.run(run_generation(other, _openrouter_generator()))
+        asyncio.run(run_generation(other, _openrouter_generator(failed_transport)))
     assert calls == 3
 
 
@@ -2299,9 +2359,8 @@ def test_transient_retries_repeat_the_identical_request(monkeypatch: pytest.Monk
         bodies.append(copy.deepcopy(kwargs["json"]))
         return responses.pop(0)
 
-    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
-    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
-    _openrouter_generator().complete_json(
+    monkeypatch.setattr(httpx_retry_module.time, "sleep", lambda _: None)
+    _openrouter_generator(fake_post).complete_json(
         topic_id="rag2026-1", system_prompt="system", user_prompt="user", response_schema={"type": "object"}
     )
 
@@ -2313,17 +2372,13 @@ def test_openrouter_honors_retry_after_longer_than_thirty_seconds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     responses = [FakeHttpResponse(429, {"error": "slow down"}), _provider_success()]
-    responses[0].headers = {"Retry-After": "60"}
+    responses[0].headers = {"Retry-After": "120"}
     sleeps: list[float] = []
 
-    monkeypatch.setattr(
-        competition_rag.requests,
-        "post",
-        lambda *args, **kwargs: responses.pop(0),
+    monkeypatch.setattr(httpx_retry_module.time, "sleep", sleeps.append)
+    generator = _openrouter_generator(
+        lambda *args, **kwargs: responses.pop(0), timeout_seconds=900
     )
-    monkeypatch.setattr(competition_rag.time, "sleep", sleeps.append)
-    generator = _openrouter_generator()
-    generator.timeout_seconds = 900.0
 
     generator.complete_json(
         topic_id="rag2026-1",
@@ -2332,7 +2387,7 @@ def test_openrouter_honors_retry_after_longer_than_thirty_seconds(
         response_schema={"type": "object"},
     )
 
-    assert sleeps == [60.0]
+    assert sleeps == [120.0]
 
 
 @pytest.mark.parametrize("retry_after", ["nan", "NaN", "inf", "-inf", "1e400"])
@@ -2344,14 +2399,9 @@ def test_openrouter_falls_back_for_nonfinite_retry_after(
     responses[0].headers = {"Retry-After": retry_after}
     sleeps: list[float] = []
 
-    monkeypatch.setattr(
-        competition_rag.requests,
-        "post",
-        lambda *args, **kwargs: responses.pop(0),
-    )
-    monkeypatch.setattr(competition_rag.time, "sleep", sleeps.append)
+    monkeypatch.setattr(httpx_retry_module.time, "sleep", sleeps.append)
 
-    _openrouter_generator().complete_json(
+    _openrouter_generator(lambda *args, **kwargs: responses.pop(0)).complete_json(
         topic_id="rag2026-1",
         system_prompt="system",
         user_prompt="user",
@@ -2374,8 +2424,7 @@ def test_http_failures_persist_sanitized_status_body_and_envelope(
         del url, kwargs
         return FakeHttpResponse(status_code, payload)
 
-    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
-    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+    monkeypatch.setattr(httpx_retry_module.time, "sleep", lambda _: None)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key=api_key,
@@ -2385,6 +2434,7 @@ def test_http_failures_persist_sanitized_status_body_and_envelope(
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=2,
+        http_transport=_mock_http_transport(fake_post),
     )
 
     with pytest.raises(RuntimeError, match="1 topic"):
@@ -2415,7 +2465,6 @@ def test_http_json_failure_omits_body_with_decodable_escaped_api_key(
         {"error": {"message": f"rejected bearer {api_key}"}},
     )
     response.text = '{"error":{"message":"rejected bearer ' + escaped_key + '"}}'
-    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key=api_key,
@@ -2425,6 +2474,7 @@ def test_http_json_failure_omits_body_with_decodable_escaped_api_key(
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=2,
+        http_transport=_mock_http_transport(lambda *args, **kwargs: response),
     )
 
     with pytest.raises(RuntimeError, match="1 topic"):
@@ -2453,7 +2503,6 @@ def test_http_non_json_failure_omits_body_and_keeps_non_reversible_diagnostics(
     response = NonJsonResponse(400, None)
     body_text = r"gateway rejected \u0073ecret-token"
     response.text = body_text
-    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key=api_key,
@@ -2463,6 +2512,7 @@ def test_http_non_json_failure_omits_body_and_keeps_non_reversible_diagnostics(
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=2,
+        http_transport=_mock_http_transport(lambda *args, **kwargs: response),
     )
 
     with pytest.raises(RuntimeError, match="1 topic"):
@@ -2493,7 +2543,6 @@ def test_http_non_json_failure_omits_plain_body_and_keeps_non_reversible_diagnos
     response = NonJsonResponse(400, None)
     body_text = f"gateway rejected bearer {api_key}"
     response.text = body_text
-    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key=api_key,
@@ -2503,6 +2552,7 @@ def test_http_non_json_failure_omits_plain_body_and_keeps_non_reversible_diagnos
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=2,
+        http_transport=_mock_http_transport(lambda *args, **kwargs: response),
     )
 
     with pytest.raises(RuntimeError, match="1 topic"):
@@ -2533,7 +2583,6 @@ def test_http_non_json_success_never_persists_nested_decodable_api_key(
     response = NonJsonResponse(200, None)
     body_text = r"gateway reflected \u005cu0073ecret-token"
     response.text = body_text
-    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
         api_key=api_key,
@@ -2543,6 +2592,7 @@ def test_http_non_json_success_never_persists_nested_decodable_api_key(
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=2,
+        http_transport=_mock_http_transport(lambda *args, **kwargs: response),
     )
 
     with pytest.raises(RuntimeError, match="1 topic"):

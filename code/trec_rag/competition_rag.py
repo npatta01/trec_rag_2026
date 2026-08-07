@@ -10,20 +10,19 @@ import os
 import re
 import shutil
 import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 from urllib.parse import unquote
 
-import requests
+import httpx
 import yaml
 from filelock import FileLock, Timeout as FileLockTimeout
+from httpx_retries import Retry, RetryTransport
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from trec_rag.generation_handoff import (
     PROMPT_CONTRACT_VERSION,
@@ -465,6 +464,7 @@ class OpenRouterJsonGenerator:
         timeout_seconds: float,
         transport_max_attempts: int,
         structured_output: str = "strict_schema",
+        http_transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("OpenRouter API key is missing or empty")
@@ -479,6 +479,25 @@ class OpenRouterJsonGenerator:
         self.timeout_seconds = timeout_seconds
         self.transport_max_attempts = transport_max_attempts
         self.structured_output = structured_output
+        retry = Retry(
+            total=transport_max_attempts - 1,
+            allowed_methods={"POST"},
+            status_forcelist={429, *range(500, 600)},
+            backoff_factor=0.5,
+            backoff_jitter=0.0,
+            respect_retry_after_header=True,
+            max_backoff_wait=timeout_seconds,
+        )
+        self._http_client = httpx.Client(
+            transport=RetryTransport(transport=http_transport, retry=retry),
+            timeout=httpx.Timeout(timeout_seconds, connect=15.0),
+        )
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=self.api_base,
+            http_client=self._http_client,
+            max_retries=0,
+        )
 
     def complete_json(
         self,
@@ -496,13 +515,15 @@ class OpenRouterJsonGenerator:
                 {"role": "user", "content": user_prompt},
             ],
             "max_tokens": self.max_tokens,
-            "reasoning": {"effort": self.reasoning_effort, "exclude": True},
+        }
+        extra_body: dict[str, Any] = {
+            "reasoning": {"effort": self.reasoning_effort, "exclude": True}
         }
         if self.structured_output == "strict_schema":
             # require_parameters excludes any provider that cannot honour the schema. For some
             # models that excludes the vendor's own API and routes to a third party whose
             # grammar-constrained decoding may only treat the schema as a hint.
-            request_body["provider"] = {"require_parameters": True}
+            extra_body["provider"] = {"require_parameters": True}
             request_body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -516,101 +537,78 @@ class OpenRouterJsonGenerator:
             request_body["response_format"] = {"type": "json_object"}
         if self.temperature is not None:
             request_body["temperature"] = self.temperature
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-        url = f"{self.api_base}/chat/completions"
-        for attempt in range(1, self.transport_max_attempts + 1):
-            try:
-                response = requests.post(
-                    url,
-                    headers=headers,
-                    json=request_body,
-                    timeout=(15, self.timeout_seconds),
-                )
-            except requests.RequestException as exc:
-                if attempt == self.transport_max_attempts:
-                    raise RuntimeError("OpenRouter generation transport failed") from exc
-                time.sleep(min(2 ** (attempt - 1), 8))
-                continue
-            response_is_json, envelope, safe_response = _safe_http_response(
-                response, self._api_key
+        try:
+            raw_response = self._client.chat.completions.with_raw_response.create(
+                **request_body,
+                extra_body=extra_body,
             )
-            if response.status_code == 429 or response.status_code >= 500:
-                if attempt == self.transport_max_attempts:
-                    raise SemanticCompletionError(
-                        f"OpenRouter HTTP {response.status_code}; no repair call was made",
-                        safe_response,
-                    )
-                time.sleep(
-                    _retry_delay(
-                        response.headers.get("Retry-After"),
-                        attempt,
-                        max_delay=self.timeout_seconds,
-                    )
-                )
-                continue
-            if response.status_code >= 400:
-                raise SemanticCompletionError(
-                    f"OpenRouter HTTP {response.status_code}; no repair call was made",
-                    safe_response,
-                )
-            if not response_is_json:
-                raise SemanticCompletionError(
-                    "OpenRouter returned a non-JSON response; no repair call was made",
-                    safe_response,
-                    retryable=True,
-                )
-            if not isinstance(envelope, dict):
-                raise SemanticCompletionError(
-                    "OpenRouter response must be a JSON object; no repair call was made",
-                    safe_response,
-                    retryable=True,
-                )
-            # Checked outside the parse guard below, which catches ValueError and would
-            # otherwise rewrite this as a generic malformed-completion error.
-            # Reasoning tokens share the max_tokens budget, so truncation is a real risk, and
-            # grammar-constrained decoding can close the JSON validly while the answer is cut
-            # short, producing a record that passes every downstream check and scores badly.
-            choices = envelope.get("choices")
-            finish_reason = (
-                choices[0].get("finish_reason")
-                if isinstance(choices, list) and choices and isinstance(choices[0], dict)
-                else None
+        except APIStatusError as exc:
+            _, _, safe_response = _safe_http_response(exc.response, self._api_key)
+            raise SemanticCompletionError(
+                f"OpenRouter HTTP {exc.status_code}; no repair call was made",
+                safe_response,
+            ) from exc
+        except APIConnectionError as exc:
+            raise RuntimeError("OpenRouter generation transport failed") from exc
+
+        response = raw_response.http_response
+        response_is_json, envelope, safe_response = _safe_http_response(
+            response, self._api_key
+        )
+        if not response_is_json:
+            raise SemanticCompletionError(
+                "OpenRouter returned a non-JSON response; no repair call was made",
+                safe_response,
+                retryable=True,
             )
-            if finish_reason == "length":
-                raise SemanticCompletionError(
-                    "OpenRouter truncated the completion at max_tokens; raise "
-                    "generation.max_tokens rather than accepting a shortened answer",
-                    safe_response,
-                )
-            if finish_reason != "stop":
-                # An allowlist, not a denylist. OpenRouter returns HTTP 200 with
-                # finish_reason "error" and partial content, and "content_filter" or an absent
-                # reason are equally unsafe to publish. Rejecting a topic is recoverable by
-                # resuming; publishing a partial answer is not.
-                raise SemanticCompletionError(
-                    f"OpenRouter finish_reason was {finish_reason!r} rather than 'stop'; "
-                    "no repair call was made",
-                    safe_response,
-                    retryable=finish_reason is None,
-                )
-            try:
-                message = envelope["choices"][0]["message"]
-                generated = parse_generated_json(_message_text(message.get("content")))
-            except (KeyError, IndexError, TypeError, ValueError) as exc:
-                raise SemanticCompletionError(
-                    "OpenRouter returned a malformed semantic completion; no repair call was made",
-                    safe_response,
-                    retryable=True,
-                ) from exc
-            return generated, safe_response
-        raise AssertionError("unreachable OpenRouter retry state")
+        if not isinstance(envelope, dict):
+            raise SemanticCompletionError(
+                "OpenRouter response must be a JSON object; no repair call was made",
+                safe_response,
+                retryable=True,
+            )
+        # Checked outside the parse guard below, which catches ValueError and would
+        # otherwise rewrite this as a generic malformed-completion error.
+        # Reasoning tokens share the max_tokens budget, so truncation is a real risk, and
+        # grammar-constrained decoding can close the JSON validly while the answer is cut
+        # short, producing a record that passes every downstream check and scores badly.
+        choices = envelope.get("choices")
+        finish_reason = (
+            choices[0].get("finish_reason")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+            else None
+        )
+        if finish_reason == "length":
+            raise SemanticCompletionError(
+                "OpenRouter truncated the completion at max_tokens; raise "
+                "generation.max_tokens rather than accepting a shortened answer",
+                safe_response,
+            )
+        if finish_reason != "stop":
+            # An allowlist, not a denylist. OpenRouter returns HTTP 200 with
+            # finish_reason "error" and partial content, and "content_filter" or an absent
+            # reason are equally unsafe to publish. Rejecting a topic is recoverable by
+            # resuming; publishing a partial answer is not.
+            raise SemanticCompletionError(
+                f"OpenRouter finish_reason was {finish_reason!r} rather than 'stop'; "
+                "no repair call was made",
+                safe_response,
+                retryable=finish_reason is None,
+            )
+        try:
+            message = envelope["choices"][0]["message"]
+            generated = parse_generated_json(_message_text(message.get("content")))
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise SemanticCompletionError(
+                "OpenRouter returned a malformed semantic completion; no repair call was made",
+                safe_response,
+                retryable=True,
+            ) from exc
+        return generated, safe_response
 
 
 def _safe_http_response(
-    response: requests.Response, api_key: str
+    response: httpx.Response, api_key: str
 ) -> tuple[bool, object | None, object]:
     try:
         envelope = response.json()
@@ -631,27 +629,6 @@ def _safe_http_response(
             "envelope": safe_envelope,
         }
     return True, envelope, safe_envelope
-
-
-def _retry_delay(
-    retry_after: str | None,
-    attempt: int,
-    *,
-    max_delay: float,
-) -> float:
-    if retry_after:
-        try:
-            seconds = float(retry_after)
-        except ValueError:
-            try:
-                retry_at = parsedate_to_datetime(retry_after)
-                seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
-            except (TypeError, ValueError):
-                seconds = None
-        if seconds is not None and math.isfinite(seconds):
-            return min(max(seconds, 0.0), max_delay)
-    return float(min(2 ** (attempt - 1), 8))
-
 
 def _message_text(content: object) -> str:
     if isinstance(content, str) and content.strip():
