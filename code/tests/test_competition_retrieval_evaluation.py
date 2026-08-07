@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from hashlib import sha256
@@ -197,6 +199,7 @@ def test_evaluation_binds_scope_metrics_and_projected_qrels_provenance(tmp_path:
     assert result["assessor"] == {
         "variant": "tiny-projected-qrels-test-fixture",
         "path": str(qrels_path),
+        "input_path": str(qrels_path),
         "sha256": sha256(qrels_path.read_bytes()).hexdigest(),
     }
     assert result["relevance_threshold"] == 2
@@ -217,6 +220,115 @@ def test_evaluation_binds_scope_metrics_and_projected_qrels_provenance(tmp_path:
         }
     )
     assert result["per_topic"]["31"] == pytest.approx(result["metrics"])
+
+
+def test_evaluation_topics_must_be_a_subset_of_the_qrels_population(tmp_path: Path) -> None:
+    run_path = _write(tmp_path / "run.trec", "999 Q0 doc 1 1 run\n")
+    qrels_path = _write(tmp_path / "projected.qrels", "31 0 doc 3\n")
+
+    with pytest.raises(ValueError, match="evaluation topics outside the qrels population: 999"):
+        evaluate_competition_retrieval_run(
+            run_path,
+            qrels_path,
+            topic_ids=("999",),
+            metric_names=("ndcg@10",),
+            expected_qrels_sha256=sha256(qrels_path.read_bytes()).hexdigest(),
+            expected_qrels_topic_ids=("31",),
+            assessor_variant="tiny-projected-qrels-test-fixture",
+        )
+
+
+@pytest.mark.parametrize(
+    ("metric_names", "message"),
+    [
+        ((), "metric names must not be empty"),
+        (("unknown@10",), "unsupported metric"),
+        (("ndcg",), "metric must use NAME@CUTOFF"),
+        (("ndcg@0",), "metric cutoff must be positive"),
+        (("ndcg@-1",), "metric cutoff must be positive"),
+        (("ndcg@10", "ndcg@10"), "metric names must be unique"),
+    ],
+)
+def test_evaluation_rejects_invalid_metric_names(
+    tmp_path: Path,
+    metric_names: tuple[str, ...],
+    message: str,
+) -> None:
+    run_path = _write(tmp_path / "run.trec", "31 Q0 doc 1 1 run\n")
+    qrels_path = _write(tmp_path / "projected.qrels", "31 0 doc 3\n")
+
+    with pytest.raises(ValueError, match=message):
+        evaluate_competition_retrieval_run(
+            run_path,
+            qrels_path,
+            topic_ids=("31",),
+            metric_names=metric_names,
+            expected_qrels_sha256=sha256(qrels_path.read_bytes()).hexdigest(),
+            expected_qrels_topic_ids=("31",),
+            assessor_variant="tiny-projected-qrels-test-fixture",
+        )
+
+
+@pytest.mark.parametrize("relevance_threshold", [0, 5, True])
+def test_evaluation_requires_a_relevance_threshold_from_one_through_four(
+    tmp_path: Path,
+    relevance_threshold: object,
+) -> None:
+    run_path = _write(tmp_path / "run.trec", "31 Q0 doc 1 1 run\n")
+    qrels_path = _write(tmp_path / "projected.qrels", "31 0 doc 3\n")
+
+    with pytest.raises(ValueError, match="relevance threshold must be an integer from 1 through 4"):
+        evaluate_competition_retrieval_run(
+            run_path,
+            qrels_path,
+            topic_ids=("31",),
+            metric_names=("ndcg@10",),
+            relevance_threshold=relevance_threshold,  # type: ignore[arg-type]
+            expected_qrels_sha256=sha256(qrels_path.read_bytes()).hexdigest(),
+            expected_qrels_topic_ids=("31",),
+            assessor_variant="tiny-projected-qrels-test-fixture",
+        )
+
+
+def test_evaluation_hashes_and_parses_one_snapshot_per_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_path = _write(tmp_path / "run.trec", "31 Q0 relevant 1 1 run\n")
+    qrels_path = _write(tmp_path / "projected.qrels", "31 0 relevant 3\n")
+    original_run = run_path.read_bytes()
+    original_qrels = qrels_path.read_bytes()
+    original_read_bytes = Path.read_bytes
+    read_counts = {run_path: 0, qrels_path: 0}
+
+    def replacing_read_bytes(path: Path) -> bytes:
+        payload = original_read_bytes(path)
+        if path in read_counts:
+            read_counts[path] += 1
+            if path == run_path:
+                path.write_text("31 Q0 replacement 1 1 run\n", encoding="utf-8")
+            else:
+                path.write_text("31 0 relevant 0\n", encoding="utf-8")
+        return payload
+
+    monkeypatch.setattr(Path, "read_bytes", replacing_read_bytes)
+
+    result = evaluate_competition_retrieval_run(
+        run_path,
+        qrels_path,
+        topic_ids=("31",),
+        metric_names=("ndcg@10",),
+        expected_qrels_sha256=sha256(original_qrels).hexdigest(),
+        expected_qrels_topic_ids=("31",),
+        assessor_variant="tiny-projected-qrels-test-fixture",
+    )
+
+    assert read_counts == {run_path: 1, qrels_path: 1}
+    assert result["run"]["sha256"] == sha256(original_run).hexdigest()  # type: ignore[index]
+    assert result["qrels"]["sha256"] == sha256(original_qrels).hexdigest()  # type: ignore[index]
+    assert result["metrics"]["ndcg@10"] == 1.0  # type: ignore[index]
+    assert original_read_bytes(run_path) != original_run
+    assert original_read_bytes(qrels_path) != original_qrels
 
 
 def test_evaluation_rejects_qrels_that_do_not_match_expected_digest(tmp_path: Path) -> None:
@@ -277,7 +389,7 @@ def test_cli_writes_canonical_json_with_default_metrics(tmp_path: Path) -> None:
     qrels_path = Path(
         "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/"
         "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
-    )
+    ).resolve()
     output_path = tmp_path / "evaluation.json"
 
     completed = subprocess.run(
@@ -329,6 +441,94 @@ def test_cli_writes_canonical_json_with_default_metrics(tmp_path: Path) -> None:
     assert result["projected_development_qrels"] is True
     assert result["assessor"] == {
         "variant": "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1",
-        "path": str(qrels_path),
+        "path": (
+            "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/"
+            "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
+        ),
+        "input_path": str(qrels_path),
         "sha256": "42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37",
     }
+
+
+def test_cli_rejects_a_topic_outside_the_pinned_qrels_population(tmp_path: Path) -> None:
+    run_path = _write(tmp_path / "run.trec", "999 Q0 doc 1 1 fixed-run\n")
+    qrels_path = Path(
+        "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/"
+        "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
+    )
+    output_path = tmp_path / "evaluation.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.competition_retrieval_evaluation",
+            "--run",
+            str(run_path),
+            "--qrels",
+            str(qrels_path),
+            "--topic",
+            "999",
+            "--output",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "evaluation topics outside the qrels population: 999" in completed.stderr
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize("input_kind", ["run", "qrels"])
+@pytest.mark.parametrize("alias_kind", ["same", "symlink", "hardlink"])
+def test_cli_rejects_output_that_aliases_an_input(
+    tmp_path: Path,
+    alias_kind: str,
+    input_kind: str,
+) -> None:
+    run_path = _write(tmp_path / "run.trec", "31 Q0 doc 1 1 fixed-run\n")
+    source_qrels = Path(
+        "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/"
+        "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
+    )
+    qrels_path = tmp_path / "projected.qrels"
+    shutil.copyfile(source_qrels, qrels_path)
+    original_run = run_path.read_bytes()
+    original_qrels = qrels_path.read_bytes()
+    aliased_input = run_path if input_kind == "run" else qrels_path
+
+    if alias_kind == "same":
+        output_path = aliased_input
+    elif alias_kind == "symlink":
+        output_path = tmp_path / "evaluation.json"
+        output_path.symlink_to(aliased_input)
+    else:
+        output_path = tmp_path / "evaluation.json"
+        os.link(aliased_input, output_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.competition_retrieval_evaluation",
+            "--run",
+            str(run_path),
+            "--qrels",
+            str(qrels_path),
+            "--topic",
+            "31",
+            "--output",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "output path must not alias the run or qrels input" in completed.stderr
+    assert run_path.read_bytes() == original_run
+    assert qrels_path.read_bytes() == original_qrels

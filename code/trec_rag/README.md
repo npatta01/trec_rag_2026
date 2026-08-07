@@ -404,11 +404,12 @@ report in an ignored private output directory:
 ```
 
 Repeat `--topic ID` for the exact population represented by an aggregate run.
-The evaluator fails closed on missing or extra topics and on malformed TREC
-rows, non-`Q0` rows, invalid ranks or scores, duplicate ranks or document IDs,
-conflicting run tags, ranks that are not dense from 1 in per-topic file order,
-and increasing per-topic scores. The CLI accepts only the pinned RAG 2025
-assessor variant
+Every selected ID must belong to the pinned 22-topic qrels population; unknown
+IDs are rejected before inputs are read. The evaluator fails closed on missing
+or extra run topics and on malformed TREC rows, non-`Q0` rows, invalid ranks or
+scores, duplicate ranks or document IDs, conflicting run tags, ranks that are
+not dense from 1 in per-topic file order, and increasing per-topic scores. The
+CLI accepts only the pinned RAG 2025 assessor variant
 `rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1`, whose required
 SHA-256 is
 `42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37`.
@@ -417,11 +418,20 @@ use `0` in column 2, contain only integer grades from 0 through 4, and contain
 no duplicate topic/document pair. A same-named or structurally plausible file
 with different bytes is rejected rather than labeled as the pinned assessor.
 
-The canonical JSON report records SHA-256 hashes of the exact run and qrels
-inputs, names the pinned assessor variant, explicitly labels the evidence as
-projected development qrels, and reports aggregate plus per-topic metrics. The
-default suite pairs judged counts and rates with relevance diagnostics at
-cutoffs 10, 50, and 100; repeat `--metric NAME@CUTOFF` to replace that suite.
+Each input is read once into an immutable byte snapshot. Parsing, metrics, and
+SHA-256 provenance all consume that same snapshot, so replacing a file during
+evaluation cannot mix identities. The canonical JSON report names the pinned
+assessor variant and its fixed repository-relative path independently of how
+the caller spelled `--qrels`; `assessor.input_path` preserves that invocation
+path. It explicitly labels the evidence as projected development qrels and
+reports aggregate plus per-topic metrics.
+
+The output must be distinct from both inputs. Direct path reuse, normalized or
+symlink aliases, and hardlinks are rejected before writing. The default metric
+suite pairs judged counts and rates with relevance diagnostics at cutoffs 10,
+50, and 100. Repeated `--metric NAME@CUTOFF` values must be unique, use a
+supported metric, and have a positive cutoff; `--relevance-threshold` must be
+an integer from 1 through 4.
 
 The CUDA dependency group pins the same `sentence-transformers`, `transformers`,
 and `numpy` versions the ROCm group resolves to, so reranker cache identities
