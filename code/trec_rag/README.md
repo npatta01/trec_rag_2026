@@ -19,6 +19,51 @@ boundaries:
   including exact string contents. Native JSONL remains authoritative for
   source bytes such as whitespace and object-key order.
 
+## Retrieval nugget coverage HTML reports
+
+Use the year-neutral report route to view, render, browse, summarize, or
+inspect completed retrieval nugget coverage results. It makes zero hosted
+calls and consumes only an authenticated handoff manifest plus completed
+coverage bundles:
+
+```bash
+.venv/bin/python -m trec_rag.retrieval_nugget_coverage_report \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --coverage-root COVERAGE_ROOT \
+  --output REPORT_HTML \
+  --topic TOPIC_ID
+```
+
+Inputs are the handoff manifest, coverage root, local `.html` output path, and
+optional repeated topic selectors. Outputs are a standalone deterministic HTML
+file and a JSON receipt with the selected topic count, output SHA-256, and
+`hosted_calls: 0`. The loader validates authenticated handoff identities,
+complete coverage bundles, checkpoint hashes, topic selectors, and the output
+path before atomic publication. Subnarratives and BM25 queries are retrieval
+plan context; canonical nuggets are the judgment evidence representation.
+Selected passages, full-text archives, document identifiers, provider bodies,
+credentials, and private work directories are not report inputs.
+
+The HTML has overview search/filter/sort controls, topic detail navigation,
+back/forward history, disclosure panels, focus restoration, and print styles.
+Choose system, light, or dark theme from the page; the default follows the
+system preference. Keep the canonical report and source bundles private. A
+presentation copy requires a privacy review and the existing tailnet-only
+portal; do not expose a new listener or public endpoint.
+
+Validate the route with:
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_retrieval_nugget_coverage.py \
+  code/tests/test_retrieval_nugget_coverage_report.py \
+  code/tests/test_retrieval_nugget_coverage_skill.py -q
+
+.venv/bin/python -m compileall -q \
+  code/trec_rag/retrieval_nugget_coverage.py \
+  code/trec_rag/retrieval_nugget_coverage_report.py
+```
+
 ## Temporary organizer Pi reproduction harness
 
 `trec_rag.experiments.organizer_pi` is a temporary experimental reproduction
@@ -1752,6 +1797,111 @@ present. Start cache-only, use `--run-judge --judge-limit 1` for a one-call prob
 then resume against the same cache. Do not run concurrent judging commands against one cache;
 provider failures and detected label conflicts are counted in the private receipt and remain
 resumable. External or legacy judgment files cannot be imported.
+
+### `retrieval_nugget_coverage.py`
+
+Evaluates how completely one topic's canonical retrieval nuggets cover a
+frozen, narrative-derived answer-obligation plan. The only input is an
+authenticated `generation_handoff_manifest.json` plus one topic ID. The
+adapter reads that topic's narrative and ordered claim-hint `claim_id`/`text`
+pairs; it does not read selected passages or other retrieval metadata.
+
+The CLI exposes only these flags:
+
+- `--handoff-manifest PATH` — the authenticated handoff manifest.
+- `--topic TOPIC_ID` — exactly one topic for this invocation.
+- `--work-dir PATH` — optional private artifact directory; by default it is
+  beneath the manifest's parent.
+- `--planner-model NAME` and `--judge-model NAME` — model identities sealed in
+  the evaluator manifest; both planner and judge defaults are
+  `openai/gpt-5.6-sol`.
+- `--mode create|resume` — create a new namespace or revalidate and reuse
+  complete stages.
+- `--allow-hosted-calls` — explicitly opt in to missing planner/judge calls;
+  it is off by default.
+
+The cache-only default makes no hosted calls. A cache-only `create` is for a
+fresh namespace: it checks the authenticated input and reports missing stages
+without writing partial state, so the identical `create` command can be rerun
+with `--allow-hosted-calls` after authorization. For an existing or partial
+work directory, use `--work-dir WORK_DIR --mode resume` on both the cache-only
+and authorized invocations; the second invocation is identical except for
+`--allow-hosted-calls`. `resume` revalidates hash-bound artifacts and reuses
+valid planner and judge stages; it never replaces a valid frozen plan or
+deletes state. Cache-only resume still makes zero hosted calls, but after
+validating cached planner and judge stages it may locally publish missing
+`report.json` and `manifest.json`; only a fresh cache-only `create` is
+write-free. A hosted run makes at most one narrative-only planner call and one
+all-nugget judge call.
+
+An explicit user request to evaluate, score, or judge retrieval nugget coverage
+already authorizes only those planner and judge calls for the named topic and
+the selected provider/model identities. Inspect, explain, or debug requests
+alone do not authorize hosted calls.
+
+The private work directory contains, in order, `input.json` (hashes and alias
+identities only), `plan.json`, `judgments.json`, `report.json`, and the
+manifest-last `manifest.json`. The latter binds the handoff, narrative,
+ordered nugget hashes, schema and prompt versions, model identities, artifact
+hashes, and the truthful `completed_stages` count (the number of sealed planner
+and judge stages), plus safe provider metadata. The receipt's `hosted_calls`
+counts only actual calls made by the current invocation, while
+`reused_stages` lists only stages reused during that invocation. Keep this
+bundle and any provider responses outside git.
+
+Authenticated narrative and claim-hint text are preserved byte-for-byte,
+including multiline, surrounding whitespace, and legitimate Unicode format
+characters such as U+200D (ZWJ), and hashed without normalization; empty or
+whitespace-only text and unsafe C0/Cc controls are rejected (newline, carriage
+return, and tab remain permitted). Model-output text remains strict and
+trimmed. Required and unmapped narrative spans are exact nonblank narrative
+substrings; they may preserve exact surrounding whitespace and newline,
+carriage-return, or tab characters, with at most 8 spans per obligation, 40
+unmapped spans, and 1,000 characters per span. Resume rejects impossible
+artifact order and unknown persisted nugget IDs before any backend call, and
+topic IDs unsafe for work-directory derivation are rejected before path
+resolution. Persisted planner and judge request digests must be lowercase
+64-hex SHA-256 values matching the exact current serialized request before
+either stage is reused.
+
+Both structured OpenRouter requests require provider parameter support, deny
+provider data collection, disable reasoning, omit unsupported sampling
+temperature, use seed zero, and set `stream=false`; semantic retries are
+disabled. Planner and judge prompts/schemas state the exact-substring,
+span-kind, span-bound, obligation-count, required-obligation, and
+label/alias/`missing_elements` invariants. The planner prompt identity is v4
+and the judge prompt identity remains v2. The 8192-token completion budget is
+bound into the request identities. In-memory and persisted provider metadata
+use the same secret-safe allowlist.
+
+Scoring maps `full`, `partial`, and `unsupported` to `1.0`, `0.5`, and `0.0`.
+For each facet containing required obligations, average its required labels;
+`required_coverage` is the equal (facet-macro) average of those facet scores.
+The report also includes `strict_full_rate` as an obligation-micro rate (full
+required obligations divided by all required obligations), a flat
+supplemental-obligation average (or `null` when none exist), and
+`label_counts`, which includes both required and supplemental obligations,
+plus per-obligation resolved nugget IDs and uncited-nugget diagnostics. Receipt
+scores are rounded for display; report artifacts retain full precision.
+
+The `retrieval_nugget_coverage_v2` evaluator assumes canonical retrieval
+nuggets faithfully represent the selected passages from which they were
+derived; it never reopens passages. This is a planner-derived diagnostic, not
+ground truth. A low score cannot separate retrieval, selection, and
+canonicalization failures, and scores are not comparable across evaluator
+schemas, prompt versions, or model identities. The evaluator does not search,
+rerank, generate answers, shard oversized judge requests, or aggregate topics.
+
+Run the targeted regression suite (all backends are injected fakes, so it makes
+no hosted calls):
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_retrieval_nugget_coverage.py \
+  code/tests/test_retrieval_nugget_coverage_skill.py \
+  code/tests/test_competition_debug_report_skill.py \
+  code/tests/test_generation_handoff.py -q
+```
 
 RAGDoll is a declared project dependency backed by the pinned `ragdoll/` submodule. Initialize
 the repository submodules as documented in the root README before running environment setup.

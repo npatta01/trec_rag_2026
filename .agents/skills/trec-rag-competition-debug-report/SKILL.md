@@ -130,6 +130,108 @@ The judge cache is shared across runs and keyed only by the effective judge requ
 
 Nugget coverage stays unavailable in this workflow even when gold nuggets are supplied, because it also requires completed nugget assignments, which this command does not produce. Supplying `--gold-nuggets` only sharpens the recorded reason.
 
+## Retrieval Nugget Coverage
+
+Use the year-neutral Retrieval Nugget Coverage evaluator for one narrative and
+its ordered canonical retrieval nugget text from an authenticated handoff. It
+is a separate diagnostic from the completed-run report above: it never runs
+retrieval, reranking, or generation, and it never receives selected passages.
+
+The default is cache-only and makes zero hosted calls. Cache-only resume makes
+zero hosted calls; the `resume` mode, after validating cached planner and judge
+stages, may locally publish missing derived `report.json`/`manifest.json`
+artifacts. Only a fresh cache-only create is write-free. For a fresh namespace,
+start with exactly this read-only `create` command; it writes no state and
+reports which planner or judge stages are missing:
+
+```bash
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID
+```
+
+If the user's request explicitly asks to evaluate, score, or judge retrieval
+nugget coverage, it is already explicit authorization for only these planner
+and judge calls for the named topic, OpenRouter provider, and stated (or
+default) model identities; do not ask again. A request that only asks to
+inspect, explain, debug, or audit does not authorize hosted calls, so ask once
+when a stage is missing. Before egress in an authorized path, state the
+provider (OpenRouter), the planner and judge model identities (defaults are
+`openai/gpt-5.6-sol` for each, or the exact `--planner-model` and
+`--judge-model` overrides), and that the maximum of two hosted calls is one
+narrative-only planner call followed by one all-nugget judge call. The payload
+categories are the one narrative, the derived frozen plan, and canonical
+retrieval nugget text. Then rerun the identical command with the one opt-in
+flag:
+
+```bash
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID \
+  --allow-hosted-calls
+```
+
+For an existing or partial work directory, use the same two-command
+cache-first sequence with `--work-dir WORK_DIR --mode resume` on both commands:
+
+```bash
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID \
+  --work-dir WORK_DIR \
+  --mode resume
+
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID \
+  --work-dir WORK_DIR \
+  --mode resume \
+  --allow-hosted-calls
+```
+
+The second command in either branch is identical to the first except for
+`--allow-hosted-calls`.
+
+That authorization covers only this named topic, provider, and the stated
+planner/judge identities. Never use this route to run retrieval, reranking,
+generation, passage egress, another topic, another model or provider, or any
+publication or serving action. Keep the handoff, private work directory, model
+responses, and report outside git and do not expose them through a listener.
+
+### Zero-hosted-call HTML report
+
+Use this existing-skill route when the user asks to view, render, browse,
+summarize, or inspect retrieval nugget coverage results. It performs no
+planner, judge, retrieval, reranking, generation, or backend calls. The
+report's allowlist is the authenticated handoff manifest, the completed
+coverage bundle root, repeated topic selectors, and a local `.html` output
+path. Subnarratives and BM25 queries are retrieval-plan context; canonical
+nuggets are the judgment evidence representation. Do not pass raw passages,
+document archives or identifiers, provider responses, credentials, private
+work directories, reference-label files, or other unlisted pipeline artifacts.
+
+Run the exact zero-hosted-call command below. Repeat `--topic TOPIC_ID` to
+preserve a deliberate topic order; omit it to render every topic in the
+authenticated handoff order:
+
+```bash
+.venv/bin/python -m trec_rag.retrieval_nugget_coverage_report \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --coverage-root COVERAGE_ROOT \
+  --output REPORT_HTML \
+  --topic TOPIC_ID
+```
+
+Read the compact receipt and verify `status`, `selected_topic_count`,
+`output_sha256`, and `hosted_calls: 0`. Keep the source inputs and report
+private. Before serving a presentation copy, perform a privacy review and use
+the existing tailnet-only portal; never expose it through a new listener or a
+public endpoint.
+
 ## RAGDoll Evaluation
 
 Run this section only with explicit evaluation authorization.
