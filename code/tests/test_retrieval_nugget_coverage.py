@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from trec_rag.generation_handoff import (
     TopicSourceReceipts,
     write_generation_handoff,
 )
+import trec_rag.retrieval_nugget_coverage as coverage_module
 from trec_rag.retrieval_nugget_coverage import (
     BackendReply,
     CoverageNugget,
@@ -899,3 +901,212 @@ def test_cli_cache_only_emits_one_safe_json_error(tmp_path: Path, capsys: pytest
     assert "OPENROUTER_API_KEY" not in captured.out
     payload = json.loads(captured.out)
     assert payload["error"]["stage"] == "cache"
+
+
+def test_manifest_rejects_unknown_fields_and_changed_provider_or_call_history(
+    tmp_path: Path,
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "manifest"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN, metadata={"provider": "planner"})]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen), metadata={"provider": "judge"})]),
+    )
+
+    manifest_path = work_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["hosted_calls"] = 99
+    manifest["provider_metadata"]["planner"]["provider"] = "tampered-provider"
+    manifest["unexpected"] = True
+    manifest_path.write_bytes(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode())
+
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=RecordingBackend([]),
+            judge=RecordingBackend([]),
+        )
+
+
+def test_interrupted_then_resumed_stages_seal_deterministic_call_count(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "partial"
+    class FailingJudge:
+        def complete(self, request: CoverageModelRequest) -> BackendReply:
+            raise RuntimeError("simulated interruption")
+
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir),
+            planner=RecordingBackend([_reply(VALID_PLAN)]),
+            judge=FailingJudge(),
+        )
+
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir, mode="resume"),
+        planner=RecordingBackend([]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+    manifest = json.loads((work_dir / "manifest.json").read_text())
+    assert manifest["hosted_calls"] == 2
+
+
+def test_openrouter_does_not_retry_permanent_transport_errors() -> None:
+    transport = FakeOpenRouterTransport([ValueError("permanent configuration failure")])
+    backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "key"}, transport=transport, transport_max_attempts=3
+    )
+
+    with pytest.raises(RuntimeError, match="transport failed"):
+        backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+    assert len(transport.requests) == 1
+
+
+def test_cli_argument_errors_are_safe_json_and_do_not_echo_credentials(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["--mode", "fake-secret"])
+
+    captured = capsys.readouterr()
+    assert code != 0
+    assert len(captured.out.splitlines()) == 1
+    assert "fake-secret" not in captured.out
+    payload = json.loads(captured.out)
+    assert payload["error"]["stage"] == "config"
+
+
+def test_empty_narrative_is_rejected_before_model_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff = _coverage_handoff()
+    object.__setattr__(handoff.topics[0], "narrative", "")
+    monkeypatch.setattr(coverage_module, "load_generation_handoff", lambda _path: handoff)
+
+    with pytest.raises(NuggetCoverageError, match="narrative is empty"):
+        coverage_input_from_handoff(tmp_path / "ignored.json", "topic-coverage")
+
+
+@pytest.mark.parametrize("change", ["narrative", "nugget_order"])
+def test_resume_rejects_changed_authenticated_handoff_projection(
+    tmp_path: Path, change: str
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path / "original")
+    work_dir = tmp_path / "projection"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    original = _coverage_handoff()
+    topic = original.topics[0]
+    if change == "narrative":
+        changed_topic = replace(topic, narrative=NARRATIVE + " A changed sentence.")
+    else:
+        changed_topic = replace(topic, claim_hints=tuple(reversed(topic.claim_hints)))
+    changed_handoff = replace(original, topics=(changed_topic,))
+    changed_path = tmp_path / f"changed-{change}" / "generation_handoff_manifest.json"
+    write_generation_handoff(changed_path, changed_handoff)
+
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(changed_path, work_dir, mode="resume"),
+            planner=RecordingBackend([]),
+            judge=RecordingBackend([]),
+        )
+
+
+def test_resume_rejects_changed_prompt_or_schema_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "identity"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    monkeypatch.setattr(coverage_module, "PLANNER_PROMPT_VERSION", "changed-prompt")
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=RecordingBackend([]), judge=RecordingBackend([]),
+        )
+
+
+def test_openrouter_rejects_reflected_credential_without_leaking_it() -> None:
+    secret = "actual-fake-credential"
+    transport = FakeOpenRouterTransport([
+        _openrouter_response({"schema_version": "x", "reflected": secret})
+    ])
+    backend = OpenRouterCoverageBackend(environ={"OPENROUTER_API_KEY": secret}, transport=transport)
+
+    with pytest.raises(RuntimeError) as caught:
+        backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+    assert secret not in str(caught.value)
+    assert len(transport.requests) == 1
+
+
+def test_manifest_is_published_last_and_cli_create_then_resume_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "cli"
+    published: list[str] = []
+    original_publish = coverage_module._publish_once
+
+    def recording_publish(path: Path, payload: dict[str, object]) -> str:
+        published.append(Path(path).name)
+        return original_publish(path, payload)
+
+    monkeypatch.setattr(coverage_module, "_publish_once", recording_publish)
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+
+    class FakeHostedBackend:
+        def complete(self, request: CoverageModelRequest) -> BackendReply:
+            if request.stage == "planner":
+                return _reply(VALID_PLAN)
+            return _reply(_judge_payload(frozen))
+
+    monkeypatch.setattr(coverage_module, "OpenRouterCoverageBackend", FakeHostedBackend)
+    create_code = main([
+        "--handoff-manifest", str(handoff_path), "--topic", "topic-coverage",
+        "--work-dir", str(work_dir), "--allow-hosted-calls",
+    ])
+    create_output = capsys.readouterr().out
+    resume_code = main([
+        "--handoff-manifest", str(handoff_path), "--topic", "topic-coverage",
+        "--work-dir", str(work_dir), "--mode", "resume",
+    ])
+    resume_output = capsys.readouterr().out
+
+    assert create_code == 0 and resume_code == 0
+    assert json.loads(create_output)["status"] == "complete"
+    assert json.loads(resume_output)["status"] == "complete"
+    assert published == ["input.json", "plan.json", "judgments.json", "report.json", "manifest.json"]
+
+
+def test_cli_redacts_obligation_span_and_credential_text_on_safe_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    code = main([
+        "--handoff-manifest", str(handoff_path), "--topic", "topic-coverage",
+        "--work-dir", str(tmp_path / "safe"), "--planner-model", "actual-fake-credential",
+    ])
+    output = capsys.readouterr().out
+
+    assert code != 0
+    for sensitive in (
+        NARRATIVE,
+        "Describe the projected cost and its assumptions.",
+        "cost and assumptions",
+        "actual-fake-credential",
+    ):
+        assert sensitive not in output

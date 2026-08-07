@@ -448,9 +448,11 @@ class OpenRouterCoverageBackend:
                     raise TypeError("transport must provide send(request)")
                 self._transport_invocation_count += 1
                 response = send(sent)
-            except Exception:
+            except (TimeoutError, ConnectionError):
                 if attempt < self._transport_max_attempts:
                     continue
+                raise RuntimeError("OpenRouter transport failed") from None
+            except Exception:
                 raise RuntimeError("OpenRouter transport failed") from None
             if not isinstance(response, FacetResponse):
                 raise RuntimeError("OpenRouter transport returned an invalid response")
@@ -678,12 +680,6 @@ def run_coverage_evaluation(
             raise NuggetCoverageError("cache", "cache-only is missing planner and judge stages")
         _validate_input_artifact(input_path, bound)
         existing_manifest = _load_artifact(work_dir / "manifest.json") if (work_dir / "manifest.json").exists() else None
-        if existing_manifest is not None:
-            existing_hashes = {
-                name: _sha256_file(work_dir / name)
-                for name in ("input.json", "plan.json", "judgments.json", "report.json")
-            }
-            _validate_manifest(existing_manifest, bound, identity, existing_hashes)
         reused_stages = []
 
     plan: FrozenPlan | None = None
@@ -698,6 +694,13 @@ def run_coverage_evaluation(
     judgments_path = work_dir / "judgments.json"
     report_path = work_dir / "report.json"
 
+    if existing_manifest is not None and not all(
+        path.exists() for path in (plan_path, judgments_path, report_path)
+    ):
+        raise NuggetCoverageError(
+            "persistence", "manifest exists without every preceding artifact"
+        )
+
     if config.mode == "resume" and plan_path.exists():
         plan, planner_request_sha256, planner_metadata = _load_plan_artifact(
             plan_path, bound.narrative, identity
@@ -710,6 +713,22 @@ def run_coverage_evaluation(
             judgments_path, plan, bound.nuggets, identity
         )
         reused_stages.append("judge")
+
+    if existing_manifest is not None:
+        assert plan is not None and judgments is not None
+        existing_hashes = {
+            name: _sha256_file(work_dir / name)
+            for name in ("input.json", "plan.json", "judgments.json", "report.json")
+        }
+        _validate_manifest(
+            existing_manifest,
+            bound,
+            identity,
+            existing_hashes,
+            planner_metadata,
+            judge_metadata,
+            _manifest_call_count(plan, judgments),
+        )
 
     backend: CoverageModelBackend | None = None
 
@@ -787,11 +806,19 @@ def run_coverage_evaluation(
         artifact_hashes,
         planner_metadata,
         judge_metadata,
-        hosted_calls,
+        _manifest_call_count(plan, judgments),
     )
     manifest_path = work_dir / "manifest.json"
     if existing_manifest is not None:
-        _validate_manifest(existing_manifest, bound, identity, artifact_hashes)
+        _validate_manifest(
+            existing_manifest,
+            bound,
+            identity,
+            artifact_hashes,
+            planner_metadata,
+            judge_metadata,
+            _manifest_call_count(plan, judgments),
+        )
     else:
         _publish_once(manifest_path, manifest_payload)
     artifact_hashes["manifest.json"] = _sha256_file(manifest_path)
@@ -950,6 +977,14 @@ def _manifest_payload(
             "judge": _safe_provider_metadata(judge_metadata),
         },
     }
+
+
+def _manifest_call_count(
+    plan: FrozenPlan | None, judgments: Sequence[CoverageJudgment] | None
+) -> int:
+    """Return deterministic completed-stage provenance for the sealed manifest."""
+
+    return int(plan is not None) + int(judgments is not None)
 
 
 def _safe_provider_metadata(metadata: Mapping[str, object]) -> dict[str, object]:
@@ -1145,17 +1180,19 @@ def _validate_manifest(
     bound: BoundCoverageInput,
     identity: EvaluatorIdentity,
     artifact_hashes: Mapping[str, str],
+    planner_metadata: Mapping[str, object],
+    judge_metadata: Mapping[str, object],
+    hosted_calls: int,
 ) -> None:
-    if (
-        payload.get("schema_version") != MANIFEST_ARTIFACT_SCHEMA_VERSION
-        or payload.get("evaluator_schema_version") != EVALUATOR_SCHEMA_VERSION
-        or payload.get("identity") != _identity_payload(identity)
-        or payload.get("topic_id") != bound.topic_id
-        or payload.get("manifest_sha256") != bound.manifest_sha256
-        or payload.get("narrative_sha256") != bound.narrative_sha256
-        or payload.get("nugget_text_sha256s") != list(bound.nugget_text_sha256s)
-        or payload.get("artifact_hashes") != dict(artifact_hashes)
-    ):
+    expected = _manifest_payload(
+        bound,
+        identity,
+        artifact_hashes,
+        planner_metadata,
+        judge_metadata,
+        hosted_calls,
+    )
+    if dict(payload) != expected:
         raise NuggetCoverageError("persistence", "manifest identity or artifact hash does not match")
 
 
@@ -1802,8 +1839,14 @@ def _validate_nuggets(
     return tuple(rows)
 
 
+class _SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        del message
+        raise NuggetCoverageError("config", "invalid command-line arguments")
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate one topic's canonical retrieval nugget coverage")
+    parser = _SafeArgumentParser(description="Evaluate one topic's canonical retrieval nugget coverage")
     parser.add_argument("--handoff-manifest", type=Path, required=True)
     parser.add_argument("--topic", required=True)
     parser.add_argument("--work-dir", type=Path, default=None)
