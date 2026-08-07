@@ -417,26 +417,6 @@ def test_production_worker_closes_both_score_caches(
     topic_raises: bool,
 ) -> None:
     """Catches worker exit while either scorer still owns a SQLite connection."""
-    base = load_facet_pilot_config(V2_CONFIG)
-    config = replace(
-        base,
-        root_dir=tmp_path,
-        experiment=replace(base.experiment, id="score-cache-lifecycle"),
-        topics_path=tmp_path / "topics.tsv",
-    )
-    topic = Topic("topic-a", "", "narrative")
-    config_bytes = b"pinned score cache lifecycle config\n"
-    config_path = (tmp_path / "config.yaml").resolve()
-    config_path.write_bytes(config_bytes)
-    job = TopicJob(
-        topic_id=topic.id,
-        run_id=config.run_id,
-        config_path=config_path,
-        config_bytes=config_bytes,
-        config_sha256=sha256(config_bytes).hexdigest(),
-        topic_root=(config.output_dir / topic.id).resolve(),
-    )
-
     class TrackingCache:
         def __init__(self) -> None:
             self.close_calls = 0
@@ -451,7 +431,50 @@ def test_production_worker_closes_both_score_caches(
             self.score_cache = TrackingCache()
             caches.append(self.score_cache)
 
-    projection = SimpleNamespace(topic_id=topic.id, manifest_sha256="a" * 64)
+    job = _patch_score_cache_lifecycle_worker(
+        tmp_path,
+        monkeypatch,
+        passage_scorer_factory=TrackingScorer,
+        candidate_scorer_factory=TrackingScorer,
+    )
+    projection = SimpleNamespace(topic_id=job.topic_id, manifest_sha256="a" * 64)
+
+    def run_topic(*_args, **_kwargs):
+        if topic_raises:
+            raise RuntimeError("topic run failed")
+        return SimpleNamespace(topic_id=job.topic_id, projection_receipt=projection)
+
+    monkeypatch.setattr(competition_retrieval, "_run_topic", run_topic)
+
+    if topic_raises:
+        with pytest.raises(RuntimeError, match="topic run failed"):
+            competition_retrieval._run_production_topic_job(job)
+    else:
+        receipt = competition_retrieval._run_production_topic_job(job)
+        assert receipt.projection_manifest_sha256 == projection.manifest_sha256
+
+    assert len(caches) == 2
+    assert [cache.close_calls for cache in caches] == [1, 1]
+
+
+def _patch_score_cache_lifecycle_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    passage_scorer_factory,
+    candidate_scorer_factory,
+) -> TopicJob:
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(
+        base,
+        root_dir=tmp_path,
+        experiment=replace(base.experiment, id="score-cache-failure-lifecycle"),
+        topics_path=tmp_path / "topics.tsv",
+    )
+    topic = Topic("topic-a", "", "narrative")
+    config_bytes = b"pinned score cache failure lifecycle config\n"
+    config_path = (tmp_path / "config.yaml").resolve()
+    config_path.write_bytes(config_bytes)
 
     monkeypatch.setattr(
         competition_retrieval,
@@ -489,40 +512,129 @@ def test_production_worker_closes_both_score_caches(
     monkeypatch.setattr(
         competition_retrieval,
         "MixedbreadPassageScorer",
-        TrackingScorer,
+        passage_scorer_factory,
     )
     monkeypatch.setattr(
         competition_retrieval,
         "MixedbreadSentencePairScorer",
-        TrackingScorer,
+        candidate_scorer_factory,
     )
     monkeypatch.setattr(
         competition_retrieval,
         "LocalMiniLMSimilarity",
         lambda *_args, **_kwargs: object(),
     )
-
-    def run_topic(*_args, **_kwargs):
-        if topic_raises:
-            raise RuntimeError("topic run failed")
-        return SimpleNamespace(topic_id=topic.id, projection_receipt=projection)
-
-    monkeypatch.setattr(competition_retrieval, "_run_topic", run_topic)
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_run_topic",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            topic_id=topic.id,
+            projection_receipt=SimpleNamespace(
+                topic_id=topic.id,
+                manifest_sha256="a" * 64,
+            ),
+        ),
+    )
     monkeypatch.setattr(
         competition_retrieval,
         "_topic_completion_for_dispatch",
         lambda *_args: ("complete", "coverage_sufficient"),
     )
+    return TopicJob(
+        topic_id=topic.id,
+        run_id=config.run_id,
+        config_path=config_path,
+        config_bytes=config_bytes,
+        config_sha256=sha256(config_bytes).hexdigest(),
+        topic_root=(config.output_dir / topic.id).resolve(),
+    )
 
-    if topic_raises:
-        with pytest.raises(RuntimeError, match="topic run failed"):
-            competition_retrieval._run_production_topic_job(job)
-    else:
-        receipt = competition_retrieval._run_production_topic_job(job)
-        assert receipt.projection_manifest_sha256 == projection.manifest_sha256
 
-    assert len(caches) == 2
-    assert [cache.close_calls for cache in caches] == [1, 1]
+@pytest.mark.parametrize("failing_cache", ["passage", "sentence"])
+def test_production_worker_attempts_both_score_cache_closes_when_one_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failing_cache: str,
+) -> None:
+    """Catches cleanup aborting after the first score-cache close failure."""
+    close_calls = {"passage": 0, "sentence": 0}
+    close_order: list[str] = []
+
+    class TrackingCache:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            close_calls[self.name] += 1
+            close_order.append(self.name)
+            if self.name == failing_cache:
+                raise RuntimeError(f"{self.name} score cache close failed")
+
+    def scorer_factory(name: str):
+        return lambda *_args, **_kwargs: SimpleNamespace(
+            score_cache=TrackingCache(name)
+        )
+
+    job = _patch_score_cache_lifecycle_worker(
+        tmp_path,
+        monkeypatch,
+        passage_scorer_factory=scorer_factory("passage"),
+        candidate_scorer_factory=scorer_factory("sentence"),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^{failing_cache} score cache close failed$",
+    ):
+        competition_retrieval._run_production_topic_job(job)
+
+    assert close_order == ["sentence", "passage"]
+    assert close_calls == {"passage": 1, "sentence": 1}
+
+
+def test_production_worker_closes_first_score_cache_when_second_scorer_init_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches delayed cleanup registration leaking the first scorer's cache."""
+
+    class TrackingCache:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    passage_cache = TrackingCache()
+    passage_init_calls = 0
+    sentence_init_calls = 0
+
+    def passage_scorer(*_args, **_kwargs):
+        nonlocal passage_init_calls
+        passage_init_calls += 1
+        return SimpleNamespace(score_cache=passage_cache)
+
+    def failing_sentence_scorer(*_args, **_kwargs):
+        nonlocal sentence_init_calls
+        sentence_init_calls += 1
+        raise RuntimeError("sentence scorer construction failed")
+
+    job = _patch_score_cache_lifecycle_worker(
+        tmp_path,
+        monkeypatch,
+        passage_scorer_factory=passage_scorer,
+        candidate_scorer_factory=failing_sentence_scorer,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"^sentence scorer construction failed$",
+    ):
+        competition_retrieval._run_production_topic_job(job)
+
+    assert passage_init_calls == 1
+    assert sentence_init_calls == 1
+    assert passage_cache.close_calls == 1
 
 
 @pytest.mark.parametrize("operation_exists", [True, False], ids=("sealed", "missing"))
