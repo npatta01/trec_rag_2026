@@ -57,8 +57,16 @@ ClimbMix, projected RAG 2025 development qrels.
   `820d751d02f036070b528a1982034393e0954dd8928e2c278901cea3844f32d6`.
   Both staging and shared-cache ROCm replays authenticated with zero work and
   identical 186-row rankings apart from the intentional run tag. Topic-31
-  projected-qrels evaluation passed; a paid two-topic preview is next, with no
-  further launch authorized yet.
+  projected-qrels evaluation passed.
+- The two-topic RAG25 concurrency canary `rag25-cache-14-37` completed on one
+  RunPod A40 with both topic processes active concurrently. The job exited 0,
+  dstack auto-stopped the host, and final compute cost was $0.3687. Both exact
+  private HF prefixes contain only the immutable archive and completion marker;
+  local verification, isolated staging merge, two-worker zero-work replay,
+  projected-qrels evaluation, main-cache promotion, and a second zero-work
+  replay all passed. The remaining 19 prefixes are exactly empty. Ten
+  remaining-task previews were declined without submission; a new explicit
+  bulk authorization is the next live-compute gate.
 - The 2025 topic file contains exactly 22 numeric IDs:
   `14, 31, 37, 58, 72, 84, 144, 161, 200, 213, 219, 224, 225, 233, 273,
   300, 407, 477, 499, 515, 707, 897`.
@@ -927,7 +935,7 @@ ClimbMix, projected RAG 2025 development qrels.
 - Produces ten two-topic tasks and one singleton task, each capped at one 48 GB
   GPU, two isolated one-worker topic processes, `$1/hour`, and five hours.
 
-- [ ] **Step 1: Build and validate the exact batch manifest**
+- [x] **Step 1: Build and validate the exact batch manifest**
 
   Use these deterministic batches:
 
@@ -948,19 +956,41 @@ ClimbMix, projected RAG 2025 development qrels.
   Before provisioning, assert the union with completed topic `31` equals the
   exact 22-topic TSV set with no duplicates or omissions.
 
-- [ ] **Step 2: Build the measured cost, call, and capacity gate**
+  Evidence: the manifest contains ten pairs plus singleton `897`; its union
+  with topic `31` equals the exact 22-topic TSV population. Topics `14` and
+  `37` are now complete, leaving exactly 19 topics in nine pairs plus the
+  singleton.
+
+- [x] **Step 2: Build the measured cost, call, and capacity gate**
 
   From topic `31`, record observed elapsed time, dstack price and actual cost,
   planning/Pyserini/model/canonicalization call counts, and compressed and
   uncompressed bundle sizes. Project expected and worst-case compute for the
-  remaining manifest (the configuration ceiling is 11 tasks x 5 hours x
-  $1/hour = $55, plus hosted calls). Project disk required while downloads,
-  aggregate staging, and the main shared cache coexist, then check free space
-  with `df`. Report topic list, immutable HF prefixes, expected/worst compute,
-  hosted-call estimate, and storage requirement to the user. No
-  remaining-topic launch is authorized by this calculation alone.
+  remaining manifest. The original pre-canary ceiling was 11 tasks x 5 hours
+  x $1/hour = $55; after the completed `14,37` canary, the current remaining
+  ceiling is 10 tasks x 5 hours x $1/hour = $50, plus hosted calls. Project
+  disk required while downloads, aggregate staging, and the main shared cache
+  coexist, then check free space with `df`. Report topic list, immutable HF
+  prefixes, expected/worst compute, hosted-call estimate, and storage
+  requirement to the user. No remaining-topic launch is authorized by this
+  calculation alone.
 
-- [ ] **Step 3: Preview every distinct task configuration**
+  Evidence: the two-topic run cost $0.3687 and took 50m16s from submission to
+  job completion, compared with $0.2182 and 29m50s for singleton topic `31`.
+  Topics `14` and `37` made two planning provider calls, 17 Pyserini network
+  calls, and 30 canonicalization provider calls; local scoring used 8,517
+  passage batches, 1,777 sentence batches, and 30 similarity batches. Their
+  archives total 135,983,371 bytes compressed and 444,149,221 declared member
+  bytes uncompressed. Extrapolating the measured pair plus the measured
+  singleton gives $3.5365 expected compute for the remaining nine pairs and
+  singleton; the unchanged ten-task configuration ceiling is $50.00. The
+  pair-rate call projection is 19 planning calls, about 162 Pyserini calls,
+  285 canonicalization provider calls, 80,912 passage batches, 16,882 sentence
+  batches, and 285 similarity batches. Downloads, staging, main-cache growth,
+  and ten retained pair-sized replay outputs project to about 13.1 GiB total;
+  2.4 TiB is currently free.
+
+- [x] **Step 3: Preview every distinct task configuration**
 
   Preserve each declined preview. Use safe names such as
   `rag25-cache-14-37`. Do not broaden GPU compatibility, price, providers, or
@@ -968,19 +998,65 @@ ClimbMix, projected RAG 2025 development qrels.
   every preview to Git/config/wrapper/launcher/template hashes; re-preview on
   drift.
 
-- [ ] **Step 4: Obtain offer- and hash-bound concurrency-canary authorization**
+  Evidence: all ten remaining task names were previewed and declined with exit
+  0; a post-preview dstack query found none submitted. Every preview returned
+  eight eligible offers and showed RunPod EU-SE-1 A40 at $0.44, RunPod EU-SE-1
+  A6000 at $0.53, and RunPod US-KS-2 A6000 at $0.53; dstack reported a $0.99
+  eligible maximum. HEAD remained
+  `bbeefbfe722ae47b3509ca9576d1e6d7cbdec63d`; config/wrapper/launcher/template
+  SHA-256 values were respectively
+  `69b3e98136e2195e47763ad07e4d22ecbf731b95f8f8dd408e83aec12a952036`,
+  `39bc760f05ba5a063654f84acc46b0d489a6a3d2c7cf93c98dbb8cf8e82d754d`,
+  `61138d527f350fbcdcbcb27c225303a879ac76edcce4e81b365ac55c1b05bd5e`,
+  and `5a2638267f49deddf7d3d569ece9b9af76c2c714267f3b840880f792503e9e4d`.
+
+- [x] **Step 4: Obtain offer- and hash-bound concurrency-canary authorization**
 
   Present the preserved `rag25-cache-14-37` offer, source hashes, observed
   topic-31 measurements, expected cost, and five-hour/$1-hour ceiling. Record
   explicit user authorization for this exact launch after the preview. A market
   or source change invalidates it and requires re-preview and re-authorization.
 
-- [ ] **Step 5: Run exactly one two-topic concurrency canary**
+  Evidence: the user's explicit `Go ahead` authorized only the preserved
+  `rag25-cache-14-37` preview at the reviewed HEAD and source hashes. They were
+  rechecked immediately before the single submission.
+
+- [x] **Step 5: Run exactly one two-topic concurrency canary**
 
   Launch only `rag25-cache-14-37`. Record host RAM, VRAM, cache growth, both
   process states, cost, and both independent publications. Download, verify,
   stage-merge, and offline-replay topics `14` and `37`. Do not launch a second
   pair until both topics pass and the evidence is recorded.
+
+  Evidence: run ID `802ad66e-a3ff-4f5e-9b39-d5d717ca6de8` used an on-demand
+  RunPod CA-MTL-1 A40 48 GB host with 50 GB RAM and 100 GB disk at $0.44/hour.
+  Both Python workers were observed live together; GPU utilization reached
+  100%, with at most 8,176 MiB observed allocated. The terminal job status was
+  `done`, exit 0, termination `done_by_runner`; the run auto-terminated as
+  `all_jobs_done`. Both per-topic success blocks and aggregate
+  `parallel_topic_processes=2` marker were present.
+
+  Topic `14` verified as archive
+  `6331cf4be787eed11b51849ee18cdb9c9c32d4d18017ccf059d88f380c79ad01`
+  (63,379,413 compressed bytes; 212,173,111 member bytes); topic `37` verified
+  as `bc36bb96a043c55799872ce1a391e8b44ef73b84a360c60aeacceb1d6cf3dc3f`
+  (72,603,958 compressed bytes; 231,976,110 member bytes). The isolated merge
+  ID is `7f282dc6b3738404b131f013ae73813e6d7703b8c5338bb31d3df27296716d62`;
+  the main-cache promotion ID is
+  `33b9d200d6aaaa66f7e74ad5ea9c5949654c918374fd34dbd37bfc7b9d73fc88`.
+  Two-worker staging and shared-cache replays finished in 4m35.95s and 4m37.86s
+  with about 9.34 GB maximum RSS. Both authenticated every cache-operation
+  receipt with zero misses, network/provider calls, and model batches; all 482
+  ranking rows matched in their first five fields, normalized ranking SHA-256
+  `3b8eacdd30384bf050eff81062a31d6ada2e6698808c425f5da2348df436dd73`.
+
+  The pinned projected-development evaluation report SHA-256 is
+  `b2526c085d160d68b880e9eafd9513a3b1aa4f2b32deee0a82ce4168bfaaa0b9`.
+  Aggregate nDCG@10 is 0.0 because neither top ten overlaps the projected
+  judgment pool; judged rates are 0.00/0.03/0.065 and recall is
+  0.0/0.001929/0.007714 at 10/50/100. Topic `14` has four judged documents at
+  100 and topic `37` has nine. These are low-coverage projected diagnostics,
+  not exhaustive official ground truth.
 
 - [ ] **Step 6: Obtain final measured bulk authorization**
 
@@ -1089,8 +1165,9 @@ ClimbMix, projected RAG 2025 development qrels.
 
 | Phase | Run name | Topics | Status | HF verification | Local merge | Offline replay | Evaluation |
 |---|---|---:|---|---|---|---|---|
-| 2026 closure | `rag26-cache-dev-r4` | `rag2026-0` | stopped | archive + marker round-trip verified | staging merge complete | pending | n/a |
-| 2025 canary | `rag25-cache-31` | `31` | gated | pending | pending | pending | pending |
+| 2026 closure | `rag26-cache-dev-r4` | `rag2026-0` | stopped | `ea9d2799…9622` | staging + main complete | staging + main zero-work | n/a |
+| 2025 singleton canary | `rag25-cache-31` | `31` | done, exit 0, $0.2182 | `0d9b77f4…8fe98fe` | staging + main complete | 186 rows, staging + main zero-work | projected-qrels complete |
+| 2025 concurrency canary | `rag25-cache-14-37` | `14,37` | done, exit 0, $0.3687 | `6331cf4b…ad01`; `bc36bb96…dc3f` | `7f282dc6…6d62`; `33b9d200…fc88` | 482 rows, staging + main zero-work | nDCG@10 0.0; judged rate@100 0.065 |
 
 ## Completion Criteria
 
