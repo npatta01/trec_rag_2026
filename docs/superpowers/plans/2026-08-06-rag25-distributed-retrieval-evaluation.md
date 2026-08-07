@@ -37,9 +37,23 @@ ClimbMix, projected RAG 2025 development qrels.
   `ea9d2799eaa58b8ca50c38cf4d796e58acb90b4d3923f943fc6a89a6243d9622`.
   The exact A40 run is stopped. The isolated staging merge completed as
   `fd8c9bb8cadf76db35fae62888e612020a9fc279566501461cc24a66c1f75459`;
-  offline replay and main-cache promotion are next.
+  its offline replay completed with zero misses, network/provider calls, and
+  model batches. Main-cache promotion completed as
+  `578e96e278759a730e44273119ac1cf69c65326b3a849520e3f64ee52788cfa5`,
+  and a second replay against the promoted shared cache produced the same 203
+  ranked rows (apart from the intentional experiment-ID run tag), again with
+  every work counter at zero.
 - The current canary is the final 2026 topic authorized for this sequence. Do
   not start `rag2026-1`.
+- The one-topic RAG25 canary `rag25-cache-31` was submitted once from reviewed
+  commit `77e1f536ea7c9a8bffc59569bcdda3d48e57bd07` and completed with exit
+  status 0 on an on-demand A40 48 GB instance at $0.44/hour. Final cost was
+  $0.2182. The immutable topic-`31` prefix contains exactly the archive and
+  completion marker; the locally reverified archive SHA-256 is
+  `0d9b77f46ed1e7d339df8d42474c4bf746137ca07e2596979f152fe6fdfe98fe`.
+  Its isolated staging merge completed as
+  `fed38def987a32f044433c812ed92e1d612ae33dc6bb5fa1c503358c36a2d1bc`;
+  zero-work ROCm replay and evaluation are next.
 - The 2025 topic file contains exactly 22 numeric IDs:
   `14, 31, 37, 58, 72, 84, 144, 161, 200, 213, 219, 224, 225, 233, 273,
   300, 407, 477, 499, 515, 707, 897`.
@@ -312,7 +326,7 @@ ClimbMix, projected RAG 2025 development qrels.
   `fd8c9bb8cadf76db35fae62888e612020a9fc279566501461cc24a66c1f75459`;
   the completion receipt is present under the isolated staging cache.
 
-- [ ] **Step 7: Prove zero-work staging replay**
+- [x] **Step 7: Prove zero-work staging replay**
 
   Create an ignored `configs/local/` copy of the canonical retrieval config
   with experiment ID `nonagentic-rag2026-0-local-replay-20260806`. Keep the real
@@ -329,7 +343,12 @@ ClimbMix, projected RAG 2025 development qrels.
     --offline-cache-only --topic rag2026-0
   ```
 
-- [ ] **Step 8: Promote to the main shared cache**
+  Evidence: replay completed in 257.12 seconds with maximum RSS 9,142,696 KB.
+  Cache-hit counts were planning 1, retrieval 9, passage scores 52,448,
+  sentence scores 19,863, similarity 8, and canonicalization 8. Every stage
+  recorded zero misses, network calls, provider calls, and model batches.
+
+- [x] **Step 8: Promote to the main shared cache**
 
   ```bash
   main_checkout=/home/npatta01/data/competitions/trec_rag_2026
@@ -341,6 +360,13 @@ ClimbMix, projected RAG 2025 development qrels.
   ```
 
   Verify the promoted cache with the same offline-only receipt checks.
+
+  Evidence: shared merge ID
+  `578e96e278759a730e44273119ac1cf69c65326b3a849520e3f64ee52788cfa5`.
+  The promoted-cache replay completed in 257.47 seconds with maximum RSS
+  9,143,480 KB and the same per-stage cache hits and zero-work counters. Its
+  203 organizer run rows match the staging replay in every field except the
+  deliberate experiment-ID run tag.
 
 ### Task 2: Close Production Score Caches Before Packaging
 
@@ -640,12 +666,16 @@ ClimbMix, projected RAG 2025 development qrels.
   Evidence: commit `4e7b836`; 115 evaluator/shared pipeline tests passed,
   `py_compile` passed, and `git diff --check` passed.
 
-- [ ] **Step 5: Independent pre-spend review gate**
+- [x] **Step 5: Independent pre-spend review gate**
 
   Independently review the bundle self-verification repair, lifecycle fix,
   2025 config/wrapper, evaluator, and focused tests. Resolve all correctness
   and safety findings and rerun the affected suites before previewing topic
   `31`. Record reviewed commit IDs in this plan.
+
+  Evidence: the evaluator/bundle/config review resolved all Important findings
+  and approved reviewed commit `77e1f53` for the paid one-topic canary. The
+  relevant regression population was 298 passing tests before launch.
 
 ### Task 5: Run, Consolidate, Replay, and Evaluate One Headless 2025 Canary
 
@@ -666,7 +696,7 @@ ClimbMix, projected RAG 2025 development qrels.
 - Produces: one verified numeric-topic HF shard, local zero-work replay, and
   topic-31 projected-qrels metrics with judged coverage.
 
-- [ ] **Step 1: Run local and wrapper preflights**
+- [x] **Step 1: Run local and wrapper preflights**
 
   ```bash
   bash code/tools/run_retrieval_cache_shard.sh --preflight \
@@ -678,7 +708,10 @@ ClimbMix, projected RAG 2025 development qrels.
   Confirm all required secrets are present by name only and confirm the HF
   prefix for topic `31` is empty.
 
-- [ ] **Step 2: Preview without submitting**
+  Evidence: all four dstack secret names were present and the exact private HF
+  prefix was empty.
+
+- [x] **Step 2: Preview without submitting**
 
   ```bash
   code/tools/apply_retrieval_cache_shard.sh --preview \
@@ -696,7 +729,11 @@ ClimbMix, projected RAG 2025 development qrels.
   dstack template. Immediately before launch, recompute and compare them; any
   drift invalidates approval and requires a new preview.
 
-- [ ] **Step 3: Bind the existing canary authorization to the preview**
+  Evidence: seven compliant offers were returned; the selected RunPod A40
+  48 GB offer was $0.44/hour. HEAD and all four recorded SHA-256 values matched
+  immediately before submission.
+
+- [x] **Step 3: Bind the existing canary authorization to the preview**
 
   Preserve the actual backend, GPU, price, duration limit, Git `HEAD`, and four
   source hashes. The user's existing instruction to run a 2025 topic authorizes
@@ -705,7 +742,10 @@ ClimbMix, projected RAG 2025 development qrels.
   that authorization reference after the preview. Any resource change or hash
   drift requires a new preview and explicit decision.
 
-- [ ] **Step 4: Submit once and monitor headlessly**
+  Evidence: the existing one-topic authorization was bound to topic `31`, the
+  $0.44/hour A40 offer, five-hour cap, and reviewed commit `77e1f53`.
+
+- [x] **Step 4: Submit once and monitor headlessly**
 
   ```bash
   code/tools/apply_retrieval_cache_shard.sh --launch \
@@ -719,12 +759,24 @@ ClimbMix, projected RAG 2025 development qrels.
   serialize environment values. Require the wrapper's remote round-trip
   verification and `shard_status=complete`.
 
+  Evidence: `rag25-cache-31` completed with exit status 0,
+  `shard_status=complete`, and cost $0.2182. Remote pack, semantic verify,
+  archive-then-marker publication, byte round trips, and downloaded-bundle
+  verification all succeeded.
+
 - [ ] **Step 5: Download, verify, stage-merge, and replay**
 
   Use the Task 1 sequence with run ID `nonagentic-rag25-dev-20260806` and topic
   `31`. The replay config uses a new experiment ID and selects only `31` with
   `.venv/bin/python-rocm ... --offline-cache-only`. Inspect both the topic
   receipt and root manifest and require zero misses/calls/model batches.
+
+  Progress: the exact two-object listing, fresh local download, and semantic
+  verification passed with archive SHA-256
+  `0d9b77f46ed1e7d339df8d42474c4bf746137ca07e2596979f152fe6fdfe98fe`.
+  Fresh staging merge ID:
+  `fed38def987a32f044433c812ed92e1d612ae33dc6bb5fa1c503358c36a2d1bc`.
+  Replay remains the next gate.
 
 - [ ] **Step 6: Evaluate the local replay**
 
@@ -758,7 +810,7 @@ ClimbMix, projected RAG 2025 development qrels.
   one isolated one-worker config/cache/output/work root and one independent
   retrieval -> pack -> verify -> upload -> round-trip subshell per topic.
 
-- [ ] **Step 1: Add failing repeated-topic contract tests**
+- [x] **Step 1: Add failing repeated-topic contract tests**
 
   Test two unique topics, rejection of duplicates, rejection of more than two
   topics, isolated per-topic roots/configs, parallel subshells, per-topic
@@ -779,7 +831,7 @@ ClimbMix, projected RAG 2025 development qrels.
       assert "parallel_topic_processes=2" in result.stdout
   ```
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
   ```bash
   .venv/bin/python -m pytest \
@@ -787,7 +839,7 @@ ClimbMix, projected RAG 2025 development qrels.
     -k 'two_unique_topics or duplicate_topic or numeric' -q
   ```
 
-- [ ] **Step 3: Implement independent bounded topic subshells**
+- [x] **Step 3: Implement independent bounded topic subshells**
 
   Store selectors in `topic_ids=()`, validate every ID with the shared safe
   pattern, reject duplicates, and require one or two topics. Perform checkout,
@@ -799,7 +851,7 @@ ClimbMix, projected RAG 2025 development qrels.
   sibling. Collect both exit codes explicitly; successful siblings remain
   published while any failure makes the overall task nonzero.
 
-- [ ] **Step 4: Enforce the two-topic resource envelope**
+- [x] **Step 4: Enforce the two-topic resource envelope**
 
   Update the dstack task and its rendering tests so batch execution accepts
   only tested 48 GB classes (`A40`, `A6000`, or `L40S`) with at least 48 GB GPU
@@ -807,7 +859,7 @@ ClimbMix, projected RAG 2025 development qrels.
   preview must contain only compliant offers; never silently fall back to a
   24 GB GPU for two model processes.
 
-- [ ] **Step 5: Verify full workflow tests and commit**
+- [x] **Step 5: Verify full workflow tests and commit**
 
   ```bash
   .venv/bin/python -m pytest code/tests/test_retrieval_cache_shard_workflow.py -q
@@ -819,11 +871,21 @@ ClimbMix, projected RAG 2025 development qrels.
   git commit -m "Run two retrieval topics per cache shard host"
   ```
 
-- [ ] **Step 6: Independent pre-concurrency review gate**
+  Evidence: commit `19ac67c`; 44 workflow tests passed. Both shell syntax
+  checks and `git diff --check` passed.
+
+- [x] **Step 6: Independent pre-concurrency review gate**
 
   Independently review the parallel wrapper, failure isolation, resource
   contract, and tests. Resolve findings and rerun the workflow suite before any
   paid two-topic launch.
+
+  Evidence: review found the Hugging Face CLI's lexical `14`/`144` prefix
+  collision. The final implementation lists the run parent and validates exact
+  path components, with initial/preupload/final/concurrent regressions. Re-review
+  found no Critical or Important issues; its final documentation-only finding
+  was resolved before commit. No two-topic paid run has been authorized or
+  launched.
 
 ### Task 7: Execute the Remaining 21 Topics in Bounded Headless Batches
 
