@@ -1458,6 +1458,12 @@ def _pack_validated_sources(
             archive_path="source-config/config.yaml",
             kind="config",
         ),
+        _source_member(
+            config.topics_path,
+            source_root=config.root_dir,
+            archive_path="source-config/official-topics",
+            kind="topics",
+        ),
         *_collect_cache_members(config, topic_id),
         *_collect_score_members(config, score_staging),
         *_collect_topic_members(
@@ -1644,7 +1650,14 @@ def _parse_manifest(
         if not isinstance(path, str):
             raise CacheBundleIntegrityError("bundle member path must be text")
         _validate_archive_path(path, seen)
-        if kind not in {"checkpoint", "config", "immutable", "similarity", "score"}:
+        if kind not in {
+            "checkpoint",
+            "config",
+            "immutable",
+            "similarity",
+            "score",
+            "topics",
+        }:
             raise CacheBundleIntegrityError(f"unsupported bundle member kind: {kind!r}")
         size = _require_nonnegative_int(row["size"], "bundle member size")
         if size > MAX_MEMBER_BYTES:
@@ -1702,6 +1715,12 @@ def _validate_member_layout(
             if path != PurePosixPath("source-config/config.yaml"):
                 raise CacheBundleIntegrityError(
                     "config kind/path combination is invalid"
+                )
+            continue
+        if member.kind == "topics":
+            if path != PurePosixPath("source-config/official-topics"):
+                raise CacheBundleIntegrityError(
+                    "topics kind/path combination is invalid"
                 )
             continue
         if path.parts[:1] == ("source-config",):
@@ -2300,7 +2319,17 @@ def _validate_extracted_offline_replay(
         raise CacheBundleIntegrityError("source topic path is not portable") from exc
     replay_topics = replay_root / topics_relative
     replay_topics.parent.mkdir(parents=True, exist_ok=True)
-    if replay_topics.suffix.casefold() == ".tsv":
+    topics_members = [member for member in members if member.kind == "topics"]
+    if len(topics_members) > 1:
+        raise CacheBundleIntegrityError(
+            "bundle contains multiple authenticated topic sources"
+        )
+    if topics_members:
+        authenticated_topics = extraction_root.joinpath(
+            *PurePosixPath(topics_members[0].path).parts
+        )
+        shutil.copyfile(authenticated_topics, replay_topics)
+    elif replay_topics.suffix.casefold() == ".tsv":
         replay_topics.write_text(
             f"{topic.id}\t{topic.narrative}\n",
             encoding="utf-8",
@@ -2922,10 +2951,10 @@ def _prepare_operations(
             )
         for member in bundle.members:
             path = PurePosixPath(member.path)
-            if member.kind == "config":
+            if member.kind in {"config", "topics"}:
                 if path.parts[:1] != ("source-config",):
                     raise CacheBundleIntegrityError(
-                        "config member has an invalid archive path"
+                        "source identity member has an invalid archive path"
                     )
                 continue
             if member.kind == "score":

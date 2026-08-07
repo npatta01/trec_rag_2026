@@ -46,6 +46,8 @@ _ENDPOINT = "https://pyserini.test/v1/climbmix-400b/search"
 _CODE_COMMIT = "a" * 40
 _TOPIC_ID = "rag2026-0"
 _NARRATIVE = "Compare how housing policy changes affect tenants."
+_OTHER_TOPIC_ID = "rag2026-1"
+_OTHER_NARRATIVE = "Explain how zoning reform changes housing supply."
 
 
 def _canonical_json(value: object) -> bytes:
@@ -61,13 +63,18 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _write_config(root: Path, *, experiment_id: str = "online-cache-fixture") -> Path:
+def _write_config(
+    root: Path,
+    *,
+    experiment_id: str = "online-cache-fixture",
+    include_other_topic: bool = False,
+) -> Path:
     root.mkdir(parents=True)
     (root / "AGENTS.md").write_text("fixture boundary\n", encoding="utf-8")
-    (root / "topics.tsv").write_text(
-        f"{_TOPIC_ID}\t{_NARRATIVE}\n",
-        encoding="utf-8",
-    )
+    topics = f"{_TOPIC_ID}\t{_NARRATIVE}\n"
+    if include_other_topic:
+        topics += f"{_OTHER_TOPIC_ID}\t{_OTHER_NARRATIVE}\n"
+    (root / "topics.tsv").write_text(topics, encoding="utf-8")
     path = root / "config.yaml"
     path.write_text(
         f"""\
@@ -271,8 +278,9 @@ def _prepare_online_topic(
     *,
     planning_failure: bool = False,
     canonical_failure: bool = False,
+    include_other_topic: bool = False,
 ) -> tuple[Path, FacetPilotConfig, object, dict[str, object], str]:
-    config_path = _write_config(root)
+    config_path = _write_config(root, include_other_topic=include_other_topic)
     config_bytes = config_path.read_bytes()
     config = load_facet_pilot_config(config_path, source_bytes=config_bytes)
     topic = select_configured_topics(config, topic_ids=(_TOPIC_ID,))[0]
@@ -319,7 +327,9 @@ def _prepare_online_topic(
         retriever=retriever,
         canonical_backend_factory=_CanonicalBackend,
     )
-    official_topics_sha256 = competition_retrieval._topics_sha256((topic,))
+    official_topics_sha256 = competition_retrieval._topics_sha256(
+        select_configured_topics(config)
+    )
     try:
         outcome = competition_retrieval._run_topic(
             topic,
@@ -541,6 +551,28 @@ def test_pack_validation_uses_the_production_staged_offline_runner(
     assert (
         job.topic_root == replay_root / "outputs" / "online-cache-fixture" / _TOPIC_ID
     )
+
+
+def test_pack_self_verification_preserves_full_official_topics_identity(
+    tmp_path: Path,
+) -> None:
+    config_path, _config, _topic, _identity, _topics_sha = _prepare_online_topic(
+        tmp_path / "online",
+        include_other_topic=True,
+    )
+    bundle = (tmp_path / "bundle").resolve()
+
+    packed = pack_bundle(config_path, _TOPIC_ID, bundle)
+
+    verified = verify_bundle(bundle)
+    assert verified.archive_sha256 == packed.archive_sha256
+    topics_member = next(
+        member for member in verified.members if member.kind == "topics"
+    )
+    assert topics_member.path == "source-config/official-topics"
+    assert topics_member.sha256 == hashlib.sha256(
+        (tmp_path / "online/topics.tsv").read_bytes()
+    ).hexdigest()
 
 
 @pytest.mark.parametrize("control", ("\t", "\n", "\r"))
