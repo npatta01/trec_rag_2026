@@ -279,6 +279,53 @@ score databases, and runs the topic through a fresh cache-only replay with
 network and model loading disabled. The standalone verifier repeats that proof;
 a structurally valid but incomplete cache shard is rejected.
 
+#### dstack agentic worker
+
+The supported agentic worker is
+`.dstack/rag26-agentic-retrieval-worker.yaml`, launched only through
+`code/tools/apply_agentic_retrieval_worker.sh`. The launcher defaults to a
+credential-free preview; use `--launch` only after reviewing the offers. It
+requires dstack `0.20.29`, a clean branch with canonical upstream ancestry,
+and a committed source snapshot at the exact plan revision. It copies the
+already-frozen plan and canonical config into private ignored transport files;
+it never creates an ephemeral commit or changes the plan's Git `HEAD`.
+
+The plan digest and topic assignment are explicit. One topic is the normal
+task; a second topic is a sequential capacity-scarcity fallback. The remote
+wrapper validates the run/task identities, plan membership, Git and submodule
+revisions, and named secrets before constructing live dependencies. Each topic
+has isolated work, output, and cache paths and runs on the single requested
+GPU. The next topic starts only after the previous topic's archive and
+completion marker have both uploaded, listed, downloaded, byte-compared, and
+passed semantic verification.
+
+Use a private artifact prefix and pass the exact plan bytes and digest:
+
+```bash
+PLAN=outputs/<experiment-id>/work/run_plan.json
+PLAN_SHA256=<plan_sha256-from-the-plan>
+
+bash code/tools/apply_agentic_retrieval_worker.sh \
+  --preview \
+  --name agentic-rag2026-canary-0 \
+  --task-name canary-0 \
+  --run-id <experiment-id> \
+  --plan-sha256 "$PLAN_SHA256" \
+  --artifact-prefix hf://buckets/<private-bucket>/trec_rag_2026/experiments/<experiment-id> \
+  --plan "$PLAN" \
+  --config configs/rag26_competition_agentic_retrieval_v1.yaml \
+  --topic rag2026-0
+```
+
+The worker publishes submission-critical topic bundles under
+`topics/<topic-id>/`, archive first and `bundle-complete.json` last. It uses
+create-only Hugging Face operations (`--ignore-existing`) and writes a safe
+failure receipt under the run output and private `failures/` prefix. An
+optional cache shard is uploaded only after every assigned topic has completed.
+No remote deletion or overwrite path exists. Keep all bundles, plans, caches,
+provider material, and outputs private; import them with the agentic collector
+before the coordinator performs the final cohort-complete export.
+
 The checked-in dstack task template is
 `.dstack/rag26-retrieval-cache-shard.yaml`. Always invoke it through
 `code/tools/apply_retrieval_cache_shard.sh`; the template's deliberately
