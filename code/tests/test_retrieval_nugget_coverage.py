@@ -231,6 +231,86 @@ def test_judgment_validation_requires_exactly_one_row_per_obligation() -> None:
         validate_judgments(plan, _nuggets(), missing)
 
 
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda payload: {**payload, "extra": True},
+        lambda payload: {
+            **payload,
+            "judgments": [
+                {**payload["judgments"][0], "extra": True},
+                payload["judgments"][1],
+            ],
+        },
+        lambda payload: {
+            **payload,
+            "judgments": [
+                {key: value for key, value in payload["judgments"][0].items() if key != "label"},
+                payload["judgments"][1],
+            ],
+        },
+    ],
+)
+def test_judgment_validation_rejects_exact_key_violations(mutator) -> None:
+    plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+
+    with pytest.raises(NuggetCoverageError, match="unexpected or missing"):
+        validate_judgments(plan, _nuggets(), mutator(json.loads(json.dumps(VALID_JUDGMENTS))))
+
+
+def test_judgment_validation_rejects_unknown_obligation_id() -> None:
+    plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    payload = json.loads(json.dumps(VALID_JUDGMENTS))
+    payload["judgments"][0]["obligation_id"] = "f999-o001"
+
+    with pytest.raises(NuggetCoverageError, match="unknown obligation ID"):
+        validate_judgments(plan, _nuggets(), payload)
+
+
+def test_judgment_validation_rejects_duplicate_supporting_aliases() -> None:
+    plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    payload = json.loads(json.dumps(VALID_JUDGMENTS))
+    payload["judgments"][0]["supporting_nugget_aliases"] = ["n001", "n001"]
+
+    with pytest.raises(NuggetCoverageError, match="duplicate supporting nugget alias"):
+        validate_judgments(plan, _nuggets(), payload)
+
+
+def test_plan_validation_rejects_more_than_twelve_facets() -> None:
+    facet = json.loads(json.dumps(VALID_PLAN["facets"][0]))
+    payload = {
+        "schema_version": "retrieval_nugget_plan_v1",
+        "facets": [facet for _ in range(13)],
+        "unmapped_narrative_spans": [],
+    }
+
+    with pytest.raises(NuggetCoverageError, match="between 1 and 12"):
+        validate_and_freeze_plan(NARRATIVE, payload)
+
+
+def test_plan_validation_rejects_more_than_eight_obligations_per_facet() -> None:
+    required = json.loads(json.dumps(VALID_PLAN["facets"][0]["obligations"][0]))
+    supplemental = {
+        "requirement": "Add another historical detail.",
+        "support_test": "Another historical comparison is present.",
+        "kind": "supplemental_inferred",
+        "narrative_spans": [],
+    }
+    payload = {
+        "schema_version": "retrieval_nugget_plan_v1",
+        "facets": [
+            {
+                "title": "Costs and assumptions",
+                "obligations": [required, *[dict(supplemental) for _ in range(8)]],
+            }
+        ],
+        "unmapped_narrative_spans": [],
+    }
+
+    with pytest.raises(NuggetCoverageError, match="between 1 and 8"):
+        validate_and_freeze_plan(NARRATIVE, payload)
+
+
 def test_score_coverage_macro_averages_required_facets_and_reports_diagnostics() -> None:
     plan_payload = json.loads(json.dumps(VALID_PLAN))
     plan_payload["facets"].append(
