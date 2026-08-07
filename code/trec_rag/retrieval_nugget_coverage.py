@@ -668,6 +668,10 @@ def run_coverage_evaluation(
     if config.mode == "create":
         if _work_has_artifacts(work_dir):
             raise NuggetCoverageError("persistence", "create refuses a non-empty work directory")
+        if not config.allow_hosted_calls:
+            raise NuggetCoverageError(
+                "cache", "cache-only is missing planner and judge stage(s)"
+            )
         work_dir.mkdir(parents=True, exist_ok=True)
         _publish_once(work_dir / "input.json", _input_payload(bound))
         existing_manifest = None

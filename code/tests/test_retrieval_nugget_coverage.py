@@ -766,6 +766,36 @@ def test_create_refuses_nonempty_work_dir_and_cache_only_names_missing_stages(tm
     assert cache_judge.requests == []
 
 
+def test_cache_only_create_writes_nothing_then_authorized_create_succeeds(
+    tmp_path: Path,
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "cache-first"
+    cache_planner = RecordingBackend([_reply(VALID_PLAN)])
+    cache_judge = RecordingBackend([])
+
+    with pytest.raises(NuggetCoverageError, match="planner and judge"):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, allow_hosted_calls=False),
+            planner=cache_planner,
+            judge=cache_judge,
+        )
+
+    assert not work_dir.exists()
+    assert cache_planner.requests == []
+    assert cache_judge.requests == []
+
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    receipt = run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir, allow_hosted_calls=True),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    assert receipt.status == "complete"
+    assert (work_dir / "manifest.json").exists()
+
+
 def test_resume_reuses_valid_stages_without_backend_calls_and_reproduces_hashes(tmp_path: Path) -> None:
     handoff_path = _write_coverage_handoff(tmp_path)
     work_dir = tmp_path / "resume"
