@@ -412,6 +412,19 @@ class CoverageRunReceipt:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class CompletedCoverageEvaluation:
+    """Read-only, fully validated coverage state for report consumers."""
+
+    bound_input: BoundCoverageInput
+    identity: EvaluatorIdentity
+    plan: FrozenPlan
+    judgments: tuple[CoverageJudgment, ...]
+    report: CoverageReport
+    artifact_hashes: Mapping[str, str]
+    manifest_sha256: str
+
+
 class OpenRouterCoverageBackend:
     """OpenRouter adapter for one strict structured planner or judge call."""
 
@@ -863,6 +876,67 @@ def run_coverage_evaluation(
     )
 
 
+def load_completed_coverage_evaluation(
+    *,
+    handoff_manifest_path: Path,
+    topic_id: str,
+    work_dir: Path,
+) -> CompletedCoverageEvaluation:
+    """Validate and load a complete coverage bundle without writing or calling a backend."""
+
+    bound = coverage_input_from_handoff(Path(handoff_manifest_path), topic_id)
+    work_root = Path(work_dir)
+    if work_root.is_symlink() or (work_root.exists() and not work_root.is_dir()):
+        raise NuggetCoverageError("persistence", "work directory is not a directory")
+    if not work_root.is_dir():
+        raise NuggetCoverageError("persistence", "completed coverage bundle is missing")
+
+    required_names = ("input.json", "plan.json", "judgments.json", "report.json", "manifest.json")
+    required_paths = {name: work_root / name for name in required_names}
+    for name, path in required_paths.items():
+        if path.is_symlink():
+            raise NuggetCoverageError("persistence", f"{name} is a symbolic link")
+        if not path.is_file():
+            raise NuggetCoverageError("persistence", f"completed coverage bundle is missing {name}")
+
+    manifest_payload = _load_artifact(required_paths["manifest.json"])
+    identity = _decode_manifest_identity(manifest_payload)
+    _validate_input_artifact(required_paths["input.json"], bound)
+    plan, _planner_request_sha256, planner_metadata = _load_plan_artifact(
+        required_paths["plan.json"], bound.narrative, identity
+    )
+    judgments, _judge_request_sha256, judge_metadata = _load_judgments_artifact(
+        required_paths["judgments.json"], plan, bound.nuggets, identity
+    )
+    report = score_coverage(plan, bound.nuggets, judgments, identity)
+    expected_report = _report_payload(report, plan)
+    if _load_artifact(required_paths["report.json"]) != expected_report:
+        raise NuggetCoverageError("persistence", "report artifact does not match validated stages")
+
+    artifact_hashes = {
+        name: _sha256_file(required_paths[name])
+        for name in ("input.json", "plan.json", "judgments.json", "report.json")
+    }
+    _validate_manifest(
+        manifest_payload,
+        bound,
+        identity,
+        artifact_hashes,
+        planner_metadata,
+        judge_metadata,
+        2,
+    )
+    return CompletedCoverageEvaluation(
+        bound_input=bound,
+        identity=identity,
+        plan=plan,
+        judgments=judgments,
+        report=report,
+        artifact_hashes=MappingProxyType(dict(artifact_hashes)),
+        manifest_sha256=_sha256_file(required_paths["manifest.json"]),
+    )
+
+
 def _input_payload(bound: BoundCoverageInput) -> dict[str, object]:
     return {
         "schema_version": INPUT_ARTIFACT_SCHEMA_VERSION,
@@ -1104,6 +1178,41 @@ def _load_artifact(path: Path) -> Mapping[str, object]:
     return payload
 
 
+def _decode_manifest_identity(payload: Mapping[str, object]) -> EvaluatorIdentity:
+    """Decode the exact, current evaluator identity sealed in a manifest."""
+
+    identity = payload.get("identity")
+    if not isinstance(identity, Mapping) or not all(isinstance(key, str) for key in identity):
+        raise NuggetCoverageError("persistence", "manifest identity is invalid")
+    expected_keys = {
+        "schema_version",
+        "planner_prompt_version",
+        "judge_prompt_version",
+        "planner_model",
+        "judge_model",
+    }
+    if set(identity) != expected_keys:
+        raise NuggetCoverageError("persistence", "manifest identity has unexpected or missing fields")
+    if (
+        identity.get("schema_version") != EVALUATOR_SCHEMA_VERSION
+        or identity.get("planner_prompt_version") != PLANNER_PROMPT_VERSION
+        or identity.get("judge_prompt_version") != JUDGE_PROMPT_VERSION
+    ):
+        raise NuggetCoverageError("persistence", "manifest identity does not match evaluator contract")
+    try:
+        planner_model = _text(identity.get("planner_model"), "planner model", None, stage="persistence")
+        judge_model = _text(identity.get("judge_model"), "judge model", None, stage="persistence")
+    except NuggetCoverageError:
+        raise NuggetCoverageError("persistence", "manifest identity contains an invalid model") from None
+    return EvaluatorIdentity(
+        schema_version=EVALUATOR_SCHEMA_VERSION,
+        planner_prompt_version=PLANNER_PROMPT_VERSION,
+        judge_prompt_version=JUDGE_PROMPT_VERSION,
+        planner_model=planner_model,
+        judge_model=judge_model,
+    )
+
+
 def _sha256_file(path: Path) -> str:
     try:
         return sha256(path.read_bytes()).hexdigest()
@@ -1126,6 +1235,7 @@ def _load_plan_artifact(
     payload = _load_artifact(path)
     if (
         payload.get("schema_version") != PLAN_ARTIFACT_SCHEMA_VERSION
+        or payload.get("evaluator_schema_version") != EVALUATOR_SCHEMA_VERSION
         or payload.get("identity") != _identity_payload(identity)
     ):
         raise NuggetCoverageError("persistence", "planner artifact identity does not match")
@@ -1152,7 +1262,10 @@ def _load_plan_artifact(
         }
     except (KeyError, TypeError):
         raise NuggetCoverageError("persistence", "planner artifact plan is invalid") from None
-    plan = validate_and_freeze_plan(narrative, raw_plan_payload)
+    try:
+        plan = validate_and_freeze_plan(narrative, raw_plan_payload)
+    except NuggetCoverageError:
+        raise NuggetCoverageError("persistence", "planner artifact plan is invalid") from None
     if json.loads(plan.canonical_bytes) != dict(plan_payload):
         raise NuggetCoverageError("persistence", "planner artifact plan is not canonical")
     if payload.get("plan_sha256") != plan.plan_sha256:
@@ -1177,6 +1290,7 @@ def _load_judgments_artifact(
     payload = _load_artifact(path)
     if (
         payload.get("schema_version") != JUDGMENTS_ARTIFACT_SCHEMA_VERSION
+        or payload.get("evaluator_schema_version") != EVALUATOR_SCHEMA_VERSION
         or payload.get("identity") != _identity_payload(identity)
         or payload.get("plan_sha256") != plan.plan_sha256
     ):
@@ -2082,6 +2196,7 @@ __all__ = [
     "CoverageReport",
     "CoverageRunConfig",
     "CoverageRunReceipt",
+    "CompletedCoverageEvaluation",
     "BoundCoverageInput",
     "EvaluationCallMetadata",
     "EvaluationResult",
@@ -2100,6 +2215,7 @@ __all__ = [
     "PLANNER_SYSTEM_PROMPT",
     "evaluate_nugget_coverage",
     "coverage_input_from_handoff",
+    "load_completed_coverage_evaluation",
     "run_coverage_evaluation",
     "main",
     "render_judge_request",

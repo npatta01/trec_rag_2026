@@ -37,6 +37,7 @@ from trec_rag.retrieval_nugget_coverage import (
     BoundCoverageInput,
     coverage_input_from_handoff,
     evaluate_nugget_coverage,
+    load_completed_coverage_evaluation,
     main,
     render_judge_request,
     render_planner_request,
@@ -1013,6 +1014,257 @@ def test_create_persists_private_canonical_artifacts_and_safe_receipt(tmp_path: 
     assert receipt.topic_id == "topic-coverage"
     assert receipt.hosted_calls == 2
     assert receipt.required_coverage == pytest.approx(1.0)
+
+
+def _snapshot_tree(path: Path) -> dict[str, bytes | None]:
+    return {
+        str(entry.relative_to(path)): (entry.read_bytes() if entry.is_file() else None)
+        for entry in sorted(path.iterdir())
+    }
+
+
+def test_load_completed_coverage_evaluation_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "completed-loader"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+    before = _snapshot_tree(work_dir)
+
+    class ExplodingBackend:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("loader must not construct a backend")
+
+    monkeypatch.setattr(coverage_module, "OpenRouterCoverageBackend", ExplodingBackend)
+
+    loaded = load_completed_coverage_evaluation(
+        handoff_manifest_path=handoff_path,
+        topic_id="topic-coverage",
+        work_dir=work_dir,
+    )
+
+    assert loaded.bound_input.topic_id == "topic-coverage"
+    assert loaded.plan.obligations == frozen.obligations
+    assert loaded.judgments == validate_judgments(
+        frozen, coverage_input_from_handoff(handoff_path, "topic-coverage").nuggets,
+        _judge_payload(frozen),
+    )
+    assert loaded.report.required_coverage == pytest.approx(1.0)
+    assert loaded.artifact_hashes.keys() == {
+        "input.json", "plan.json", "judgments.json", "report.json"
+    }
+    assert len(loaded.manifest_sha256) == 64
+    assert before == _snapshot_tree(work_dir)
+
+
+def _write_canonical_payload(path: Path, payload: object) -> None:
+    path.write_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+
+
+def _completed_bundle(tmp_path: Path) -> tuple[Path, Path, FrozenPlan]:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "completed-corruption"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+    return handoff_path, work_dir, frozen
+
+
+@pytest.mark.parametrize("artifact", ["input.json", "plan.json", "judgments.json", "report.json"])
+def test_load_completed_coverage_evaluation_rejects_changed_artifact_without_writing(tmp_path: Path, artifact: str) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    path = work_dir / artifact
+    payload = json.loads(path.read_text())
+    if artifact == "input.json":
+        payload["topic_id"] = "topic-corrupt"
+    elif artifact == "plan.json":
+        payload["plan_sha256"] = "0" * 64
+    elif artifact == "judgments.json":
+        payload["request_sha256"] = "0" * 64
+    else:
+        payload["required_coverage"] = 0.0
+    _write_canonical_payload(path, payload)
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
+
+
+@pytest.mark.parametrize("artifact", ["plan.json", "judgments.json"])
+def test_load_completed_coverage_evaluation_rejects_changed_provider_request_digest_without_writing(
+    tmp_path: Path, artifact: str
+) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    path = work_dir / artifact
+    payload = json.loads(path.read_text())
+    payload["request_sha256"] = "f" * 64
+    _write_canonical_payload(path, payload)
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError, match="request identity"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema_version", "stale-schema"),
+        ("planner_prompt_version", "stale-planner"),
+        ("judge_prompt_version", "stale-judge"),
+        ("planner_model", ""),
+        ("judge_model", "unsafe\x00model"),
+    ],
+)
+def test_load_completed_coverage_evaluation_rejects_stale_or_unsafe_manifest_identity(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    manifest_path = work_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["identity"][field] = value
+    _write_canonical_payload(manifest_path, manifest)
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError, match="manifest identity"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
+
+
+@pytest.mark.parametrize("identity_change", ["missing", "extra"])
+def test_load_completed_coverage_evaluation_rejects_manifest_identity_key_changes_without_writing(
+    tmp_path: Path, identity_change: str
+) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    manifest_path = work_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    if identity_change == "missing":
+        del manifest["identity"]["planner_model"]
+    else:
+        manifest["identity"]["unexpected"] = "value"
+    _write_canonical_payload(manifest_path, manifest)
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError, match="manifest identity"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
+
+
+@pytest.mark.parametrize("manifest_field", ["artifact_hashes", "completed_stages"])
+def test_load_completed_coverage_evaluation_rejects_changed_manifest_binding_without_writing(
+    tmp_path: Path, manifest_field: str
+) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    manifest_path = work_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    if manifest_field == "artifact_hashes":
+        manifest["artifact_hashes"]["report.json"] = "0" * 64
+    else:
+        manifest["completed_stages"] = 1
+    _write_canonical_payload(manifest_path, manifest)
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError, match="manifest"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
+
+
+def test_load_completed_coverage_evaluation_rejects_unknown_supporting_nugget_id_without_writing(tmp_path: Path) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    path = work_dir / "judgments.json"
+    payload = json.loads(path.read_text())
+    payload["judgments"][0]["supporting_nugget_ids"] = ["unknown-nugget"]
+    _write_canonical_payload(path, payload)
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError, match="unknown nugget"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
+
+
+@pytest.mark.parametrize("missing_name", ["input.json", "plan.json", "judgments.json", "report.json", "manifest.json"])
+def test_load_completed_coverage_evaluation_rejects_missing_required_artifact_without_writing(tmp_path: Path, missing_name: str) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    (work_dir / missing_name).unlink()
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError, match="missing"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
+
+
+def test_load_completed_coverage_evaluation_rejects_symlinked_work_directory(tmp_path: Path) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    symlink = tmp_path / "coverage-link"
+    symlink.symlink_to(work_dir, target_is_directory=True)
+
+    with pytest.raises(NuggetCoverageError, match="work directory"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=symlink,
+        )
+
+
+def test_load_completed_coverage_evaluation_rejects_symlinked_required_artifact_without_writing(tmp_path: Path) -> None:
+    handoff_path, work_dir, _frozen = _completed_bundle(tmp_path)
+    report_path = work_dir / "report.json"
+    target = tmp_path / "report-target.json"
+    target.write_bytes(report_path.read_bytes())
+    report_path.unlink()
+    report_path.symlink_to(target)
+    before = _snapshot_tree(work_dir)
+
+    with pytest.raises(NuggetCoverageError, match="symbolic link"):
+        load_completed_coverage_evaluation(
+            handoff_manifest_path=handoff_path,
+            topic_id="topic-coverage",
+            work_dir=work_dir,
+        )
+
+    assert before == _snapshot_tree(work_dir)
 
 
 def test_report_artifact_carries_v1_assumption_and_honest_limits(tmp_path: Path) -> None:
