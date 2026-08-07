@@ -2,6 +2,27 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
+## Non-agentic 2025 handoff comparison
+
+`trec_rag.nonagentic_2025_comparison` compares the non-agentic subnarrative and
+claim-hint handoff with the organizer's 2025 development nuggets. It reports
+dedicated subtopic coverage, content-level subtopic hits, strict and
+partial-credit nugget coverage, vital-nugget coverage, and generated-hint
+quality. With `topic_ids: all`, it writes one JSON diagnostic per topic plus an
+aggregate JSON and Markdown report. The score is a deterministic local
+diagnostic, not an official TREC metric.
+
+Run it with a config:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.nonagentic_2025_comparison \
+  --config configs/rag25_all_topics_nonagentic_comparison_v1.yaml
+```
+
+The evaluator uses a cached local embedding model when configured and never
+sends the handoff, nuggets, or claim text to a hosted judge. Keep input
+handoffs, generated JSON, and reports in ignored local paths.
+
 ## Reusable tracing modules
 
 `trec_rag.tracing` contains the reusable trace model and Phoenix-export
