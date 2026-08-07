@@ -130,6 +130,47 @@ The judge cache is shared across runs and keyed only by the effective judge requ
 
 Nugget coverage stays unavailable in this workflow even when gold nuggets are supplied, because it also requires completed nugget assignments, which this command does not produce. Supplying `--gold-nuggets` only sharpens the recorded reason.
 
+## Retrieval Nugget Coverage
+
+Use the year-neutral Retrieval Nugget Coverage evaluator for one narrative and
+its ordered canonical retrieval nugget text from an authenticated handoff. It
+is a separate diagnostic from the completed-run report above: it never runs
+retrieval, reranking, or generation, and it never receives selected passages.
+
+The default is cache-only and makes zero hosted calls. Start with exactly this
+read-only command; it writes no state and reports which planner or judge stages
+are missing:
+
+```bash
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID
+```
+
+If a stage is missing, ask once for explicit evaluation authorization. Before
+egress, state the provider (OpenRouter), the planner and judge model identities
+(defaults are `openai/gpt-5` for each, or the exact `--planner-model` and
+`--judge-model` overrides), and that the maximum of two hosted calls is one
+narrative-only planner call followed by one all-nugget judge call. The payload
+categories are the one narrative, the derived frozen plan, and canonical
+retrieval nugget text. After authorization, rerun the identical command with
+the one opt-in flag:
+
+```bash
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID \
+  --allow-hosted-calls
+```
+
+That authorization covers only this named topic, provider, and the stated
+planner/judge identities. Never use this route to run retrieval, reranking,
+generation, passage egress, another topic, another model or provider, or any
+publication or serving action. Keep the handoff, private work directory, model
+responses, and report outside git and do not expose them through a listener.
+
 ## RAGDoll Evaluation
 
 Run this section only with explicit evaluation authorization.

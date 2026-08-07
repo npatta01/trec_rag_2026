@@ -1600,6 +1600,69 @@ then resume against the same cache. Do not run concurrent judging commands again
 provider failures and detected label conflicts are counted in the private receipt and remain
 resumable. External or legacy judgment files cannot be imported.
 
+### `retrieval_nugget_coverage.py`
+
+Evaluates how completely one topic's canonical retrieval nuggets cover a
+frozen, narrative-derived answer-obligation plan. The only input is an
+authenticated `generation_handoff_manifest.json` plus one topic ID. The
+adapter reads that topic's narrative and ordered claim-hint `claim_id`/`text`
+pairs; it does not read selected passages or other retrieval metadata.
+
+The CLI exposes only these flags:
+
+- `--handoff-manifest PATH` — the authenticated handoff manifest.
+- `--topic TOPIC_ID` — exactly one topic for this invocation.
+- `--work-dir PATH` — optional private artifact directory; by default it is
+  beneath the manifest's parent.
+- `--planner-model NAME` and `--judge-model NAME` — model identities sealed in
+  the evaluator manifest.
+- `--mode create|resume` — create a new namespace or revalidate and reuse
+  complete stages.
+- `--allow-hosted-calls` — explicitly opt in to missing planner/judge calls;
+  it is off by default.
+
+The cache-only default makes no hosted calls. A cache-only `create` checks the
+authenticated input and reports missing stages without writing partial state,
+so the identical `create` command can be rerun with `--allow-hosted-calls`
+after authorization. A hosted run makes at most one narrative-only planner
+call and one all-nugget judge call. `resume` revalidates hash-bound artifacts
+and reuses valid planner and judge stages; it never replaces a valid frozen
+plan or deletes state.
+
+The private work directory contains, in order, `input.json` (hashes and alias
+identities only), `plan.json`, `judgments.json`, `report.json`, and the
+manifest-last `manifest.json`. The latter binds the handoff, narrative,
+ordered nugget hashes, schema and prompt versions, model identities, artifact
+hashes, call counts, and safe provider metadata. Keep this bundle and any
+provider responses outside git.
+
+Scoring maps `full`, `partial`, and `unsupported` to `1.0`, `0.5`, and `0.0`.
+For each facet containing required obligations, average its required labels;
+required coverage is the equal average of those facet scores. The report also
+includes required `strict_full_rate`, a flat supplemental-obligation average
+(or `null` when none exist), label counts, per-obligation resolved nugget IDs,
+and uncited-nugget diagnostics. Receipt scores are rounded for display; report
+artifacts retain full precision.
+
+Version 1 assumes canonical retrieval nuggets faithfully represent the
+selected passages from which they were derived; it never reopens passages.
+This is a planner-derived diagnostic, not ground truth. A low score cannot
+separate retrieval, selection, and canonicalization failures, and scores are
+not comparable across evaluator schemas, prompt versions, or model identities.
+The evaluator does not search, rerank, generate answers, shard oversized judge
+requests, or aggregate topics.
+
+Run the targeted regression suite (all backends are injected fakes, so it makes
+no hosted calls):
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_retrieval_nugget_coverage.py \
+  code/tests/test_retrieval_nugget_coverage_skill.py \
+  code/tests/test_competition_debug_report_skill.py \
+  code/tests/test_generation_handoff.py -q
+```
+
 RAGDoll is a declared project dependency backed by the pinned `ragdoll/` submodule. Initialize
 the repository submodules as documented in the root README before running environment setup.
 
