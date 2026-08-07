@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 MAX_SAFE_ID_LENGTH=128
 WORK_ROOT_BASE="${AGENTIC_WORK_ROOT_BASE:-/tmp/trec-rag-agentic-workers}"
+MIXEDBREAD_MODEL="mixedbread-ai/mxbai-rerank-base-v2"
+MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 
 preflight=false
 task_name=""
@@ -287,6 +289,19 @@ export HF_HOME="$worker_root/cache/huggingface"
 export TREC_RAG_CACHE_ROOT="$worker_root/cache/retrieval"
 mkdir -p "$HF_HOME" "$TREC_RAG_CACHE_ROOT"
 chmod 700 "$HF_HOME" "$TREC_RAG_CACHE_ROOT"
+
+"$venv_python" - "$MIXEDBREAD_MODEL" "$MIXEDBREAD_REVISION" <<'PY'
+from __future__ import annotations
+
+import sys
+
+from huggingface_hub import snapshot_download
+
+model, revision = sys.argv[1:]
+snapshot_download(model, revision=revision)
+snapshot_download(model, revision=revision, local_files_only=True)
+print(f"model_snapshot_verified={model}@{revision}")
+PY
 
 failure_root="$worker_root/failures"
 mkdir -p "$failure_root"

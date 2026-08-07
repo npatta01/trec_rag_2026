@@ -166,6 +166,14 @@ import sys
 
 runtime = pathlib.Path(os.environ["FAKE_RUNTIME"])
 args = sys.argv[1:]
+if args and args[0] == "-":
+    model, revision = args[1:3]
+    events = runtime / "events"
+    events.mkdir(exist_ok=True)
+    with (events / "worker.log").open("a") as stream:
+        stream.write("prefetch|" + model + "|" + revision + "\\n")
+    print("model_snapshot_verified=" + model + "@" + revision)
+    raise SystemExit(0)
 if args[:2] == ["-m", "trec_rag.competition_agentic_worker"]:
     topic = args[args.index("--topic") + 1]
     events = runtime / "events"
@@ -276,7 +284,11 @@ def test_wrapper_runs_topics_sequentially_and_publishes_marker_last(tmp_path: Pa
     )
     assert result.returncode == 0, result.stderr
     rows = (tmp_path / "runtime/events/worker.log").read_text().splitlines()
-    assert rows == ["worker|rag2026-0", "worker|rag2026-1"]
+    assert rows == [
+        "prefetch|mixedbread-ai/mxbai-rerank-base-v2|3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
+        "worker|rag2026-0",
+        "worker|rag2026-1",
+    ]
     assert "OPENROUTER_API_KEY" not in result.stdout + result.stderr
     assert (tmp_path / "runtime/remote/rag2026-0/bundle-complete.json").exists()
     assert (tmp_path / "runtime/remote/rag2026-1/bundle-complete.json").exists()
@@ -456,5 +468,24 @@ chmod 0755 .venv/bin/python .venv/bin/hf
     assert result.returncode == 0, result.stderr
     assert (runtime / "uv-sync").read_text(encoding="utf-8") == "uv-sync\n"
     assert (runtime / "events/worker.log").read_text(encoding="utf-8").splitlines() == [
-        "worker|rag2026-0"
+        "prefetch|mixedbread-ai/mxbai-rerank-base-v2|3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
+        "worker|rag2026-0",
+    ]
+
+
+def test_wrapper_prefetches_pinned_mixedbread_before_topic_execution(tmp_path: Path) -> None:
+    checkout, plan, env = _fake_agentic_checkout(tmp_path)
+    result = _run(
+        checkout / "code/tools/run_agentic_retrieval_worker.sh",
+        "--task-name", "task-0", "--run-id", "run-0", "--plan", str(plan),
+        "--plan-sha256", "a" * 64, "--config", "configs/agentic.yaml",
+        "--artifact-prefix", "hf://buckets/private/trec_rag_2026/experiments/run-0",
+        "--topic", "rag2026-0", cwd=checkout, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "model_snapshot_verified=mixedbread-ai/mxbai-rerank-base-v2@3ea9d4dffa7d12a4f366be8e275c349de9fc9865" in result.stdout
+    rows = (tmp_path / "runtime/events/worker.log").read_text(encoding="utf-8").splitlines()
+    assert rows == [
+        "prefetch|mixedbread-ai/mxbai-rerank-base-v2|3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
+        "worker|rag2026-0",
     ]
