@@ -20,6 +20,7 @@ from trec_rag.hf_bucket_listing import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / ".dstack" / "rag26-retrieval-cache-shard.yaml"
+DEV_CONFIG_PATH = REPO_ROOT / ".dstack" / "rag26-retrieval-cache-dev.yaml"
 WRAPPER_PATH = REPO_ROOT / "code" / "tools" / "run_retrieval_cache_shard.sh"
 LAUNCHER_PATH = REPO_ROOT / "code" / "tools" / "apply_retrieval_cache_shard.sh"
 
@@ -38,6 +39,22 @@ def _configuration() -> dict[str, object]:
     value = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     assert isinstance(value, dict)
     return value
+
+
+def test_dstack_dev_environment_is_interactive_bounded_and_48gb_only() -> None:
+    value = yaml.safe_load(DEV_CONFIG_PATH.read_text(encoding="utf-8"))
+    assert value["type"] == "dev-environment"
+    assert value["ide"] == "vscode"
+    assert value["image"] == IMAGE
+    assert value["resources"] == {
+        "gpu": {"name": ["A40", "A6000", "L40S"], "count": 1, "memory": "48GB.."},
+        "memory": "32GB..",
+        "disk": "100GB",
+    }
+    assert value["spot_policy"] == "on-demand"
+    assert value["max_price"] == 1.0
+    assert value["max_duration"] == "5h"
+    assert value["idle_duration"] == "30m"
 
 
 def test_dstack_shard_task_has_a_bounded_ephemeral_resource_contract() -> None:
