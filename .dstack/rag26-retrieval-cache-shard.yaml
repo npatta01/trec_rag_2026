@@ -27,9 +27,9 @@ commands:
 
 resources:
   gpu:
-    name: [A5000, L4, RTX3090, RTX4090, A6000, A40, L40S]
+    name: [A40, A6000, L40S]
     count: 1
-    memory: 24GB..
+    memory: 48GB..
   memory: 32GB..
   disk: 100GB
 

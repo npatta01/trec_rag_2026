@@ -260,10 +260,16 @@ configs, untracked assets, and tracked-but-uncommitted changes therefore cannot
 enter the transport patch. No branch push is required.
 
 The remote wrapper commits dstack's applied patch only in the disposable
-checkout, verifies a clean `HEAD`, installs the locked CUDA environment against
-the image's existing Python, and runs exactly one selected topic. Both the local
-preflight and remote job use only the project-lock-installed `hf` executable;
-the `uvx hf` fallback is intentionally unsupported.
+checkout, verifies a clean `HEAD`, and installs the locked CUDA environment
+against the image's existing Python once per machine. It accepts one or two
+unique repeated `--topic` selectors. Environment setup, bucket authentication,
+model prefetch, and the CUDA gate are shared; each topic receives a distinct
+one-worker config, cache root, output experiment, work root, bundle directory,
+and private prefix. Topic jobs run concurrently in independent subshells. A
+failed topic makes the overall task nonzero but does not interrupt or roll back
+a successful sibling's immutable publication. Both the local preflight and
+remote job use only the project-lock-installed `hf` executable; the `uvx hf`
+fallback is intentionally unsupported.
 
 The wrapper downloads and then resolves both public snapshots offline before
 retrieval:
@@ -284,10 +290,16 @@ hf://buckets/Npatta01/trec_mlm_2026/
     bundle-complete.json
 ```
 
-The wrapper refuses a non-private bucket or non-empty topic prefix. It does not
-delete or overwrite remote files. After both uploads it lists the prefix,
-downloads both files, compares their bytes, and runs the bundle verifier in the
-foreground. A dstack success without that round trip is not a completed shard.
+The wrapper refuses a non-private bucket or any non-empty selected topic prefix.
+Because the `hf` CLI performs a lexical prefix lookup after stripping a trailing
+slash, every gate lists the run-level parent and then validates and filters the
+exact `<topic-id>/` subtree. Safe sibling topics are ignored; malformed paths,
+paths outside that run parent, and non-directory lookalike roots fail closed.
+The wrapper does not delete or overwrite remote files. After both uploads for
+each topic it repeats that exact-subtree validation, downloads both files,
+compares their bytes, and runs the bundle verifier inside that topic's subshell.
+A dstack success without every selected topic's round trip is not a completed
+batch.
 
 You may run the credential-free wrapper preflight by itself before looking at
 offers. `--config` accepts only a tracked, repository-relative path:
@@ -295,53 +307,52 @@ offers. `--config` accepts only a tracked, repository-relative path:
 ```bash
 HF_CLI_MODE=direct bash code/tools/run_retrieval_cache_shard.sh \
   --preflight \
-  --topic rag2026-0 \
-  --run-id nonagentic-two-topic-20260806
+  --topic 14 \
+  --topic 37 \
+  --run-id nonagentic-rag25-dev-20260806 \
+  --config configs/rag25_competition_retrieval_v1.yaml
 ```
 
 The dstack task accepts only the named secrets `HF_TOKEN`, `INDEX_URL`,
 `PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY`. Configure them in the dstack
-project; never put their values in the YAML or command line. Preview each topic
-without submitting it and retain the complete offers output. The launcher's
-`--preview` mode supplies the declining `n` itself:
+project; never put their values in the YAML or command line. Preview each
+one- or two-topic shard without submitting it and retain the complete offers
+output. The launcher's `--preview` mode supplies the declining `n` itself:
 
 ```bash
 bash code/tools/apply_retrieval_cache_shard.sh \
   --preview \
-  --name rag26-cache-rag2026-0 \
-  -- --topic rag2026-0 --run-id nonagentic-two-topic-20260806
-
-bash code/tools/apply_retrieval_cache_shard.sh \
-  --preview \
-  --name rag26-cache-rag2026-1 \
-  -- --topic rag2026-1 --run-id nonagentic-two-topic-20260806
+  --name rag25-cache-14-37 \
+  -- --topic 14 --topic 37 \
+  --run-id nonagentic-rag25-dev-20260806 \
+  --config configs/rag25_competition_retrieval_v1.yaml
 ```
 
-The task requests one on-demand `A5000`, `L4`, `RTX3090`, `RTX4090`, `A6000`,
-`A40`, or `L40S` with at least 24 GB VRAM, 32 GB RAM, and 100 GB disk. It has a `$1.00/hour` ceiling, a
-five-hour running limit, a 30-minute retry only for `no-capacity`, and zero idle
-retention. Previewing is read-only. After the two offers and expected hosted
-work have been explicitly approved, replace `--preview` with `--launch`; the
-launcher then supplies dstack's `-y -d` flags itself.
+The task requests one on-demand `A40`, `A6000`, or `L40S` with at least 48 GB
+VRAM, 32 GB RAM, and 100 GB disk. It has a `$1.00/hour` ceiling, a five-hour
+running limit, a 30-minute retry only for `no-capacity`, and zero idle retention.
+Previewing is read-only. After the compliant offers and expected hosted work
+have been explicitly approved, replace `--preview` with `--launch`; the launcher
+then supplies dstack's `-y -d` flags itself.
 
 Download each completed private prefix to a separate local directory and verify
 before touching the shared cache:
 
 ```bash
-shard_root="$(pwd)/outputs/private-cache-shards/nonagentic-two-topic-20260806"
-mkdir -p "$shard_root/rag2026-0" "$shard_root/rag2026-1"
+shard_root="$(pwd)/outputs/private-cache-shards/nonagentic-rag25-dev-20260806"
+mkdir -p "$shard_root/14" "$shard_root/37"
 
 .venv/bin/hf buckets sync \
-  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0 \
-  "$shard_root/rag2026-0"
+  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/14 \
+  "$shard_root/14"
 .venv/bin/hf buckets sync \
-  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-1 \
-  "$shard_root/rag2026-1"
+  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/37 \
+  "$shard_root/37"
 
 .venv/bin/python -m trec_rag.competition_cache_bundle verify \
-  "$shard_root/rag2026-0"
+  "$shard_root/14"
 .venv/bin/python -m trec_rag.competition_cache_bundle verify \
-  "$shard_root/rag2026-1"
+  "$shard_root/37"
 ```
 
 Merge only verified bundles. The merge stages every source, journals intent,
@@ -358,8 +369,8 @@ it records, but never averages, small cross-device numerical differences:
   --cache-root "$(pwd)/cache" \
   --outputs-root "$(pwd)/outputs" \
   --score-conflicts keep-existing \
-  "$shard_root/rag2026-0" \
-  "$shard_root/rag2026-1"
+  "$shard_root/14" \
+  "$shard_root/37"
 ```
 
 An incomplete merge journal makes competition retrieval fail closed. Re-run the
@@ -368,7 +379,7 @@ journal by hand.
 
 For the local proof, copy the canonical retrieval config under ignored
 `configs/local/`, assign a new experiment ID such as
-`nonagentic-two-topic-local-replay-20260806`, and run the same two topics with
+`nonagentic-rag25-dev-local-replay-20260806`, and run the same two topics with
 offline cache-only mode. Keep the real `INDEX_URL` because it is part of the
 retrieval identity, but mask credentials so a regression cannot reach a hosted
 service:
@@ -379,9 +390,9 @@ PYSERINI_API_TOKEN=offline-disabled \
 HF_TOKEN=offline-disabled \
 TREC_RAG_CACHE_ROOT="$(pwd)/cache" \
 .venv/bin/python-rocm -m trec_rag.competition_retrieval \
-  configs/local/nonagentic-two-topic-local-replay-20260806.yaml \
+  configs/local/nonagentic-rag25-dev-local-replay-20260806.yaml \
   --offline-cache-only \
-  --topic rag2026-0 --topic rag2026-1
+  --topic 14 --topic 37
 ```
 
 Success requires authenticated per-topic and root cache-operation receipts with
@@ -399,8 +410,8 @@ report in an ignored private output directory:
 .venv/bin/python -m trec_rag.competition_retrieval_evaluation \
   --run outputs/nonagentic-rag25-dev-local-replay-20260806/r_output_trec_rag_2026.tsv \
   --qrels trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels \
-  --topic 31 \
-  --output outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/topic-31.json
+  --topic 14 --topic 37 \
+  --output outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/topics-14-37.json
 ```
 
 Repeat `--topic ID` for the exact population represented by an aggregate run.

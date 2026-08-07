@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run one non-agentic competition-retrieval topic on an ephemeral CUDA host,
-# publish its immutable cache bundle to a private Hugging Face Bucket prefix,
-# then download and verify the published bytes before reporting success.
+# Run one or two non-agentic competition-retrieval topics on an ephemeral CUDA
+# host, publish each immutable cache bundle to its private Hugging Face Bucket
+# prefix, then download and verify the published bytes before reporting success.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -15,14 +15,14 @@ MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 MINILM_REVISION="1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
 
 preflight=false
-topic_id=""
+topic_ids=()
 run_id=""
 config_arg="$DEFAULT_CONFIG"
 
 usage() {
   cat <<'EOF'
 Usage:
-  run_retrieval_cache_shard.sh [--preflight] --topic SAFE_ID --run-id SAFE_ID [--config PATH]
+  run_retrieval_cache_shard.sh [--preflight] --topic SAFE_ID [--topic SAFE_ID] --run-id SAFE_ID [--config PATH]
 
 --topic accepts a safe topic ID that must be present in the configured topics.
 Examples: numeric RAG25 topic 31; RAG26 topic rag2026-0.
@@ -46,7 +46,7 @@ while (($#)); do
       ;;
     --topic)
       (($# >= 2)) || die "--topic needs a value"
-      topic_id=$2
+      topic_ids+=("$2")
       shift 2
       ;;
     --run-id)
@@ -69,9 +69,18 @@ while (($#)); do
   esac
 done
 
-[[ $topic_id =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ ]] \
-  || die "--topic must be a safe configured topic ID"
+((${#topic_ids[@]} >= 1 && ${#topic_ids[@]} <= 2)) \
+  || die "one or two --topic selectors are required"
+declare -A seen_topic_ids=()
+for selected_topic_id in "${topic_ids[@]}"; do
+  [[ $selected_topic_id =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ ]] \
+    || die "--topic must be a safe configured topic ID"
+  [[ -z ${seen_topic_ids[$selected_topic_id]+present} ]] \
+    || die "--topic selectors must be unique"
+  seen_topic_ids[$selected_topic_id]=true
+done
 [[ $run_id =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$ ]] || die "--run-id must be a safe run ID"
+topic_ids_csv=$(IFS=,; printf '%s' "${topic_ids[*]}")
 
 case "$config_arg" in
   /*) die "--config must name a tracked, repository-relative config" ;;
@@ -91,7 +100,7 @@ if ! $preflight; then
   git config user.email >/dev/null 2>&1 || git config user.email "dstack-cache-shard@invalid.local"
   git add -A
   if ! git diff --cached --quiet; then
-    git commit --no-gpg-sign -m "dstack ephemeral cache shard ${run_id} ${topic_id}" >/dev/null
+    git commit --no-gpg-sign -m "dstack ephemeral cache shard ${run_id} ${topic_ids_csv}" >/dev/null
   fi
   tracked_status=$(git status --porcelain=v1 --untracked-files=all)
   [[ -z $tracked_status ]] || die "transported checkout is not clean after the ephemeral commit"
@@ -116,16 +125,9 @@ if $preflight; then
   [[ -x $venv_hf ]] || die "the locked project environment does not provide hf"
 fi
 
-experiment_id="${run_id}-${topic_id}"
-shard_config_rel="configs/local/${experiment_id}.yaml"
-shard_config="$REPO_ROOT/$shard_config_rel"
-work_root="/tmp/trec-rag-cache-shards/${run_id}/${topic_id}"
-cache_root="$work_root/cache"
-bundle_dir="$work_root/bundle"
-remote_prefix="hf://buckets/${BUCKET_ID}/${BUCKET_REPO_PREFIX}/experiments/${run_id}/${topic_id}"
-
 validate_configured_topic() {
   local interpreter=$1
+  local topic_id=$2
   "$interpreter" - "$source_config" "$topic_id" <<'PY'
 from __future__ import annotations
 
@@ -159,15 +161,29 @@ if $preflight; then
   fi
   preflight_python="$REPO_ROOT/.venv/bin/python"
   [[ -x $preflight_python ]] || die "project .venv is required for configured-topic preflight"
-  validate_configured_topic "$preflight_python"
+  for selected_topic_id in "${topic_ids[@]}"; do
+    validate_configured_topic "$preflight_python" "$selected_topic_id"
+  done
   printf '%s\n' \
     "preflight=ok" \
-    "topic_id=$topic_id" \
-    "experiment_id=$experiment_id" \
-    "cache_root=$cache_root" \
-    "remote_prefix=$remote_prefix" \
-    "runner_argv=.venv/bin/python -m trec_rag.competition_retrieval $shard_config_rel --topic $topic_id" \
-    "pack_argv=.venv/bin/python -m trec_rag.competition_cache_bundle pack --config $shard_config_rel --topic $topic_id --destination $bundle_dir"
+    "topic_ids=$topic_ids_csv" \
+    "parallel_topic_processes=${#topic_ids[@]}"
+  for selected_topic_id in "${topic_ids[@]}"; do
+    selected_experiment_id="${run_id}-${selected_topic_id}"
+    selected_config_rel="configs/local/${selected_experiment_id}.yaml"
+    selected_work_root="/tmp/trec-rag-cache-shards/${run_id}/${selected_topic_id}"
+    selected_cache_root="$selected_work_root/cache"
+    selected_bundle_dir="$selected_work_root/bundle"
+    selected_remote_prefix="hf://buckets/${BUCKET_ID}/${BUCKET_REPO_PREFIX}/experiments/${run_id}/${selected_topic_id}"
+    printf '%s\n' \
+      "topic_id=$selected_topic_id" \
+      "experiment_id=$selected_experiment_id" \
+      "cache_root=$selected_cache_root" \
+      "output_root=$REPO_ROOT/outputs/$selected_experiment_id" \
+      "remote_prefix=$selected_remote_prefix" \
+      "runner_argv=.venv/bin/python -m trec_rag.competition_retrieval $selected_config_rel --topic $selected_topic_id" \
+      "pack_argv=.venv/bin/python -m trec_rag.competition_cache_bundle pack --config $selected_config_rel --topic $selected_topic_id --destination $selected_bundle_dir"
+  done
   exit 0
 fi
 
@@ -200,15 +216,24 @@ venv_python="$REPO_ROOT/.venv/bin/python"
 venv_hf="$REPO_ROOT/.venv/bin/hf"
 [[ -x $venv_hf ]] || die "the locked project environment did not install hf"
 
-mkdir -p "$work_root" "$cache_root" "$(dirname "$shard_config")"
-chmod 700 "$work_root" "$cache_root"
-export TREC_RAG_CACHE_ROOT="$cache_root"
-export HF_HOME="$work_root/huggingface"
+run_root="/tmp/trec-rag-cache-shards/${run_id}"
+shared_root="$run_root/shared"
+config_root="$REPO_ROOT/configs/local"
+export HF_HOME="$shared_root/huggingface"
+mkdir -p "$run_root" "$shared_root" "$HF_HOME" "$config_root"
+chmod 700 "$run_root" "$shared_root" "$HF_HOME"
 
-# Validate the exact topic and generate its isolated one-worker config before
+# Validate every selector and generate independent one-worker configs before
 # downloading models or making any hosted request.
-validate_configured_topic "$venv_python"
-"$venv_python" - "$source_config" "$shard_config" "$experiment_id" "$topic_id" <<'PY'
+for topic_id in "${topic_ids[@]}"; do
+  experiment_id="${run_id}-${topic_id}"
+  shard_config="$config_root/${experiment_id}.yaml"
+  work_root="$run_root/$topic_id"
+  cache_root="$work_root/cache"
+  mkdir -p "$work_root" "$cache_root"
+  chmod 700 "$work_root" "$cache_root"
+  validate_configured_topic "$venv_python" "$topic_id"
+  "$venv_python" - "$source_config" "$shard_config" "$experiment_id" "$topic_id" <<'PY'
 from __future__ import annotations
 
 from pathlib import Path
@@ -237,13 +262,13 @@ selected = select_configured_topics(loaded, topic_ids=(topic_id,))
 if len(selected) != 1 or selected[0].id != topic_id:
     raise SystemExit("selected topic is absent from the canonical source")
 PY
+done
 
-# Authenticate storage and reserve an immutable empty prefix before model
-# downloads, CUDA work, or hosted retrieval. All later HF calls use this exact
-# locked CLI executable.
+# Authenticate storage once, then fail closed unless every selected immutable
+# prefix is empty before model downloads, CUDA work, or hosted retrieval.
 hf_cli buckets --help >/dev/null
 hf_cli auth whoami --format json >/dev/null
-bucket_info="$work_root/bucket-info.json"
+bucket_info="$shared_root/bucket-info.json"
 hf_cli buckets info "$BUCKET_ID" --format json >"$bucket_info"
 "$venv_python" - "$bucket_info" <<'PY'
 from __future__ import annotations
@@ -257,10 +282,16 @@ if not isinstance(value, dict) or value.get("private") is not True:
     raise SystemExit("the configured Hugging Face Bucket is not private")
 PY
 
-remote_listing_before="$work_root/remote-listing-before.json"
-hf_cli buckets list "$remote_prefix" --recursive --format json >"$remote_listing_before"
-"$venv_python" -m trec_rag.hf_bucket_listing \
-  require-empty "$remote_listing_before"
+run_bucket_path="${BUCKET_REPO_PREFIX}/experiments/${run_id}"
+run_remote_prefix="hf://buckets/${BUCKET_ID}/${run_bucket_path}"
+remote_listing_before="$shared_root/remote-listing-before.json"
+hf_cli buckets list "$run_remote_prefix" --recursive --format json >"$remote_listing_before"
+for topic_id in "${topic_ids[@]}"; do
+  topic_bucket_path="${run_bucket_path}/${topic_id}"
+  "$venv_python" -m trec_rag.hf_bucket_listing \
+    require-empty "$remote_listing_before" \
+    --topic-prefix "$topic_bucket_path"
+done
 
 # Fetch both exact public snapshots before paid retrieval. The second lookup is
 # offline and exercises the same local cache contract used by production.
@@ -306,63 +337,109 @@ if not torch.cuda.is_available():
 print(f"torch.cuda.device_name={torch.cuda.get_device_name(0)}")
 PY
 
-"$venv_python" -m trec_rag.competition_retrieval \
-  "$shard_config" \
-  --topic "$topic_id"
+run_topic_job() (
+  set -euo pipefail
+  local topic_id=$1
+  local experiment_id="${run_id}-${topic_id}"
+  local shard_config="$config_root/${experiment_id}.yaml"
+  local work_root="$run_root/$topic_id"
+  local cache_root="$work_root/cache"
+  local bundle_dir="$work_root/bundle"
+  local topic_bucket_path="${run_bucket_path}/${topic_id}"
+  local remote_prefix="hf://buckets/${BUCKET_ID}/${topic_bucket_path}"
+  export TREC_RAG_CACHE_ROOT="$cache_root"
 
-"$venv_python" -m trec_rag.competition_cache_bundle pack \
-  --config "$shard_config" \
-  --topic "$topic_id" \
-  --destination "$bundle_dir"
-"$venv_python" -m trec_rag.competition_cache_bundle verify "$bundle_dir"
+  "$venv_python" -m trec_rag.competition_retrieval \
+    "$shard_config" \
+    --topic "$topic_id"
 
-bundle_archive="$bundle_dir/bundle.tar.zst"
-bundle_completion="$bundle_dir/bundle-complete.json"
-[[ -f $bundle_archive && ! -L $bundle_archive ]] || die "bundle archive is missing"
-[[ -f $bundle_completion && ! -L $bundle_completion ]] || die "bundle completion is missing"
+  "$venv_python" -m trec_rag.competition_cache_bundle pack \
+    --config "$shard_config" \
+    --topic "$topic_id" \
+    --destination "$bundle_dir"
+  "$venv_python" -m trec_rag.competition_cache_bundle verify "$bundle_dir"
 
-# The early check is not a reservation. Recheck immediately before the first
-# immutable upload so a concurrent writer cannot be silently ignored.
-remote_listing_preupload="$work_root/remote-listing-preupload.json"
-hf_cli buckets list "$remote_prefix" --recursive --format json >"$remote_listing_preupload"
-"$venv_python" -m trec_rag.hf_bucket_listing \
-  require-empty "$remote_listing_preupload"
+  local bundle_archive="$bundle_dir/bundle.tar.zst"
+  local bundle_completion="$bundle_dir/bundle-complete.json"
+  [[ -f $bundle_archive && ! -L $bundle_archive ]] || die "bundle archive is missing for topic $topic_id"
+  [[ -f $bundle_completion && ! -L $bundle_completion ]] || die "bundle completion is missing for topic $topic_id"
 
-upload_number=0
-upload_one() {
-  local source=$1
-  local basename
-  basename=$(basename "$source")
-  upload_number=$((upload_number + 1))
-  local upload_stage="$work_root/upload-${upload_number}"
-  local roundtrip="$work_root/roundtrip-${upload_number}-${basename}"
-  mkdir -m 700 "$upload_stage"
-  cp -- "$source" "$upload_stage/$basename"
-  hf_cli buckets sync "$upload_stage" "$remote_prefix" --ignore-existing
-  hf_cli buckets cp "$remote_prefix/$basename" "$roundtrip"
-  cmp -s -- "$source" "$roundtrip" || die "remote $basename differs after upload"
-}
+  # The early check is not a reservation. Recheck immediately before the first
+  # immutable upload so a concurrent writer cannot be silently ignored.
+  local remote_listing_preupload="$work_root/remote-listing-preupload.json"
+  hf_cli buckets list "$run_remote_prefix" --recursive --format json >"$remote_listing_preupload"
+  "$venv_python" -m trec_rag.hf_bucket_listing \
+    require-empty "$remote_listing_preupload" \
+    --topic-prefix "$topic_bucket_path"
 
-# A consumer treats the prefix as complete only after the second publication.
-# No delete operation is supported or needed for this immutable workflow.
-upload_one "$bundle_archive"
-upload_one "$bundle_completion"
+  local upload_number=0
+  upload_one() {
+    local source=$1
+    local basename
+    basename=$(basename "$source")
+    upload_number=$((upload_number + 1))
+    local upload_stage="$work_root/upload-${upload_number}"
+    local roundtrip="$work_root/roundtrip-${upload_number}-${basename}"
+    mkdir -m 700 "$upload_stage"
+    cp -- "$source" "$upload_stage/$basename"
+    hf_cli buckets sync "$upload_stage" "$remote_prefix" --ignore-existing
+    hf_cli buckets cp "$remote_prefix/$basename" "$roundtrip"
+    cmp -s -- "$source" "$roundtrip" \
+      || die "remote $basename differs after upload for topic $topic_id"
+  }
 
-remote_listing_after="$work_root/remote-listing-after.json"
-hf_cli buckets list "$remote_prefix" --recursive --format json >"$remote_listing_after"
-"$venv_python" -m trec_rag.hf_bucket_listing \
-  require-bundle "$remote_listing_after"
+  # A consumer treats the prefix as complete only after the second publication.
+  # No delete operation is supported or needed for this immutable workflow.
+  upload_one "$bundle_archive"
+  upload_one "$bundle_completion"
 
-downloaded_bundle="$work_root/downloaded-bundle"
-mkdir -m 700 "$downloaded_bundle"
-hf_cli buckets cp "$remote_prefix/bundle.tar.zst" "$downloaded_bundle/bundle.tar.zst"
-hf_cli buckets cp "$remote_prefix/bundle-complete.json" "$downloaded_bundle/bundle-complete.json"
-cmp -s -- "$bundle_archive" "$downloaded_bundle/bundle.tar.zst" || die "downloaded archive digest differs"
-cmp -s -- "$bundle_completion" "$downloaded_bundle/bundle-complete.json" || die "downloaded completion digest differs"
-"$venv_python" -m trec_rag.competition_cache_bundle verify "$downloaded_bundle"
+  local remote_listing_after="$work_root/remote-listing-after.json"
+  hf_cli buckets list "$run_remote_prefix" --recursive --format json >"$remote_listing_after"
+  "$venv_python" -m trec_rag.hf_bucket_listing \
+    require-bundle "$remote_listing_after" \
+    --topic-prefix "$topic_bucket_path"
+
+  local downloaded_bundle="$work_root/downloaded-bundle"
+  mkdir -m 700 "$downloaded_bundle"
+  hf_cli buckets cp "$remote_prefix/bundle.tar.zst" "$downloaded_bundle/bundle.tar.zst"
+  hf_cli buckets cp "$remote_prefix/bundle-complete.json" "$downloaded_bundle/bundle-complete.json"
+  cmp -s -- "$bundle_archive" "$downloaded_bundle/bundle.tar.zst" \
+    || die "downloaded archive digest differs for topic $topic_id"
+  cmp -s -- "$bundle_completion" "$downloaded_bundle/bundle-complete.json" \
+    || die "downloaded completion digest differs for topic $topic_id"
+  "$venv_python" -m trec_rag.competition_cache_bundle verify "$downloaded_bundle"
+
+  printf '%s\n' \
+    "shard_status=complete" \
+    "topic_id=$topic_id" \
+    "experiment_id=$experiment_id" \
+    "remote_prefix=$remote_prefix"
+)
+
+topic_pids=()
+for topic_id in "${topic_ids[@]}"; do
+  run_topic_job "$topic_id" &
+  topic_pids+=("$!")
+done
+
+failed_topics=()
+for topic_index in "${!topic_pids[@]}"; do
+  if wait "${topic_pids[$topic_index]}"; then
+    continue
+  else
+    topic_status=$?
+  fi
+  topic_id=${topic_ids[$topic_index]}
+  printf 'ERROR: topic shard failed: %s (exit %s)\n' "$topic_id" "$topic_status" >&2
+  failed_topics+=("$topic_id")
+done
+
+if ((${#failed_topics[@]})); then
+  failed_topics_csv=$(IFS=,; printf '%s' "${failed_topics[*]}")
+  die "one or more topic shards failed: $failed_topics_csv"
+fi
 
 printf '%s\n' \
-  "shard_status=complete" \
-  "topic_id=$topic_id" \
-  "experiment_id=$experiment_id" \
-  "remote_prefix=$remote_prefix"
+  "shard_batch_status=complete" \
+  "topic_ids=$topic_ids_csv" \
+  "parallel_topic_processes=${#topic_ids[@]}"

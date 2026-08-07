@@ -23,10 +23,11 @@ temp_parent=""
 usage() {
   cat <<'EOF'
 Usage:
-  apply_retrieval_cache_shard.sh --preview --name NAME -- --topic SAFE_ID --run-id SAFE_ID [--config TRACKED_PATH]
-  apply_retrieval_cache_shard.sh --launch  --name NAME -- --topic SAFE_ID --run-id SAFE_ID [--config TRACKED_PATH]
+  apply_retrieval_cache_shard.sh --preview --name NAME -- --topic SAFE_ID [--topic SAFE_ID] --run-id SAFE_ID [--config TRACKED_PATH]
+  apply_retrieval_cache_shard.sh --launch  --name NAME -- --topic SAFE_ID [--topic SAFE_ID] --run-id SAFE_ID [--config TRACKED_PATH]
 
---topic accepts a safe topic ID that must be present in the configured topics.
+Use one or two --topic selectors. Each accepts a safe topic ID that must be
+present in the configured topics.
 Examples: numeric RAG25 topic 31; RAG26 topic rag2026-0.
 
 --preview always answers "no" to dstack's submission prompt.

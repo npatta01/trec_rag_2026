@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import re
@@ -108,6 +109,562 @@ def test_wrapper_preflight_accepts_numeric_rag25_topic() -> None:
     assert "topic_id=31" in result.stdout
 
 
+def _run_rag25_wrapper_preflight(*topic_ids: str) -> subprocess.CompletedProcess[str]:
+    args = ["bash", str(WRAPPER_PATH), "--preflight"]
+    for topic_id in topic_ids:
+        args.extend(["--topic", topic_id])
+    args.extend(
+        [
+            "--run-id",
+            "nonagentic-rag25-dev-20260806",
+            "--config",
+            "configs/rag25_competition_retrieval_v1.yaml",
+        ]
+    )
+    return subprocess.run(
+        args,
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_wrapper_preflight_supports_two_unique_topics() -> None:
+    result = _run_rag25_wrapper_preflight("14", "37")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert "topic_ids=14,37" in result.stdout
+    assert "parallel_topic_processes=2" in result.stdout
+    for topic_id in ("14", "37"):
+        assert f"topic_id={topic_id}" in result.stdout
+        assert (
+            f"cache_root=/tmp/trec-rag-cache-shards/"
+            f"nonagentic-rag25-dev-20260806/{topic_id}/cache"
+        ) in result.stdout
+        assert (
+            "remote_prefix=hf://buckets/Npatta01/trec_mlm_2026/"
+            "trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/"
+            f"{topic_id}"
+        ) in result.stdout
+
+
+def test_wrapper_rejects_duplicate_topic_selectors() -> None:
+    result = _run_rag25_wrapper_preflight("14", "14")
+
+    assert result.returncode != 0
+    assert "--topic selectors must be unique" in result.stderr
+
+
+def test_wrapper_rejects_more_than_two_topic_selectors() -> None:
+    result = _run_rag25_wrapper_preflight("14", "37", "58")
+
+    assert result.returncode != 0
+    assert "one or two --topic selectors" in result.stderr
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _run_fake_live_wrapper(
+    tmp_path: Path,
+    *,
+    topic_ids: tuple[str, ...],
+    fail_topic: str = "",
+    preexisting_topic_ids: tuple[str, ...] = (),
+    force_14_144_order: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path, str]:
+    checkout = tmp_path / "checkout"
+    wrapper = checkout / WRAPPER_PATH.relative_to(REPO_ROOT)
+    source_config = checkout / RAG25_CONFIG_PATH.relative_to(REPO_ROOT)
+    wrapper.parent.mkdir(parents=True)
+    source_config.parent.mkdir(parents=True)
+    shutil.copy2(WRAPPER_PATH, wrapper)
+    shutil.copy2(RAG25_CONFIG_PATH, source_config)
+
+    subprocess.run(
+        ["git", "init", "--quiet", "--initial-branch", "task"],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Retrieval shard test"],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "retrieval-shard-test@invalid.local"],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=checkout, check=True)
+    subprocess.run(
+        ["git", "commit", "--quiet", "--no-gpg-sign", "-m", "fixture"],
+        cwd=checkout,
+        check=True,
+    )
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--quiet", "--bare", str(remote)], check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(remote)],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "push", "--quiet", "--set-upstream", "origin", "task"],
+        cwd=checkout,
+        check=True,
+    )
+
+    git_exclude = checkout / ".git" / "info" / "exclude"
+    git_exclude.write_text("/.venv/\n/configs/local/\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "remote").mkdir()
+    run_id = f"fixture-{tmp_path.parent.name}-{tmp_path.name}"
+    for topic_id in preexisting_topic_ids:
+        topic_root = runtime / "remote" / topic_id
+        topic_root.mkdir()
+        (topic_root / "bundle.tar.zst").write_text(
+            f"archive:{topic_id}\n", encoding="utf-8"
+        )
+        (topic_root / "bundle-complete.json").write_text(
+            f'{{"topic_id":"{topic_id}"}}\n', encoding="utf-8"
+        )
+    fake_bin = runtime / "bin"
+    fake_bin.mkdir()
+    venv_bin = checkout / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    real_python = REPO_ROOT / ".venv" / "bin" / "python"
+
+    _write_executable(
+        venv_bin / "python",
+        f"#!{real_python}\n"
+        + r'''from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+import time
+
+import yaml
+
+
+runtime = Path(os.environ["FAKE_SHARD_RUNTIME"])
+
+
+def event(*parts: object) -> None:
+    line = "|".join(str(part).replace("\n", "\\n") for part in parts) + "\n"
+    descriptor = os.open(runtime / "events.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descriptor, line.encode("utf-8"))
+    finally:
+        os.close(descriptor)
+
+
+args = sys.argv[1:]
+if args and args[0] == "-":
+    if len(args) == 5:
+        _, source, destination, experiment_id, topic_id = args
+        value = yaml.safe_load(Path(source).read_text(encoding="utf-8"))
+        value["experiment"]["id"] = experiment_id
+        value.setdefault("execution", {})["topic_workers"] = 1
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            yaml.safe_dump(value, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        event("config", topic_id, target, experiment_id, 1)
+        raise SystemExit(0)
+    if len(args) == 3 and Path(args[1]).is_file():
+        event("validate-topic", args[2])
+        raise SystemExit(0)
+    if len(args) == 3:
+        event("model-prefetch", os.environ.get("HF_HOME", ""), args[1], args[2])
+        raise SystemExit(0)
+    if len(args) == 2:
+        event("bucket-private-check", args[1])
+        raise SystemExit(0)
+    if len(args) == 1:
+        event("cuda-check")
+        raise SystemExit(0)
+
+if args[:2] == ["-m", "trec_rag.hf_bucket_listing"]:
+    event("listing-check", *args[2:])
+    from trec_rag.hf_bucket_listing import main
+
+    raise SystemExit(main(args[2:]))
+
+if args[:2] == ["-m", "trec_rag.competition_retrieval"]:
+    rest = args[2:]
+    topic_id = rest[rest.index("--topic") + 1]
+    config_path = Path(rest[0])
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    event(
+        "retrieval-start",
+        topic_id,
+        os.environ.get("TREC_RAG_CACHE_ROOT", ""),
+        config["experiment"]["id"],
+    )
+    started = runtime / "started"
+    started.mkdir(exist_ok=True)
+    (started / topic_id).touch()
+    expected = int(os.environ["FAKE_EXPECTED_TOPICS"])
+    deadline = time.monotonic() + 2.0
+    while len(tuple(started.iterdir())) < expected:
+        if time.monotonic() >= deadline:
+            event("retrieval-timeout", topic_id)
+            raise SystemExit(91)
+        time.sleep(0.01)
+    if topic_id == os.environ.get("FAKE_FAIL_TOPIC", ""):
+        event("retrieval-failed", topic_id)
+        raise SystemExit(42)
+    event("retrieval-complete", topic_id)
+    raise SystemExit(0)
+
+if args[:2] == ["-m", "trec_rag.competition_cache_bundle"]:
+    rest = args[2:]
+    command = rest[0]
+    if command == "pack":
+        topic_id = rest[rest.index("--topic") + 1]
+        destination = Path(rest[rest.index("--destination") + 1])
+        destination.mkdir(parents=True)
+        (destination / "bundle.tar.zst").write_text(
+            f"archive:{topic_id}\n", encoding="utf-8"
+        )
+        (destination / "bundle-complete.json").write_text(
+            f'{{"topic_id":"{topic_id}"}}\n', encoding="utf-8"
+        )
+        event(
+            "pack",
+            topic_id,
+            os.environ.get("TREC_RAG_CACHE_ROOT", ""),
+            destination,
+        )
+        raise SystemExit(0)
+    if command == "verify":
+        destination = Path(rest[1])
+        required = {"bundle.tar.zst", "bundle-complete.json"}
+        if not destination.is_dir() or {path.name for path in destination.iterdir()} != required:
+            raise SystemExit(92)
+        event("verify", destination)
+        raise SystemExit(0)
+
+event("unexpected-python", *args)
+raise SystemExit(93)
+''',
+    )
+    _write_executable(
+        venv_bin / "hf",
+        f"#!{real_python}\n"
+        + r'''from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+import time
+
+
+runtime = Path(os.environ["FAKE_SHARD_RUNTIME"])
+remote_root = runtime / "remote"
+
+
+def event(*parts: object) -> None:
+    line = "|".join(str(part).replace("\n", "\\n") for part in parts) + "\n"
+    descriptor = os.open(runtime / "events.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descriptor, line.encode("utf-8"))
+    finally:
+        os.close(descriptor)
+
+
+args = sys.argv[1:]
+if args == ["buckets", "--help"]:
+    event("hf-help")
+    raise SystemExit(0)
+if args[:2] == ["auth", "whoami"]:
+    event("hf-auth")
+    print('{"name":"fixture"}')
+    raise SystemExit(0)
+if args[:2] == ["buckets", "info"]:
+    event("hf-bucket-info")
+    print('{"private":true}')
+    raise SystemExit(0)
+if args[:2] == ["buckets", "list"]:
+    prefix = args[2]
+    marker = "hf://buckets/Npatta01/trec_mlm_2026/"
+    if not prefix.startswith(marker):
+        raise SystemExit(97)
+    requested_path = prefix.removeprefix(marker).rstrip("/")
+    run_path = os.environ["FAKE_RUN_BUCKET_PATH"]
+    cache_root = os.environ.get("TREC_RAG_CACHE_ROOT", "")
+    caller_topic = Path(cache_root).parent.name if cache_root else ""
+    if os.environ.get("FAKE_FORCE_14_144_ORDER") == "1" and caller_topic == "14":
+        sibling_root = remote_root / "144"
+        deadline = time.monotonic() + 3.0
+        while not sibling_root.is_dir() or len(tuple(sibling_root.iterdir())) < 2:
+            if time.monotonic() >= deadline:
+                event("hf-list-timeout", requested_path, caller_topic)
+                raise SystemExit(98)
+            time.sleep(0.01)
+    all_entries = []
+    for topic_root in sorted(remote_root.iterdir()):
+        if not topic_root.is_dir():
+            continue
+        topic_path = f"{run_path}/{topic_root.name}"
+        all_entries.append({"path": topic_path, "type": "directory"})
+        all_entries.extend(
+            {"path": f"{topic_path}/{path.name}", "type": "file"}
+            for path in sorted(topic_root.iterdir())
+        )
+    entries = [
+        entry
+        for entry in all_entries
+        if entry["path"] != requested_path
+        and entry["path"].startswith(requested_path)
+    ]
+    event("hf-list", requested_path, caller_topic, len(entries))
+    print(json.dumps(entries))
+    raise SystemExit(0)
+if args[:2] == ["buckets", "sync"]:
+    source = Path(args[2])
+    prefix = args[3]
+    topic_id = prefix.rstrip("/").split("/")[-1]
+    topic_root = remote_root / topic_id
+    topic_root.mkdir(parents=True, exist_ok=True)
+    for path in source.iterdir():
+        target = topic_root / path.name
+        if target.exists():
+            raise SystemExit(94)
+        shutil.copyfile(path, target)
+        event("upload", topic_id, path.name)
+    raise SystemExit(0)
+if args[:2] == ["buckets", "cp"]:
+    source = args[2]
+    destination = Path(args[3])
+    pieces = source.rstrip("/").split("/")
+    topic_id, basename = pieces[-2:]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(remote_root / topic_id / basename, destination)
+    event("remote-copy", topic_id, basename)
+    raise SystemExit(0)
+
+event("unexpected-hf", *args)
+raise SystemExit(95)
+''',
+    )
+    _write_executable(
+        fake_bin / "python3",
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ ${1:-} == -c ]] || exit 96
+printf '3.12\\n'
+""",
+    )
+    _write_executable(
+        fake_bin / "uv",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv-sync\\n' >>"$FAKE_SHARD_RUNTIME/events.log"
+""",
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "HF_CLI_MODE": "direct",
+            "HF_TOKEN": "fixture",
+            "INDEX_URL": "https://index.invalid",
+            "PYSERINI_API_TOKEN": "fixture",
+            "OPENROUTER_API_KEY": "fixture",
+            "FAKE_SHARD_RUNTIME": str(runtime),
+            "FAKE_EXPECTED_TOPICS": str(len(topic_ids)),
+            "FAKE_FAIL_TOPIC": fail_topic,
+            "FAKE_FORCE_14_144_ORDER": "1" if force_14_144_order else "0",
+            "FAKE_RUN_BUCKET_PATH": (
+                f"trec_rag_2026/experiments/{run_id}"
+            ),
+        }
+    )
+    args = ["bash", str(wrapper)]
+    for topic_id in topic_ids:
+        args.extend(["--topic", topic_id])
+    args.extend(
+        [
+            "--run-id",
+            run_id,
+            "--config",
+            "configs/rag25_competition_retrieval_v1.yaml",
+        ]
+    )
+    result = subprocess.run(
+        args,
+        cwd=checkout,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    return result, checkout, runtime, run_id
+
+
+def _event_rows(runtime: Path) -> list[list[str]]:
+    return [
+        line.split("|")
+        for line in (runtime / "events.log").read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def _published_bundle_names(runtime: Path, topic_id: str) -> set[str]:
+    topic_root = runtime / "remote" / topic_id
+    if not topic_root.exists():
+        return set()
+    return {path.name for path in topic_root.iterdir()}
+
+
+def test_wrapper_live_single_topic_behavior_is_preserved(tmp_path: Path) -> None:
+    result, _, runtime, _ = _run_fake_live_wrapper(tmp_path, topic_ids=("31",))
+
+    assert result.returncode == 0, result.stderr
+    assert "shard_status=complete" in result.stdout
+    assert "topic_id=31" in result.stdout
+    assert _published_bundle_names(runtime, "31") == {
+        "bundle.tar.zst",
+        "bundle-complete.json",
+    }
+
+
+def test_wrapper_topic_14_ignores_a_preexisting_144_sibling(tmp_path: Path) -> None:
+    result, _, runtime, run_id = _run_fake_live_wrapper(
+        tmp_path,
+        topic_ids=("14",),
+        preexisting_topic_ids=("144",),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _published_bundle_names(runtime, "14") == {
+        "bundle.tar.zst",
+        "bundle-complete.json",
+    }
+    assert _published_bundle_names(runtime, "144") == {
+        "bundle.tar.zst",
+        "bundle-complete.json",
+    }
+    expected_run_path = f"trec_rag_2026/experiments/{run_id}"
+    assert {
+        row[1] for row in _event_rows(runtime) if row[0] == "hf-list"
+    } == {expected_run_path}
+
+
+def test_wrapper_concurrent_topics_14_and_144_publish_exact_subtrees(
+    tmp_path: Path,
+) -> None:
+    result, _, runtime, run_id = _run_fake_live_wrapper(
+        tmp_path,
+        topic_ids=("14", "144"),
+        force_14_144_order=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for topic_id in ("14", "144"):
+        assert _published_bundle_names(runtime, topic_id) == {
+            "bundle.tar.zst",
+            "bundle-complete.json",
+        }
+    rows = _event_rows(runtime)
+    expected_run_path = f"trec_rag_2026/experiments/{run_id}"
+    assert {row[1] for row in rows if row[0] == "hf-list"} == {
+        expected_run_path
+    }
+    assert any(
+        row[:4] == ["hf-list", expected_run_path, "14", "3"] for row in rows
+    )
+
+
+def test_wrapper_runs_two_isolated_parallel_topic_jobs_after_shared_setup(
+    tmp_path: Path,
+) -> None:
+    result, checkout, runtime, run_id = _run_fake_live_wrapper(
+        tmp_path,
+        topic_ids=("14", "37"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    rows = _event_rows(runtime)
+    assert sum(row[0] == "uv-sync" for row in rows) == 1
+    assert sum(row[0] == "hf-auth" for row in rows) == 1
+    assert sum(row[0] == "hf-bucket-info" for row in rows) == 1
+    assert sum(row[0] == "model-prefetch" for row in rows) == 1
+    assert sum(row[0] == "cuda-check" for row in rows) == 1
+    assert {row[1] for row in rows if row[0] == "retrieval-start"} == {"14", "37"}
+    assert not any(row[0] == "retrieval-timeout" for row in rows)
+
+    for topic_id in ("14", "37"):
+        expected_experiment = f"{run_id}-{topic_id}"
+        expected_cache = f"/tmp/trec-rag-cache-shards/{run_id}/{topic_id}/cache"
+        expected_work = f"/tmp/trec-rag-cache-shards/{run_id}/{topic_id}"
+        config_path = checkout / "configs" / "local" / f"{expected_experiment}.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config["experiment"]["id"] == expected_experiment
+        assert config["execution"]["topic_workers"] == 1
+        assert any(
+            row[:4] == ["retrieval-start", topic_id, expected_cache, expected_experiment]
+            for row in rows
+        )
+        assert any(
+            row == ["pack", topic_id, expected_cache, f"{expected_work}/bundle"]
+            for row in rows
+        )
+        assert {
+            row[1]
+            for row in rows
+            if row[0] == "verify" and row[1].startswith(expected_work)
+        } == {
+            f"{expected_work}/bundle",
+            f"{expected_work}/downloaded-bundle",
+        }
+        assert [row[2] for row in rows if row[:2] == ["upload", topic_id]] == [
+            "bundle.tar.zst",
+            "bundle-complete.json",
+        ]
+        assert _published_bundle_names(runtime, topic_id) == {
+            "bundle.tar.zst",
+            "bundle-complete.json",
+        }
+
+
+def test_failed_topic_does_not_prevent_successful_sibling_publication(
+    tmp_path: Path,
+) -> None:
+    result, _, runtime, _ = _run_fake_live_wrapper(
+        tmp_path,
+        topic_ids=("14", "37"),
+        fail_topic="14",
+    )
+
+    assert result.returncode != 0
+    assert "topic shard failed: 14" in result.stderr
+    rows = _event_rows(runtime)
+    assert {row[1] for row in rows if row[0] == "retrieval-start"} == {"14", "37"}
+    assert _published_bundle_names(runtime, "14") == set()
+    assert _published_bundle_names(runtime, "37") == {
+        "bundle.tar.zst",
+        "bundle-complete.json",
+    }
+    assert [row[2] for row in rows if row[:2] == ["upload", "37"]] == [
+        "bundle.tar.zst",
+        "bundle-complete.json",
+    ]
+
+
 def _configuration() -> dict[str, object]:
     value = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     assert isinstance(value, dict)
@@ -133,6 +690,7 @@ def test_shard_tool_help_describes_shared_safe_configured_topic_ids(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert "--topic SAFE_ID" in result.stdout
+    assert "[--topic SAFE_ID]" in result.stdout
     assert "rag2026-N" not in result.stdout
     assert "RAG25 topic 31" in result.stdout
     assert "RAG26 topic rag2026-0" in result.stdout
@@ -191,17 +749,9 @@ def test_dstack_shard_task_has_a_bounded_ephemeral_resource_contract() -> None:
     resources = config["resources"]
     assert resources == {
         "gpu": {
-            "name": [
-                "A5000",
-                "L4",
-                "RTX3090",
-                "RTX4090",
-                "A6000",
-                "A40",
-                "L40S",
-            ],
+            "name": ["A40", "A6000", "L40S"],
             "count": 1,
-            "memory": "24GB..",
+            "memory": "48GB..",
         },
         "memory": "32GB..",
         "disk": "100GB",
@@ -864,22 +1414,140 @@ def test_hf_listing_parser_accepts_the_cli_empty_json_and_jsonl_forms() -> None:
     )
 
 
-def test_hf_listing_requirements_fail_closed() -> None:
-    require_empty_listing("")
-    with pytest.raises(HFListingError, match="not empty"):
-        require_empty_listing('[{"path":"prefix/existing"}]')
+_HF_RUN_PREFIX = "trec_rag_2026/experiments/fixture-run"
+_HF_TOPIC_14_PREFIX = f"{_HF_RUN_PREFIX}/14"
 
-    complete = (
-        '[{"path":"prefix/bundle.tar.zst","type":"file"},'
-        '{"path":"prefix/bundle-complete.json","type":"file"}]'
+
+def test_hf_listing_exact_topic_boundary_keeps_14_empty_when_144_exists() -> None:
+    sibling_listing = json.dumps(
+        [
+            {"path": f"{_HF_RUN_PREFIX}/144", "type": "directory"},
+            {
+                "path": f"{_HF_RUN_PREFIX}/144/bundle.tar.zst",
+                "type": "file",
+            },
+            {
+                "path": f"{_HF_RUN_PREFIX}/144/bundle-complete.json",
+                "type": "file",
+            },
+        ]
     )
-    require_bundle_listing(complete)
+
+    require_empty_listing(sibling_listing, topic_prefix=_HF_TOPIC_14_PREFIX)
+    with pytest.raises(HFListingError, match="not empty"):
+        require_empty_listing(
+            json.dumps(
+                [
+                    {"path": f"{_HF_RUN_PREFIX}/144", "type": "directory"},
+                    {
+                        "path": f"{_HF_TOPIC_14_PREFIX}/existing",
+                        "type": "file",
+                    },
+                ]
+            ),
+            topic_prefix=_HF_TOPIC_14_PREFIX,
+        )
+
+
+def test_hf_listing_bundle_requires_exact_two_files_only_in_target_subtree() -> None:
+    complete_records = [
+        {"path": _HF_TOPIC_14_PREFIX, "type": "directory"},
+        {
+            "path": f"{_HF_TOPIC_14_PREFIX}/bundle.tar.zst",
+            "type": "file",
+        },
+        {
+            "path": f"{_HF_TOPIC_14_PREFIX}/bundle-complete.json",
+            "type": "file",
+        },
+        {"path": f"{_HF_RUN_PREFIX}/144", "type": "directory"},
+        {
+            "path": f"{_HF_RUN_PREFIX}/144/bundle.tar.zst",
+            "type": "file",
+        },
+        {
+            "path": f"{_HF_RUN_PREFIX}/144/bundle-complete.json",
+            "type": "file",
+        },
+    ]
+    complete = json.dumps(complete_records)
+
+    require_bundle_listing(complete, topic_prefix=_HF_TOPIC_14_PREFIX)
     with pytest.raises(HFListingError, match="exactly"):
-        require_bundle_listing('[{"path":"prefix/bundle.tar.zst"}]')
+        require_bundle_listing(
+            json.dumps(
+                [
+                    {
+                        "path": f"{_HF_TOPIC_14_PREFIX}/bundle.tar.zst",
+                        "type": "file",
+                    }
+                ]
+            ),
+            topic_prefix=_HF_TOPIC_14_PREFIX,
+        )
     with pytest.raises(HFListingError, match="exactly"):
-        require_bundle_listing(complete[:-1] + ',{"path":"prefix/unexpected.txt"}]')
+        require_bundle_listing(
+            json.dumps(
+                [
+                    *complete_records,
+                    {
+                        "path": f"{_HF_TOPIC_14_PREFIX}/unexpected.txt",
+                        "type": "file",
+                    },
+                ]
+            ),
+            topic_prefix=_HF_TOPIC_14_PREFIX,
+        )
     with pytest.raises(HFListingError, match="duplicate"):
         require_bundle_listing(
-            '[{"path":"a/bundle.tar.zst"},{"path":"b/bundle.tar.zst"},'
-            '{"path":"a/bundle-complete.json"}]'
+            json.dumps(
+                [
+                    {
+                        "path": f"{_HF_TOPIC_14_PREFIX}/bundle.tar.zst",
+                        "type": "file",
+                    },
+                    {
+                        "path": f"{_HF_TOPIC_14_PREFIX}/bundle.tar.zst",
+                        "type": "file",
+                    },
+                    {
+                        "path": f"{_HF_TOPIC_14_PREFIX}/bundle-complete.json",
+                        "type": "file",
+                    },
+                ]
+            ),
+            topic_prefix=_HF_TOPIC_14_PREFIX,
         )
+
+
+@pytest.mark.parametrize(
+    ("path", "entry_type"),
+    [
+        ("trec_rag_2026/experiments/other-run/14/file", "file"),
+        (f"{_HF_RUN_PREFIX}/../fixture-run/14/file", "file"),
+        (f"{_HF_RUN_PREFIX}\\14\\file", "file"),
+        (f"/{_HF_TOPIC_14_PREFIX}/file", "file"),
+        (f"{_HF_RUN_PREFIX}/14.bad/file", "file"),
+        (f"{_HF_RUN_PREFIX}/14bundle", "file"),
+        (f"{_HF_RUN_PREFIX}/144", "file"),
+        (f"{_HF_RUN_PREFIX}/144/file", "symlink"),
+    ],
+    ids=(
+        "outside-run-parent",
+        "traversal",
+        "backslash",
+        "absolute",
+        "unsafe-lookalike-topic",
+        "lookalike-root-file",
+        "sibling-root-file",
+        "unknown-entry-type",
+    ),
+)
+def test_hf_listing_rejects_malformed_or_non_subtree_records(
+    path: str,
+    entry_type: str,
+) -> None:
+    listing = json.dumps([{"path": path, "type": entry_type}])
+
+    with pytest.raises(HFListingError):
+        require_empty_listing(listing, topic_prefix=_HF_TOPIC_14_PREFIX)
