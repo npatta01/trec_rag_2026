@@ -278,3 +278,84 @@ def test_wrapper_failure_preserves_prior_topic_and_writes_safe_receipt(tmp_path:
     payload = json.loads(receipts[0].read_text())
     assert payload["status"] == "failed"
     assert "secret" not in receipts[0].read_text()
+
+
+def test_launcher_runs_dstack_from_transport_directory_for_preview(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    for relative in (
+        Path("code/tools/apply_agentic_retrieval_worker.sh"),
+        Path("code/tools/run_agentic_retrieval_worker.sh"),
+        Path(".dstack/rag26-agentic-retrieval-worker.yaml"),
+        Path("configs/agentic.yaml"),
+    ):
+        destination = checkout / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source = {
+            Path("code/tools/apply_agentic_retrieval_worker.sh"): LAUNCHER_PATH,
+            Path("code/tools/run_agentic_retrieval_worker.sh"): WRAPPER_PATH,
+            Path(".dstack/rag26-agentic-retrieval-worker.yaml"): CONFIG_PATH,
+            Path("configs/agentic.yaml"): AGENTIC_CONFIG,
+        }[relative]
+        shutil.copy2(source, destination)
+    (checkout / "plan.json").write_text(
+        json.dumps({
+            "plan_sha256": "a" * 64,
+            "run_id": "run-0",
+            "planned_topic_ids": ["rag2026-0"],
+        }),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "--quiet", "--initial-branch", "task"], cwd=checkout, check=True)
+    subprocess.run(["git", "config", "user.name", "fixture"], cwd=checkout, check=True)
+    subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=checkout, check=True)
+    subprocess.run(["git", "add", "."], cwd=checkout, check=True)
+    subprocess.run(["git", "commit", "--quiet", "--no-gpg-sign", "-m", "fixture"], cwd=checkout, check=True)
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--quiet", "--bare", str(bare)], check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=checkout, check=True)
+    subprocess.run(["git", "push", "--quiet", "--set-upstream", "origin", "task"], cwd=checkout, check=True)
+    subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/npatta01/trec_rag_2026.git"], cwd=checkout, check=True)
+
+    (checkout / ".venv/bin").mkdir(parents=True)
+    _write_executable(
+        checkout / ".venv/bin/python",
+        f"#!/usr/bin/env bash\nexec {REPO_ROOT / '.venv/bin/python'} \"$@\"\n",
+    )
+    _write_executable(checkout / ".venv/bin/hf", "#!/usr/bin/env bash\nexit 0\n")
+    (checkout / ".git/info/exclude").write_text("/.venv/\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "dstack",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == --version ]]; then
+  printf '0.20.29\\n'
+  exit 0
+fi
+[[ ${1:-} == apply && ${2:-} == -f ]]
+task_config=$3
+python3 - "$task_config" <<'PY'
+from pathlib import Path
+import sys
+config = Path(sys.argv[1]).resolve()
+cwd = Path.cwd().resolve()
+config.relative_to(cwd)
+assert config.parent == cwd
+PY
+printf 'fake-preview-ok\\n'
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    result = _run(
+        checkout / "code/tools/apply_agentic_retrieval_worker.sh",
+        "--preview", "--name", "agentic-preview-0",
+        "--task-name", "task-0", "--run-id", "run-0",
+        "--plan-sha256", "a" * 64,
+        "--artifact-prefix", "hf://buckets/private/trec_rag_2026/experiments/run-0",
+        "--plan", "plan.json", "--config", "configs/agentic.yaml",
+        "--topic", "rag2026-0", cwd=checkout, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "fake-preview-ok" in result.stdout

@@ -189,6 +189,10 @@ run_args=(
 )
 for topic_id in "${topic_ids[@]}"; do run_args+=(--topic "$topic_id"); done
 
+# dstack 0.20.29 resolves task templates relative to its current repository
+# directory. The temporary transport directory contains the private task
+# config, while all source/snapshot paths passed to dstack remain absolute.
+cd "$transport_tmp"
 set +e
 if [[ $mode == preview ]]; then
   printf 'n\n' | "$dstack_bin" apply -f "$task_config" -n "$run_name" -- "${run_args[@]}"
