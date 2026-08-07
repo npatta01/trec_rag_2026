@@ -4,8 +4,10 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import shutil
 import subprocess
+import time
 import tomllib
 
 import pytest
@@ -169,6 +171,44 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _fixture_descendant_records(
+    runtime: Path, topic_ids: tuple[str, ...]
+) -> list[tuple[int, int]]:
+    records: list[tuple[int, int]] = []
+    for topic_id in topic_ids:
+        marker = runtime / "descendants" / topic_id
+        try:
+            values = marker.read_text(encoding="utf-8").strip().split("|")
+            pid, pgid = (int(value) for value in values)
+        except (FileNotFoundError, ValueError):
+            continue
+        if pid > 1 and pgid > 1:
+            records.append((pid, pgid))
+    return records
+
+
+def _kill_fixture_descendants(runtime: Path, topic_ids: tuple[str, ...]) -> None:
+    records = _fixture_descendant_records(runtime, topic_ids)
+    for pid, pgid in records:
+        try:
+            os.kill(-pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if not any(
+            ((state := _proc_stat(pid)) is not None and state[0] != "Z")
+            or _live_processes_in_group(pgid)
+            for pid, pgid in records
+        ):
+            return
+        time.sleep(0.05)
+
+
 def _run_fake_live_wrapper(
     tmp_path: Path,
     *,
@@ -176,6 +216,7 @@ def _run_fake_live_wrapper(
     fail_topic: str = "",
     preexisting_topic_ids: tuple[str, ...] = (),
     force_14_144_order: bool = False,
+    hold_topic_jobs: bool = False,
     configure_upstream: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, str]:
     checkout = tmp_path / "checkout"
@@ -250,6 +291,7 @@ def _run_fake_live_wrapper(
 import os
 from pathlib import Path
 import sys
+import signal
 import time
 
 import yaml
@@ -316,6 +358,35 @@ if args[:2] == ["-m", "trec_rag.competition_retrieval"]:
     started.mkdir(exist_ok=True)
     (started / topic_id).touch()
     expected = int(os.environ["FAKE_EXPECTED_TOPICS"])
+    if os.environ.get("FAKE_HOLD_TOPIC_JOBS") == "1":
+        descendants = runtime / "descendants"
+        descendants.mkdir(exist_ok=True)
+        descendant_pid = os.fork()
+        if descendant_pid == 0:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            marker_tmp = descendants / f".{topic_id}.{os.getpid()}.tmp"
+            marker = descendants / topic_id
+            marker_tmp.write_text(
+                f"{os.getpid()}|{os.getpgrp()}\n", encoding="utf-8"
+            )
+            os.replace(marker_tmp, marker)
+            while True:
+                time.sleep(1)
+
+        def stop_topic(_signum: int, _frame: object) -> None:
+            event("retrieval-stopped", topic_id)
+            raise SystemExit(143)
+
+        signal.signal(signal.SIGTERM, stop_topic)
+        parent_ready = runtime / "parent-ready"
+        parent_ready.mkdir(exist_ok=True)
+        ready_tmp = parent_ready / f".{topic_id}.{os.getpid()}.tmp"
+        ready_marker = parent_ready / topic_id
+        ready_tmp.write_text("ready\n", encoding="utf-8")
+        os.replace(ready_tmp, ready_marker)
+        event("retrieval-holding", topic_id)
+        while True:
+            time.sleep(1)
     deadline = time.monotonic() + 2.0
     while len(tuple(started.iterdir())) < expected:
         if time.monotonic() >= deadline:
@@ -490,6 +561,7 @@ printf 'uv-sync\\n' >>"$FAKE_SHARD_RUNTIME/events.log"
             "FAKE_EXPECTED_TOPICS": str(len(topic_ids)),
             "FAKE_FAIL_TOPIC": fail_topic,
             "FAKE_FORCE_14_144_ORDER": "1" if force_14_144_order else "0",
+            "FAKE_HOLD_TOPIC_JOBS": "1" if hold_topic_jobs else "0",
             "FAKE_RUN_BUCKET_PATH": (
                 f"trec_rag_2026/experiments/{run_id}"
             ),
@@ -506,15 +578,79 @@ printf 'uv-sync\\n' >>"$FAKE_SHARD_RUNTIME/events.log"
             "configs/rag25_competition_retrieval_v1.yaml",
         ]
     )
-    result = subprocess.run(
-        args,
-        cwd=checkout,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
+    if hold_topic_jobs:
+        stdout_path = runtime / "wrapper.stdout"
+        stderr_path = runtime / "wrapper.stderr"
+        stdout_file = stdout_path.open("w", encoding="utf-8")
+        stderr_file = stderr_path.open("w", encoding="utf-8")
+        process: subprocess.Popen[bytes] | None = None
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=checkout,
+                env=env,
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if all(
+                    (runtime / "started" / topic_id).exists()
+                    and (runtime / "descendants" / topic_id).exists()
+                    and (runtime / "parent-ready" / topic_id).exists()
+                    for topic_id in topic_ids
+                ):
+                    break
+                if process.poll() is not None:
+                    process.wait()
+                    raise AssertionError(
+                        f"fake wrapper exited before all topics started: "
+                        f"{process.returncode}\n"
+                        f"{stderr_path.read_text(encoding='utf-8')}"
+                    )
+                time.sleep(0.01)
+            else:
+                process.kill()
+                process.wait()
+                raise AssertionError(
+                    f"fake wrapper did not start all topics: {process.returncode}\n"
+                    f"{stderr_path.read_text(encoding='utf-8')}"
+                )
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                process.wait()
+                raise AssertionError(
+                    "fake wrapper did not reap held topic workers:\n"
+                    f"{stderr_path.read_text(encoding='utf-8')}"
+                ) from exc
+            result = subprocess.CompletedProcess(
+                args=args,
+                returncode=process.returncode,
+                stdout=stdout_path.read_text(encoding="utf-8"),
+                stderr=stderr_path.read_text(encoding="utf-8"),
+            )
+        except BaseException:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            _kill_fixture_descendants(runtime, topic_ids)
+            raise
+        finally:
+            stdout_file.close()
+            stderr_file.close()
+    else:
+        result = subprocess.run(
+            args,
+            cwd=checkout,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
     return result, checkout, runtime, run_id
 
 
@@ -530,6 +666,31 @@ def _published_bundle_names(runtime: Path, topic_id: str) -> set[str]:
     if not topic_root.exists():
         return set()
     return {path.name for path in topic_root.iterdir()}
+
+
+def _proc_stat(pid: int) -> tuple[str, int] | None:
+    stat_path = Path("/proc") / str(pid) / "stat"
+    try:
+        value = stat_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    _prefix, suffix = value.rsplit(") ", 1)
+    fields = suffix.split()
+    return fields[0], int(fields[2])
+
+
+def _live_processes_in_group(pgid: int) -> set[int]:
+    members: set[int] = set()
+    for stat_path in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            value = stat_path.read_text(encoding="utf-8")
+            pid_text, suffix = value.rsplit(") ", 1)
+            fields = suffix.split()
+            if fields[0] != "Z" and int(fields[2]) == pgid:
+                members.add(int(pid_text.split("(", 1)[0]))
+        except (FileNotFoundError, ValueError):
+            continue
+    return members
 
 
 def test_wrapper_live_single_topic_behavior_is_preserved(tmp_path: Path) -> None:
@@ -690,6 +851,83 @@ def test_failed_topic_does_not_prevent_successful_sibling_publication(
         "bundle.tar.zst",
         "bundle-complete.json",
     ]
+
+
+def test_wrapper_termination_stops_and_reaps_all_topic_workers_before_publication(
+    tmp_path: Path,
+) -> None:
+    result, _, runtime, _ = _run_fake_live_wrapper(
+        tmp_path,
+        topic_ids=("14", "37"),
+        hold_topic_jobs=True,
+    )
+
+    try:
+        descendants = {
+            topic_id: tuple(
+                int(value)
+                for value in (runtime / "descendants" / topic_id)
+                .read_text(encoding="utf-8")
+                .strip()
+                .split("|")
+            )
+            for topic_id in ("14", "37")
+        }
+        assert result.returncode == 143
+        rows = _event_rows(runtime)
+        assert {row[1] for row in rows if row[0] == "retrieval-start"} == {"14", "37"}
+        assert {row[1] for row in rows if row[0] == "retrieval-stopped"} == {"14", "37"}
+        assert not any(row[0] in {"retrieval-complete", "pack", "upload"} for row in rows)
+
+        # The fake descendants ignore TERM and outlive their worker leaders.
+        # The wrapper must KILL their process groups before it returns.
+        time.sleep(0.5)
+        for pid, pgid in descendants.values():
+            process_state = _proc_stat(pid)
+            assert process_state is None or process_state[0] == "Z"
+            assert _live_processes_in_group(pgid) == set()
+        assert _published_bundle_names(runtime, "14") == set()
+        assert _published_bundle_names(runtime, "37") == set()
+    finally:
+        # Keep a red run from leaking the intentionally stubborn fake child.
+        _kill_fixture_descendants(runtime, ("14", "37"))
+
+
+@pytest.mark.parametrize(
+    ("topic_id_length", "expected_message"),
+    [
+        (126, "absent from the configured topics"),
+        (127, "generated per-topic experiment ID exceeds 128 characters"),
+    ],
+)
+def test_wrapper_preflight_enforces_generated_experiment_id_boundary(
+    topic_id_length: int,
+    expected_message: str,
+) -> None:
+    # A one-character run ID plus '-' and a 126-character topic ID produces
+    # exactly 128 characters. The next topic character must be rejected before
+    # semantic topic validation, because downstream IDs are capped at 128.
+    topic_id = "t" * topic_id_length
+    result = subprocess.run(
+        [
+            "bash",
+            str(WRAPPER_PATH),
+            "--preflight",
+            "--topic",
+            topic_id,
+            "--run-id",
+            "r",
+            "--config",
+            "configs/rag25_competition_retrieval_v1.yaml",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert expected_message in result.stderr
 
 
 def _configuration() -> dict[str, object]:

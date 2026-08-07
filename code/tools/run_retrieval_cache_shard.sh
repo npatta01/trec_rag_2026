@@ -13,6 +13,7 @@ BUCKET_REPO_PREFIX="trec_rag_2026"
 DEFAULT_CONFIG="configs/rag26_competition_retrieval_v2.yaml"
 MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 MINILM_REVISION="1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+MAX_SAFE_ID_LENGTH=128
 
 preflight=false
 topic_ids=()
@@ -80,6 +81,15 @@ for selected_topic_id in "${topic_ids[@]}"; do
   seen_topic_ids[$selected_topic_id]=true
 done
 [[ $run_id =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$ ]] || die "--run-id must be a safe run ID"
+validate_generated_experiment_id() {
+  local topic_id=$1
+  local experiment_id="${run_id}-${topic_id}"
+  ((${#experiment_id} <= MAX_SAFE_ID_LENGTH)) \
+    || die "generated per-topic experiment ID exceeds 128 characters: $experiment_id"
+}
+for selected_topic_id in "${topic_ids[@]}"; do
+  validate_generated_experiment_id "$selected_topic_id"
+done
 topic_ids_csv=$(IFS=,; printf '%s' "${topic_ids[*]}")
 
 case "$config_arg" in
@@ -424,13 +434,146 @@ run_topic_job() (
 )
 
 topic_pids=()
+topic_pgids=()
+shutdown_topic_pids=()
+shutdown_topic_pgids=()
+shutdown_signal=""
+shutdown_status=0
+shutdown_in_progress=false
+shutdown_grace_polls=40
+shutdown_kill_polls=20
+shutdown_poll_interval_seconds=0.05
+
+is_safe_process_group_id() {
+  local pgid=$1
+  [[ $pgid =~ ^[1-9][0-9]*$ && $pgid != 1 ]]
+}
+
+topic_group_alive() {
+  local pgid=$1
+  is_safe_process_group_id "$pgid" || return 1
+  kill -0 -- "-$pgid" 2>/dev/null
+}
+
+topic_groups_alive() {
+  local pgid
+  for pgid in "${shutdown_topic_pgids[@]}"; do
+    if topic_group_alive "$pgid"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+poll_topic_groups() {
+  local maximum_polls=$1
+  local poll_number=0
+  while ((poll_number < maximum_polls)); do
+    if ! topic_groups_alive; then
+      return 0
+    fi
+    sleep "$shutdown_poll_interval_seconds"
+    poll_number=$((poll_number + 1))
+  done
+  if topic_groups_alive; then
+    return 1
+  fi
+  return 0
+}
+
+force_kill_topic_groups() {
+  local pgid
+  for pgid in "${shutdown_topic_pgids[@]}"; do
+    if topic_group_alive "$pgid"; then
+      kill -KILL -- "-$pgid" 2>/dev/null || true
+    fi
+  done
+}
+
+signal_topic_jobs() {
+  local signal_name=$1
+  local pgid
+  declare -A seen_pgids=()
+  shutdown_topic_pids=()
+  shutdown_topic_pgids=()
+  # With Bash monitor mode enabled, each worker PID is also its process-group
+  # leader. Include jobs(1) output to close the tiny launch-and-track window.
+  for pgid in "${topic_pgids[@]}" $(jobs -pr 2>/dev/null); do
+    [[ -n $pgid ]] || continue
+    [[ -z ${seen_pgids[$pgid]+present} ]] || continue
+    seen_pgids[$pgid]=true
+    if ! is_safe_process_group_id "$pgid"; then
+      printf 'ERROR: refusing to signal invalid worker process group: %s\n' \
+        "$pgid" >&2
+      continue
+    fi
+    shutdown_topic_pids+=("$pgid")
+    shutdown_topic_pgids+=("$pgid")
+    # Signal the whole group so hosted/model descendants cannot outlive the
+    # worker shell. The validated numeric guard prevents kill(1)'s group-0
+    # or broad negative-target forms.
+    kill "-$signal_name" -- "-$pgid" 2>/dev/null || true
+  done
+}
+
+reap_topic_jobs() {
+  local pid
+  for pid in "${shutdown_topic_pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
+handle_shutdown() {
+  local signal_name=$1
+  $shutdown_in_progress && return 0
+  shutdown_in_progress=true
+  shutdown_signal=$signal_name
+  case "$signal_name" in
+    HUP) shutdown_status=129 ;;
+    INT) shutdown_status=130 ;;
+    TERM) shutdown_status=143 ;;
+    *) shutdown_status=1 ;;
+  esac
+  signal_topic_jobs "$signal_name"
+  if ! poll_topic_groups "$shutdown_grace_polls"; then
+    force_kill_topic_groups
+  fi
+  reap_topic_jobs
+  # SIGKILL cannot be ignored. Poll briefly for kernel cleanup (including
+  # reparented descendants) before returning the mapped cancellation status.
+  if ! poll_topic_groups "$shutdown_kill_polls"; then
+    printf 'ERROR: worker process groups remained after SIGKILL\n' >&2
+  fi
+  printf 'ERROR: shard wrapper interrupted by %s; all topic workers were stopped\n' \
+    "$shutdown_signal" >&2
+  # Exit from the handler so a handled signal cannot fall through the final
+  # success check/print, even if it arrived while wait() was active.
+  exit "$shutdown_status"
+}
+
+trap 'handle_shutdown HUP' HUP
+trap 'handle_shutdown INT' INT
+trap 'handle_shutdown TERM' TERM
+
+# Enable Bash job control in this non-interactive wrapper so each background
+# worker receives its own process group. Signalling that group also stops any
+# hosted/model subprocess started by the worker.
+set -m
+
 for topic_id in "${topic_ids[@]}"; do
+  [[ -z $shutdown_signal ]] || break
   run_topic_job "$topic_id" &
-  topic_pids+=("$!")
+  topic_pid=$!
+  if ! is_safe_process_group_id "$topic_pid"; then
+    die "worker process group ID is not a positive numeric value: $topic_pid"
+  fi
+  topic_pids+=("$topic_pid")
+  topic_pgids+=("$topic_pid")
 done
 
 failed_topics=()
 for topic_index in "${!topic_pids[@]}"; do
+  [[ -z $shutdown_signal ]] || break
   if wait "${topic_pids[$topic_index]}"; then
     continue
   else
@@ -440,6 +583,12 @@ for topic_index in "${!topic_pids[@]}"; do
   printf 'ERROR: topic shard failed: %s (exit %s)\n' "$topic_id" "$topic_status" >&2
   failed_topics+=("$topic_id")
 done
+
+if [[ -n $shutdown_signal ]]; then
+  printf 'ERROR: shard wrapper interrupted by %s; all topic workers were stopped\n' \
+    "$shutdown_signal" >&2
+  exit "$shutdown_status"
+fi
 
 if ((${#failed_topics[@]})); then
   failed_topics_csv=$(IFS=,; printf '%s' "${failed_topics[*]}")
