@@ -1621,13 +1621,21 @@ The CLI exposes only these flags:
 - `--allow-hosted-calls` — explicitly opt in to missing planner/judge calls;
   it is off by default.
 
-The cache-only default makes no hosted calls. A cache-only `create` checks the
-authenticated input and reports missing stages without writing partial state,
-so the identical `create` command can be rerun with `--allow-hosted-calls`
-after authorization. A hosted run makes at most one narrative-only planner
-call and one all-nugget judge call. `resume` revalidates hash-bound artifacts
-and reuses valid planner and judge stages; it never replaces a valid frozen
-plan or deletes state.
+The cache-only default makes no hosted calls. A cache-only `create` is for a
+fresh namespace: it checks the authenticated input and reports missing stages
+without writing partial state, so the identical `create` command can be rerun
+with `--allow-hosted-calls` after authorization. For an existing or partial
+work directory, use `--work-dir WORK_DIR --mode resume` on both the cache-only
+and authorized invocations; the second invocation is identical except for
+`--allow-hosted-calls`. `resume` revalidates hash-bound artifacts and reuses
+valid planner and judge stages; it never replaces a valid frozen plan or
+deletes state. A hosted run makes at most one narrative-only planner call and
+one all-nugget judge call.
+
+An explicit user request to evaluate, score, or judge retrieval nugget coverage
+already authorizes only those planner and judge calls for the named topic and
+the selected provider/model identities. Inspect, explain, or debug requests
+alone do not authorize hosted calls.
 
 The private work directory contains, in order, `input.json` (hashes and alias
 identities only), `plan.json`, `judgments.json`, `report.json`, and the

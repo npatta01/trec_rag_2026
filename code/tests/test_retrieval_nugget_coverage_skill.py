@@ -57,3 +57,21 @@ def test_route_isolated_from_year_specific_inputs_and_unsafe_pipeline_actions() 
         "publishing permission",
     ):
         assert forbidden not in section
+
+
+def test_route_documents_resume_branch_for_existing_work_directory() -> None:
+    section = _route_section()
+    normalized = " ".join(section.split())
+    assert "fresh namespace" in normalized
+    assert "existing or partial work directory" in normalized
+    assert "same two-command cache-first sequence" in normalized
+    assert section.count("--work-dir WORK_DIR") >= 2
+    assert section.count("--mode resume") >= 2
+
+
+def test_explicit_nugget_request_authorizes_only_planner_and_judge_calls() -> None:
+    normalized = " ".join(_route_section().split())
+    assert "explicitly asks to evaluate, score, or judge retrieval nugget coverage" in normalized
+    assert "inspect, explain, debug, or audit" in normalized
+    assert "does not authorize hosted calls" in normalized
+    assert "only these planner and judge calls" in normalized

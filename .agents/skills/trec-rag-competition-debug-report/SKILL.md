@@ -137,9 +137,9 @@ its ordered canonical retrieval nugget text from an authenticated handoff. It
 is a separate diagnostic from the completed-run report above: it never runs
 retrieval, reranking, or generation, and it never receives selected passages.
 
-The default is cache-only and makes zero hosted calls. Start with exactly this
-read-only command; it writes no state and reports which planner or judge stages
-are missing:
+The default is cache-only and makes zero hosted calls. For a fresh namespace,
+start with exactly this read-only `create` command; it writes no state and
+reports which planner or judge stages are missing:
 
 ```bash
 .venv/bin/python \
@@ -148,14 +148,18 @@ are missing:
   --topic TOPIC_ID
 ```
 
-If a stage is missing, ask once for explicit evaluation authorization. Before
-egress, state the provider (OpenRouter), the planner and judge model identities
-(defaults are `openai/gpt-5` for each, or the exact `--planner-model` and
-`--judge-model` overrides), and that the maximum of two hosted calls is one
-narrative-only planner call followed by one all-nugget judge call. The payload
-categories are the one narrative, the derived frozen plan, and canonical
-retrieval nugget text. After authorization, rerun the identical command with
-the one opt-in flag:
+If the user's request explicitly asks to evaluate, score, or judge retrieval
+nugget coverage, it is already explicit authorization for only these planner
+and judge calls for the named topic, OpenRouter provider, and stated (or
+default) model identities; do not ask again. A request that only asks to
+inspect, explain, debug, or audit does not authorize hosted calls, so ask once
+when a stage is missing. Before egress in an authorized path, state the
+provider (OpenRouter), the planner and judge model identities (defaults are
+`openai/gpt-5` for each, or the exact `--planner-model` and `--judge-model`
+overrides), and that the maximum of two hosted calls is one narrative-only
+planner call followed by one all-nugget judge call. The payload categories are
+the one narrative, the derived frozen plan, and canonical retrieval nugget
+text. Then rerun the identical command with the one opt-in flag:
 
 ```bash
 .venv/bin/python \
@@ -164,6 +168,29 @@ the one opt-in flag:
   --topic TOPIC_ID \
   --allow-hosted-calls
 ```
+
+For an existing or partial work directory, use the same two-command
+cache-first sequence with `--work-dir WORK_DIR --mode resume` on both commands:
+
+```bash
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID \
+  --work-dir WORK_DIR \
+  --mode resume
+
+.venv/bin/python \
+  -m trec_rag.retrieval_nugget_coverage \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --topic TOPIC_ID \
+  --work-dir WORK_DIR \
+  --mode resume \
+  --allow-hosted-calls
+```
+
+The second command in either branch is identical to the first except for
+`--allow-hosted-calls`.
 
 That authorization covers only this named topic, provider, and the stated
 planner/judge identities. Never use this route to run retrieval, reranking,
