@@ -369,17 +369,22 @@ states. There is no `overwrite` mode in version 1; deleting the directory is an
 explicit user action.
 
 The authenticated narrative and canonical nugget text are retained byte-for-byte,
-including multiline and surrounding whitespace, and their SHA-256 values are
-computed over those exact strings. Empty text and unsafe control characters are
-rejected at the handoff boundary. Model-output text remains strict: it must be
-trimmed, non-empty, and free of controls where the planner or judge contract
-requires it. Topic IDs are rejected before any work-directory path is resolved
-or created when they contain path separators, absolute-path syntax, or `.`/`..`.
+including multiline, surrounding whitespace, and legitimate Unicode format
+characters such as U+200D (ZWJ), and their SHA-256 values are computed over
+those exact strings. Empty or whitespace-only text and unsafe C0/Cc control
+characters are rejected at the handoff boundary; newline, carriage return, and
+tab are permitted. Model-output text remains strict: it must be trimmed,
+non-empty, and free of controls where the planner or judge contract requires
+it. Topic IDs are rejected before any work-directory path is resolved or
+created when they contain path separators, absolute-path syntax, or `.`/`..`.
 
 Resume performs an artifact-order preflight before loading a stage or invoking a
 backend. A later artifact cannot exist while an earlier required artifact is
 missing, and persisted nugget IDs are checked against the authenticated handoff
-before judge validation; either condition is a persistence error.
+before judge validation; either condition is a persistence error. Before a
+persisted planner or judge stage is reused, its request digest must be a
+lowercase 64-hex SHA-256 and must equal the digest recomputed from the current
+v3/v2 serialized request contract, respectively.
 
 Without `--allow-hosted-calls` the run is cache-only: if a required stage is
 missing it fails and names which stages would need a hosted call, without making

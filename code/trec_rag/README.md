@@ -1648,19 +1648,24 @@ counts only actual calls made by the current invocation, while
 bundle and any provider responses outside git.
 
 Authenticated narrative and claim-hint text are preserved byte-for-byte,
-including multiline and surrounding whitespace, and hashed without
-normalization; empty text and unsafe controls are rejected. Model-output text
-remains strict and trimmed. Resume rejects impossible artifact order and
-unknown persisted nugget IDs before any backend call, and topic IDs unsafe for
-work-directory derivation are rejected before path resolution.
+including multiline, surrounding whitespace, and legitimate Unicode format
+characters such as U+200D (ZWJ), and hashed without normalization; empty or
+whitespace-only text and unsafe C0/Cc controls are rejected (newline, carriage
+return, and tab remain permitted). Model-output text remains strict and
+trimmed. Resume rejects impossible artifact order and unknown persisted nugget
+IDs before any backend call, and topic IDs unsafe for work-directory
+derivation are rejected before path resolution. Persisted planner and judge
+request digests must be lowercase 64-hex SHA-256 values matching the exact
+current serialized request before either stage is reused.
 
 Both structured OpenRouter requests require provider parameter support, deny
 provider data collection, disable reasoning, use temperature and seed zero,
 and set `stream=false`; semantic retries are disabled. Planner and judge
-prompts/schemas state the exact-substring, span-kind, obligation-count, and
-label/alias/`missing_elements` invariants. The 8192-token completion budget is
-bound into the request identities. In-memory and persisted provider metadata
-use the same secret-safe allowlist.
+prompts/schemas state the exact-substring, span-kind, obligation-count,
+required-obligation, and label/alias/`missing_elements` invariants. The
+planner prompt identity is v3 and the judge prompt identity remains v2. The
+8192-token completion budget is bound into the request identities. In-memory
+and persisted provider metadata use the same secret-safe allowlist.
 
 Scoring maps `full`, `partial`, and `unsupported` to `1.0`, `0.5`, and `0.0`.
 For each facet containing required obligations, average its required labels;
