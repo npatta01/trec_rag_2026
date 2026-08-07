@@ -1629,8 +1629,11 @@ work directory, use `--work-dir WORK_DIR --mode resume` on both the cache-only
 and authorized invocations; the second invocation is identical except for
 `--allow-hosted-calls`. `resume` revalidates hash-bound artifacts and reuses
 valid planner and judge stages; it never replaces a valid frozen plan or
-deletes state. A hosted run makes at most one narrative-only planner call and
-one all-nugget judge call.
+deletes state. Cache-only resume still makes zero hosted calls, but after
+validating cached planner and judge stages it may locally publish missing
+`report.json` and `manifest.json`; only a fresh cache-only `create` is
+write-free. A hosted run makes at most one narrative-only planner call and one
+all-nugget judge call.
 
 An explicit user request to evaluate, score, or judge retrieval nugget coverage
 already authorizes only those planner and judge calls for the named topic and
@@ -1652,28 +1655,35 @@ including multiline, surrounding whitespace, and legitimate Unicode format
 characters such as U+200D (ZWJ), and hashed without normalization; empty or
 whitespace-only text and unsafe C0/Cc controls are rejected (newline, carriage
 return, and tab remain permitted). Model-output text remains strict and
-trimmed. Resume rejects impossible artifact order and unknown persisted nugget
-IDs before any backend call, and topic IDs unsafe for work-directory
-derivation are rejected before path resolution. Persisted planner and judge
-request digests must be lowercase 64-hex SHA-256 values matching the exact
-current serialized request before either stage is reused.
+trimmed. Required and unmapped narrative spans are exact nonblank narrative
+substrings; they may preserve exact surrounding whitespace and newline,
+carriage-return, or tab characters, with at most 8 spans per obligation, 40
+unmapped spans, and 1,000 characters per span. Resume rejects impossible
+artifact order and unknown persisted nugget IDs before any backend call, and
+topic IDs unsafe for work-directory derivation are rejected before path
+resolution. Persisted planner and judge request digests must be lowercase
+64-hex SHA-256 values matching the exact current serialized request before
+either stage is reused.
 
 Both structured OpenRouter requests require provider parameter support, deny
 provider data collection, disable reasoning, use temperature and seed zero,
 and set `stream=false`; semantic retries are disabled. Planner and judge
-prompts/schemas state the exact-substring, span-kind, obligation-count,
-required-obligation, and label/alias/`missing_elements` invariants. The
-planner prompt identity is v3 and the judge prompt identity remains v2. The
-8192-token completion budget is bound into the request identities. In-memory
+prompts/schemas state the exact-substring, span-kind, span-bound,
+obligation-count, required-obligation, and label/alias/`missing_elements`
+invariants. The planner prompt identity is v4 and the judge prompt identity
+remains v2. The 8192-token completion budget is bound into the request
+identities. In-memory
 and persisted provider metadata use the same secret-safe allowlist.
 
 Scoring maps `full`, `partial`, and `unsupported` to `1.0`, `0.5`, and `0.0`.
 For each facet containing required obligations, average its required labels;
-required coverage is the equal average of those facet scores. The report also
-includes required `strict_full_rate`, a flat supplemental-obligation average
-(or `null` when none exist), label counts, per-obligation resolved nugget IDs,
-and uncited-nugget diagnostics. Receipt scores are rounded for display; report
-artifacts retain full precision.
+`required_coverage` is the equal (facet-macro) average of those facet scores.
+The report also includes `strict_full_rate` as an obligation-micro rate (full
+required obligations divided by all required obligations), a flat
+supplemental-obligation average (or `null` when none exist), and
+`label_counts`, which includes both required and supplemental obligations,
+plus per-obligation resolved nugget IDs and uncited-nugget diagnostics. Receipt
+scores are rounded for display; report artifacts retain full precision.
 
 Version 1 assumes canonical retrieval nuggets faithfully represent the
 selected passages from which they were derived; it never reopens passages.

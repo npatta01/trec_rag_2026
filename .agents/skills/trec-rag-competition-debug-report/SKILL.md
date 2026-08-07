@@ -137,7 +137,10 @@ its ordered canonical retrieval nugget text from an authenticated handoff. It
 is a separate diagnostic from the completed-run report above: it never runs
 retrieval, reranking, or generation, and it never receives selected passages.
 
-The default is cache-only and makes zero hosted calls. For a fresh namespace,
+The default is cache-only and makes zero hosted calls. Cache-only resume makes
+zero hosted calls; the `resume` mode, after validating cached planner and judge
+stages, may locally publish missing derived `report.json`/`manifest.json`
+artifacts. Only a fresh cache-only create is write-free. For a fresh namespace,
 start with exactly this read-only `create` command; it writes no state and
 reports which planner or judge stages are missing:
 

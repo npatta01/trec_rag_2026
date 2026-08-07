@@ -254,11 +254,15 @@ Validation, all fail-closed:
   characters, at most 300 characters.
 - `kind` is `required_explicit` or `supplemental_inferred`.
 - `required_explicit` requires at least one `narrative_span`, and every span must
-  be a non-empty exact substring of the narrative.
+  be an exact nonblank substring of the narrative. A span may retain exact
+  surrounding whitespace and newline, carriage-return, or tab characters from
+  the sealed narrative; at most 8 spans are allowed per obligation, and each is
+  at most 1,000 characters.
 - `supplemental_inferred` requires `narrative_spans` to be empty. A supplemental
   obligation may never claim explicit narrative support.
-- Every entry in `unmapped_narrative_spans` must be an exact narrative substring;
-  the list may be empty.
+- Every entry in `unmapped_narrative_spans` must be an exact nonblank narrative
+  substring with the same permitted whitespace and line controls, at most 1,000
+  characters; the list may be empty but has at most 40 entries.
 - At least one `required_explicit` obligation must exist, otherwise the plan is
   rejected as unscoreable rather than reported as a zero.
 
@@ -316,7 +320,7 @@ A facet is a **required facet** if it contains at least one required obligation.
 Facet-level kinds do not exist; requiredness lives only on obligations, so there
 is no way for a facet kind and its obligations' kinds to contradict each other.
 
-Primary metric — **required coverage**:
+Primary metric — **required coverage** (a facet-macro metric):
 
 1. For each required facet, average the values of its required obligations.
 2. Average those facet scores equally.
@@ -326,13 +330,14 @@ from dominating the topic score.
 
 Also reported:
 
-- `strict_full_rate` — required obligations labeled `full` divided by all
-  required obligations.
+- `strict_full_rate` — an obligation-micro metric: required obligations labeled
+  `full` divided by all required obligations.
 - `supplemental_coverage` — flat average over every supplemental obligation
   across all facets; `null` when there are none. Never mixed into required
   coverage.
-- Label counts, per-facet scores, and every per-obligation judgment with its
-  resolved supporting `claim_id`s.
+- `label_counts` includes both required and supplemental obligations, alongside
+  per-facet scores and every per-obligation judgment with its resolved
+  supporting `claim_id`s.
 - `unmapped_narrative_spans` from the plan.
 - Canonical retrieval nuggets cited by no judgment, as a count and alias list.
 
@@ -373,7 +378,9 @@ including multiline, surrounding whitespace, and legitimate Unicode format
 characters such as U+200D (ZWJ), and their SHA-256 values are computed over
 those exact strings. Empty or whitespace-only text and unsafe C0/Cc control
 characters are rejected at the handoff boundary; newline, carriage return, and
-tab are permitted. Model-output text remains strict: it must be trimmed,
+tab are permitted. The bound evaluator input recomputes the narrative digest
+from that exact sealed text before accepting it, just as it recomputes each
+nugget digest. Model-output text remains strict: it must be trimmed,
 non-empty, and free of controls where the planner or judge contract requires
 it. Topic IDs are rejected before any work-directory path is resolved or
 created when they contain path separators, absolute-path syntax, or `.`/`..`.
@@ -384,7 +391,10 @@ missing, and persisted nugget IDs are checked against the authenticated handoff
 before judge validation; either condition is a persistence error. Before a
 persisted planner or judge stage is reused, its request digest must be a
 lowercase 64-hex SHA-256 and must equal the digest recomputed from the current
-v3/v2 serialized request contract, respectively.
+v4/v2 serialized request contract, respectively. The planner digest is
+recomputed from the exact narrative and evaluator identity; the judge digest is
+recomputed from the exact narrative, frozen plan, ordered nuggets, and
+evaluator identity.
 
 Without `--allow-hosted-calls` the run is cache-only: if a required stage is
 missing it fails and names which stages would need a hosted call, without making
@@ -442,12 +452,15 @@ one short, year-neutral retrieval-nugget-coverage section — no example topic I
 dataset paths, gold, or qrels — that routes only to this CLI. This skill edit is
 the only non-code surface in scope.
 
-Default invocation is cache-only and makes no hosted call. When planner or judge
-state is missing, the skill must state the provider, the two model identities,
-the maximum of two calls, and the payload categories — one narrative, the derived
-frozen plan, and canonical retrieval nugget text — then ask once for explicit
-evaluation authorization, unless the user's own request already explicitly asked
-to evaluate nugget coverage.
+Default invocation is cache-only and makes no hosted call. A cache-only resume
+still makes zero hosted calls, but after validating cached planner and judge
+stages may locally publish missing derived `report.json` and `manifest.json`;
+only a fresh cache-only `create` is write-free. When planner or judge state is
+missing, the skill must state the provider, the two model identities, the maximum
+of two calls, and the payload categories — one narrative, the derived frozen
+plan, and canonical retrieval nugget text — then ask once for explicit evaluation
+authorization, unless the user's own request already explicitly asked to
+evaluate nugget coverage.
 
 That authorization covers only the planner and judge calls for the named topic.
 It does not authorize retrieval, reranking, generation, passage egress, a

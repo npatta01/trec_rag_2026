@@ -69,6 +69,14 @@ def test_route_documents_resume_branch_for_existing_work_directory() -> None:
     assert section.count("--mode resume") >= 2
 
 
+def test_route_explains_cache_only_resume_can_publish_missing_derived_artifacts() -> None:
+    normalized = " ".join(_route_section().split()).casefold()
+    assert "cache-only resume makes zero hosted calls" in normalized
+    assert "may locally publish missing derived" in normalized
+    assert "report.json" in normalized and "manifest.json" in normalized
+    assert "only a fresh cache-only create is write-free" in normalized
+
+
 def test_explicit_nugget_request_authorizes_only_planner_and_judge_calls() -> None:
     normalized = " ".join(_route_section().split())
     assert "explicitly asks to evaluate, score, or judge retrieval nugget coverage" in normalized
