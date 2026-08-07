@@ -53,7 +53,12 @@ ClimbMix, projected RAG 2025 development qrels.
   `0d9b77f46ed1e7d339df8d42474c4bf746137ca07e2596979f152fe6fdfe98fe`.
   Its isolated staging merge completed as
   `fed38def987a32f044433c812ed92e1d612ae33dc6bb5fa1c503358c36a2d1bc`;
-  zero-work ROCm replay and evaluation are next.
+  the promoted main-cache merge completed as
+  `820d751d02f036070b528a1982034393e0954dd8928e2c278901cea3844f32d6`.
+  Both staging and shared-cache ROCm replays authenticated with zero work and
+  identical 186-row rankings apart from the intentional run tag. Topic-31
+  projected-qrels evaluation passed; a paid two-topic preview is next, with no
+  further launch authorized yet.
 - The 2025 topic file contains exactly 22 numeric IDs:
   `14, 31, 37, 58, 72, 84, 144, 161, 200, 213, 219, 224, 225, 233, 273,
   300, 407, 477, 499, 515, 707, 897`.
@@ -764,21 +769,27 @@ ClimbMix, projected RAG 2025 development qrels.
   archive-then-marker publication, byte round trips, and downloaded-bundle
   verification all succeeded.
 
-- [ ] **Step 5: Download, verify, stage-merge, and replay**
+- [x] **Step 5: Download, verify, stage-merge, and replay**
 
   Use the Task 1 sequence with run ID `nonagentic-rag25-dev-20260806` and topic
   `31`. The replay config uses a new experiment ID and selects only `31` with
   `.venv/bin/python-rocm ... --offline-cache-only`. Inspect both the topic
   receipt and root manifest and require zero misses/calls/model batches.
 
-  Progress: the exact two-object listing, fresh local download, and semantic
+  Evidence: the exact two-object listing, fresh local download, and semantic
   verification passed with archive SHA-256
   `0d9b77f46ed1e7d339df8d42474c4bf746137ca07e2596979f152fe6fdfe98fe`.
   Fresh staging merge ID:
   `fed38def987a32f044433c812ed92e1d612ae33dc6bb5fa1c503358c36a2d1bc`.
-  Replay remains the next gate.
+  Its authenticated zero-work replay completed in 2:12.21 with maximum RSS
+  5,120,960 KB. Main-cache merge ID:
+  `820d751d02f036070b528a1982034393e0954dd8928e2c278901cea3844f32d6`.
+  The promoted shared-cache replay completed in 2:11.98 with maximum RSS
+  5,126,828 KB; all 186 ranking rows matched staging in the first five TREC
+  fields and differed only in the experiment run tag. Both receipts recorded
+  zero misses, network/provider calls, and model batches in every stage.
 
-- [ ] **Step 6: Evaluate the local replay**
+- [x] **Step 6: Evaluate the local replay**
 
   ```bash
   .venv/bin/python -m trec_rag.competition_retrieval_evaluation \
@@ -793,6 +804,18 @@ ClimbMix, projected RAG 2025 development qrels.
   cache only after this gate passes. Record elapsed time, actual dstack cost,
   hosted-call counts, compressed/uncompressed bundle sizes, and peak local disk
   use for the later bulk gate.
+
+  Evidence: the pinned qrels digest matched. Topic `31` produced nDCG@10
+  0.238469, judged rates 0.30/0.28/0.22 at 10/50/100, and recall
+  0.003243/0.015135/0.023784 at 10/50/100. Judged counts were 3/14/22;
+  hit rate was 1.0 at 10 and 50. These are projected-development diagnostics,
+  not official exhaustive ground truth. Live work used one planning provider
+  call, six Pyserini network calls, ten canonicalization provider calls, 2,977
+  passage-score model batches, 533 sentence-score model batches, and ten
+  similarity model batches. Submitted-to-done time was 29:50 and compute cost
+  was $0.2182. The archive is 42,390,697 bytes compressed and 146,762,980
+  member bytes uncompressed; the staging cache/output footprint is 142,275,618
+  bytes.
 
 ### Task 6: Add Two-Topic Parallel Shards for the Remaining Development Set
 
