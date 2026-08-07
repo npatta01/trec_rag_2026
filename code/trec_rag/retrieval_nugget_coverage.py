@@ -17,7 +17,7 @@ from pathlib import Path
 import socket
 import tempfile
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import Literal, NoReturn, Protocol
 import unicodedata
 from urllib.error import URLError
 
@@ -46,7 +46,10 @@ MAX_OBLIGATIONS_PER_FACET = 8
 MAX_OBLIGATIONS = 40
 MAX_JUDGE_REQUEST_BYTES = 1_000_000
 MAX_COMPLETION_TOKENS = 8192
-PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v3"
+MAX_NARRATIVE_SPANS_PER_OBLIGATION = 8
+MAX_UNMAPPED_NARRATIVE_SPANS = 40
+MAX_NARRATIVE_SPAN_CHARACTERS = 1000
+PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v4"
 JUDGE_PROMPT_VERSION = "retrieval_nugget_judge_v2"
 EVALUATOR_SCHEMA_VERSION = "retrieval_nugget_coverage_v1"
 INPUT_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_input_v1"
@@ -65,7 +68,11 @@ PLANNER_SYSTEM_PROMPT = (
     "narrative_spans must be an empty list. Every unmapped_narrative_spans entry "
     "must also be an exact narrative substring. Keep the total number of "
     "obligations across all facets at 40 or fewer. Include at least one "
-    "required_explicit obligation; a plan with none is invalid and unscoreable."
+    "required_explicit obligation; a plan with none is invalid and unscoreable. "
+    "Spans may preserve exact surrounding whitespace and newline, carriage-return, "
+    "or tab characters from the narrative, but they must contain at least one "
+    "non-whitespace character. Use at most 8 spans per obligation, at most 40 "
+    "unmapped spans, and at most 1000 characters per span."
 )
 JUDGE_SYSTEM_PROMPT = (
     "Judge each frozen obligation against the supplied retrieval nuggets. Use "
@@ -284,9 +291,9 @@ class BoundCoverageInput:
         _sealed_text(self.narrative, "narrative", stage="input")
         if not isinstance(self.narrative_sha256, str) or len(self.narrative_sha256) != 64:
             raise NuggetCoverageError("input", "narrative identity is invalid")
-        rows = _validate_nuggets(
-            self.nuggets, stage="input", allow_sealed_text=True
-        )
+        if self.narrative_sha256 != sha256(self.narrative.encode("utf-8")).hexdigest():
+            raise NuggetCoverageError("input", "narrative identity does not match sealed text")
+        rows = _validate_nuggets(self.nuggets, stage="input")
         if tuple(rows) != self.nuggets:
             object.__setattr__(self, "nuggets", rows)
         expected_nugget_hashes = tuple(
@@ -550,7 +557,7 @@ def render_judge_request(
         _error("judge", "plan must be a FrozenPlan")
     if plan.narrative != narrative:
         _error("judge", "plan narrative does not match the judge narrative")
-    nugget_rows = _validate_nuggets(nuggets, stage="judge", allow_sealed_text=True)
+    nugget_rows = _validate_nuggets(nuggets, stage="judge")
     if isinstance(model, EvaluatorIdentity):
         model = model.judge_model
     model = _text(model, "judge model", None, stage="judge")
@@ -589,7 +596,7 @@ def evaluate_nugget_coverage(
     """Run one planner call followed by one judge call and score the result."""
 
     narrative = _sealed_text(narrative, "narrative", stage="input")
-    nugget_rows = _validate_nuggets(nuggets, stage="input", allow_sealed_text=True)
+    nugget_rows = _validate_nuggets(nuggets, stage="input")
     if not isinstance(identity, EvaluatorIdentity):
         _error("input", "identity must be an EvaluatorIdentity")
     if not callable(getattr(planner, "complete", None)):
@@ -734,7 +741,10 @@ def run_coverage_evaluation(
         reused_stages.append("judge")
 
     if existing_manifest is not None:
-        assert plan is not None and judgments is not None
+        if plan is None or judgments is None:
+            raise NuggetCoverageError(
+                "persistence", "manifest exists without valid planner and judge stages"
+            )
         existing_hashes = {
             name: _sha256_file(work_dir / name)
             for name in ("input.json", "plan.json", "judgments.json", "report.json")
@@ -801,7 +811,8 @@ def run_coverage_evaluation(
         )
         hosted_calls += 1
 
-    assert plan is not None and judgments is not None
+    if plan is None or judgments is None:
+        raise NuggetCoverageError("persistence", "coverage stages are incomplete")
     report = score_coverage(plan, bound.nuggets, judgments, identity)
     report_payload = _report_payload(report, plan)
     if report_path.exists():
@@ -1335,7 +1346,7 @@ def validate_and_freeze_plan(narrative: str, payload: object) -> FrozenPlan:
         root["unmapped_narrative_spans"],
         "unmapped_narrative_spans",
         0,
-        None,
+        MAX_UNMAPPED_NARRATIVE_SPANS,
         stage="planner",
     )
 
@@ -1385,17 +1396,21 @@ def validate_and_freeze_plan(narrative: str, payload: object) -> FrozenPlan:
                 obligation["narrative_spans"],
                 f"facet {facet_index} obligation {obligation_index} narrative_spans",
                 0,
-                None,
+                MAX_NARRATIVE_SPANS_PER_OBLIGATION,
                 stage="planner",
             )
             spans: list[str] = []
             for span_index, span_value in enumerate(spans_payload, start=1):
-                span = _text(
+                span = _sealed_text(
                     span_value,
                     f"facet {facet_index} obligation {obligation_index} narrative span {span_index}",
-                    None,
                     stage="planner",
                 )
+                if len(span) > MAX_NARRATIVE_SPAN_CHARACTERS:
+                    _error(
+                        "planner",
+                        f"facet {facet_index} obligation {obligation_index} narrative span {span_index} exceeds the {MAX_NARRATIVE_SPAN_CHARACTERS}-character limit",
+                    )
                 if span not in narrative:
                     _error("planner", f"narrative span {span_index} is not an exact narrative substring")
                 spans.append(span)
@@ -1426,7 +1441,12 @@ def validate_and_freeze_plan(narrative: str, payload: object) -> FrozenPlan:
 
     unmapped_spans: list[str] = []
     for index, value in enumerate(unmapped_payload, start=1):
-        span = _text(value, f"unmapped narrative span {index}", None, stage="planner")
+        span = _sealed_text(value, f"unmapped narrative span {index}", stage="planner")
+        if len(span) > MAX_NARRATIVE_SPAN_CHARACTERS:
+            _error(
+                "planner",
+                f"unmapped narrative span {index} exceeds the {MAX_NARRATIVE_SPAN_CHARACTERS}-character limit",
+            )
         if span not in narrative:
             _error("planner", f"unmapped narrative span {index} is not an exact narrative substring")
         unmapped_spans.append(span)
@@ -1491,7 +1511,7 @@ def validate_judgments(
 
     if not isinstance(plan, FrozenPlan):
         _error("judge", "plan must be a FrozenPlan")
-    nugget_rows = _validate_nuggets(nuggets, stage="judge", allow_sealed_text=True)
+    nugget_rows = _validate_nuggets(nuggets, stage="judge")
     root = _mapping(payload, "judge payload", stage="judge")
     _require_keys(root, _JUDGMENT_ROOT_KEYS, "judge payload", stage="judge")
     if root["schema_version"] != JUDGMENT_SCHEMA_VERSION:
@@ -1545,8 +1565,6 @@ def validate_judgments(
                 MAX_TEXT_CHARACTERS,
                 stage="judge",
             )
-        if not isinstance(missing_elements, str):
-            _error("judge", f"judgment {index} missing_elements must be text")
         parsed[obligation_id] = CoverageJudgment(
             obligation_id=obligation_id,
             label=label,
@@ -1570,7 +1588,7 @@ def score_coverage(
         _error("scoring", "plan must be a FrozenPlan")
     if not isinstance(identity, EvaluatorIdentity):
         _error("scoring", "identity must be an EvaluatorIdentity")
-    nugget_rows = _validate_nuggets(nuggets, stage="scoring", allow_sealed_text=True)
+    nugget_rows = _validate_nuggets(nuggets, stage="scoring")
     if not isinstance(judgments, Sequence) or isinstance(judgments, (str, bytes)):
         _error("scoring", "judgments must be a sequence")
     expected_obligations = plan.obligations
@@ -1651,10 +1669,11 @@ def score_coverage(
         for nugget_id in judgment.supporting_nugget_ids
     }
     uncited_ids = tuple(nugget.nugget_id for nugget in nugget_rows if nugget.nugget_id not in cited_ids)
+    uncited_id_set = set(uncited_ids)
     uncited_aliases = tuple(
         f"n{index:03d}"
         for index, nugget in enumerate(nugget_rows, start=1)
-        if nugget.nugget_id in set(uncited_ids)
+        if nugget.nugget_id in uncited_id_set
     )
     return CoverageReport(
         plan_sha256=plan.plan_sha256,
@@ -1698,7 +1717,10 @@ def _planner_response_schema() -> dict[str, object]:
         "type": "object",
         "description": (
             "A required_explicit obligation needs exact narrative substrings; a "
-            "supplemental_inferred obligation must have no narrative spans."
+            "supplemental_inferred obligation must have no narrative spans. Exact "
+            "surrounding whitespace and newline, carriage-return, or tab characters "
+            "may be preserved, but every span must contain at least one "
+            "non-whitespace character."
         ),
         "additionalProperties": False,
         "required": ["requirement", "support_test", "kind", "narrative_spans"],
@@ -1715,8 +1737,13 @@ def _planner_response_schema() -> dict[str, object]:
             },
             "narrative_spans": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1},
-                "description": "For required_explicit, copy exact non-empty narrative substrings; for supplemental_inferred, use an empty list.",
+                "maxItems": MAX_NARRATIVE_SPANS_PER_OBLIGATION,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_NARRATIVE_SPAN_CHARACTERS,
+                },
+                "description": "For required_explicit, copy exact nonblank narrative substrings (including exact surrounding whitespace or permitted line controls) with at most 8 spans and at most 1000 characters per span; for supplemental_inferred, use an empty list.",
             },
         },
     }
@@ -1739,7 +1766,9 @@ def _planner_response_schema() -> dict[str, object]:
         "description": (
             "Every span must be an exact narrative substring, and the total "
             "number of obligations across all facets must be at most 40. The "
-            "plan must contain at least one required_explicit obligation."
+            "plan must contain at least one required_explicit obligation. Each "
+            "span is at most 1000 characters and unmapped_narrative_spans has at "
+            "most 40 entries."
         ),
         "additionalProperties": False,
         "required": ["schema_version", "facets", "unmapped_narrative_spans"],
@@ -1753,8 +1782,13 @@ def _planner_response_schema() -> dict[str, object]:
             },
             "unmapped_narrative_spans": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1},
-                "description": "Each entry must be an exact substring of the supplied narrative.",
+                "maxItems": MAX_UNMAPPED_NARRATIVE_SPANS,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_NARRATIVE_SPAN_CHARACTERS,
+                },
+                "description": "Each entry must be an exact nonblank substring of the supplied narrative, may preserve exact surrounding whitespace or permitted line controls, is at most 1000 characters, and there are at most 40 entries.",
             },
         },
     }
@@ -1860,7 +1894,7 @@ def _safe_metadata(reply: BackendReply, *, stage: str) -> Mapping[str, object]:
     return MappingProxyType(_safe_provider_metadata(reply.metadata))
 
 
-def _error(stage: str, reason: str) -> None:
+def _error(stage: str, reason: str) -> NoReturn:
     raise NuggetCoverageError(stage, reason)
 
 
@@ -1947,7 +1981,7 @@ def _canonical_json(value: object, *, stage: str) -> bytes:
 
 
 def _validate_nuggets(
-    nuggets: Sequence[CoverageNugget], *, stage: str, allow_sealed_text: bool = False
+    nuggets: Sequence[CoverageNugget], *, stage: str
 ) -> tuple[CoverageNugget, ...]:
     if not isinstance(nuggets, Sequence) or isinstance(nuggets, (str, bytes)):
         _error(stage, "nuggets must be a sequence")
@@ -1957,11 +1991,7 @@ def _validate_nuggets(
         if not isinstance(nugget, CoverageNugget):
             _error(stage, f"nugget {index} must be a CoverageNugget")
         nugget_id = _text(nugget.nugget_id, f"nugget {index} ID", None, stage=stage)
-        text = (
-            _sealed_text(nugget.text, f"nugget {index} text", stage=stage)
-            if allow_sealed_text
-            else _text(nugget.text, f"nugget {index} text", None, stage=stage)
-        )
+        text = _sealed_text(nugget.text, f"nugget {index} text", stage=stage)
         if nugget_id in seen_ids:
             _error(stage, f"nugget {index} has a duplicate nugget ID")
         seen_ids.add(nugget_id)
@@ -2059,6 +2089,9 @@ __all__ = [
     "JUDGE_SYSTEM_PROMPT",
     "MAX_COMPLETION_TOKENS",
     "MAX_JUDGE_REQUEST_BYTES",
+    "MAX_NARRATIVE_SPANS_PER_OBLIGATION",
+    "MAX_NARRATIVE_SPAN_CHARACTERS",
+    "MAX_UNMAPPED_NARRATIVE_SPANS",
     "NuggetCoverageError",
     "OpenRouterCoverageBackend",
     "PLANNER_PROMPT_VERSION",

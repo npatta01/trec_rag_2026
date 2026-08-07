@@ -156,6 +156,51 @@ def test_plan_validation_assigns_local_ids_and_freezes_deterministically() -> No
 
 
 @pytest.mark.parametrize(
+    ("narrative", "span"),
+    [
+        ("Explain the projected cost\nand assumptions now.", "cost\nand assumptions"),
+        ("Explain the projected  cost and assumptions  now.", "  cost and assumptions  "),
+    ],
+)
+def test_plan_freeze_accepts_exact_multiline_and_padded_narrative_spans(
+    narrative: str, span: str
+) -> None:
+    payload = json.loads(json.dumps(VALID_PLAN))
+    payload["facets"][0]["obligations"][0]["narrative_spans"] = [span]
+
+    plan = validate_and_freeze_plan(narrative, payload)
+
+    assert plan.facets[0].obligations[0].narrative_spans == (span,)
+
+
+def test_plan_validation_rejects_more_than_eight_narrative_spans_per_obligation() -> None:
+    spans = [f"span-{index}" for index in range(9)]
+    payload = json.loads(json.dumps(VALID_PLAN))
+    payload["facets"][0]["obligations"][0]["narrative_spans"] = spans
+
+    with pytest.raises(NuggetCoverageError, match="narrative_spans"):
+        validate_and_freeze_plan(" ".join(spans), payload)
+
+
+def test_plan_validation_rejects_more_than_forty_unmapped_narrative_spans() -> None:
+    unmapped = [f"unmapped-{index}" for index in range(41)]
+    payload = json.loads(json.dumps(VALID_PLAN))
+    payload["unmapped_narrative_spans"] = unmapped
+
+    with pytest.raises(NuggetCoverageError, match="unmapped"):
+        validate_and_freeze_plan("cost and assumptions " + " ".join(unmapped), payload)
+
+
+def test_plan_validation_rejects_narrative_span_over_one_thousand_characters() -> None:
+    oversized = "x" * 1001
+    payload = json.loads(json.dumps(VALID_PLAN))
+    payload["facets"][0]["obligations"][0]["narrative_spans"] = [oversized]
+
+    with pytest.raises(NuggetCoverageError, match="narrative span"):
+        validate_and_freeze_plan(oversized, payload)
+
+
+@pytest.mark.parametrize(
     "mutator",
     [
         lambda plan: {**plan, "extra": True},
@@ -500,6 +545,11 @@ def test_planner_and_judge_contracts_describe_all_local_invariants() -> None:
     assert "supplemental" in str(planner_obligation).casefold()
     assert "at least one required" in planner_text
     assert "at least one required" in str(planner_schema).casefold()
+    assert "8" in planner_text and "40" in planner_text and "1000" in planner_text
+    assert planner_obligation["properties"]["narrative_spans"]["maxItems"] == 8
+    assert planner_obligation["properties"]["narrative_spans"]["items"]["maxLength"] == 1000
+    assert planner_schema["properties"]["unmapped_narrative_spans"]["maxItems"] == 40
+    assert planner_schema["properties"]["unmapped_narrative_spans"]["items"]["maxLength"] == 1000
 
     plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
     judge_request = render_judge_request(NARRATIVE, plan, _nuggets(), _identity().judge_model)
@@ -773,6 +823,26 @@ def test_coverage_input_from_handoff_authenticates_and_assigns_ordered_aliases(t
     assert bound.narrative_sha256 == hashlib.sha256(NARRATIVE.encode()).hexdigest()
     assert [nugget.nugget_id for nugget in bound.nuggets] == ["claim-z", "claim-a"]
     assert [hashlib.sha256(nugget.text.encode()).hexdigest() for nugget in bound.nuggets] == list(bound.nugget_text_sha256s)
+
+
+def test_bound_input_rejects_a_narrative_hash_mismatch() -> None:
+    source = _coverage_handoff()
+    topic = source.topics[0]
+    nuggets = tuple(
+        CoverageNugget(claim.claim_id, claim.text) for claim in topic.claim_hints
+    )
+
+    with pytest.raises(NuggetCoverageError, match="narrative identity"):
+        BoundCoverageInput(
+            manifest_sha256=source.manifest_sha256,
+            topic_id=topic.topic_id,
+            narrative=topic.narrative,
+            narrative_sha256="0" * 64,
+            nuggets=nuggets,
+            nugget_text_sha256s=tuple(
+                hashlib.sha256(nugget.text.encode()).hexdigest() for nugget in nuggets
+            ),
+        )
 
 
 def test_coverage_input_rejects_unknown_topic_and_empty_claim_hints(tmp_path: Path) -> None:
