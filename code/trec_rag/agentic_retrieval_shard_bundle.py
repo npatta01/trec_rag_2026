@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import fcntl
 import hashlib
 import io
@@ -29,6 +29,7 @@ from typing import Iterator, Mapping, Sequence
 import zstandard
 
 from .agentic_run_state import (
+    AgenticRunPlan,
     TOPIC_SEAL_FILENAME,
     TOPIC_SEAL_SCHEMA,
     AgenticRunStateError,
@@ -36,6 +37,7 @@ from .agentic_run_state import (
     load_topic_seal,
 )
 from .generation_handoff import deserialize_generation_topic
+from .topic_records import TOPIC_RECORDS_SCHEMA_VERSION
 
 
 BUNDLE_SCHEMA_VERSION = "agentic-retrieval-topic-bundle-v1"
@@ -130,6 +132,12 @@ class VerifiedTopicBundle:
     manifest_sha256: str
     members: tuple[TopicBundleMember, ...]
     bundle_schema: str = BUNDLE_SCHEMA_VERSION
+    # Payloads are retained from the exact bounded archive bytes verified by
+    # ``verify_topic_bundle``.  Import consumes these bytes instead of
+    # reopening the archive and creating a verify-then-reopen race.
+    _payloads: tuple[tuple[str, bytes], ...] = field(
+        default=(), compare=False, repr=False
+    )
 
     @property
     def archive_bytes(self) -> int:
@@ -309,6 +317,7 @@ def _manifest_payload(*, plan_sha256: str, topic_id: str, narrative_sha256: str,
         "members": list(members),
         "run_plan_sha256": plan_sha256,
         "schema_version": BUNDLE_SCHEMA_VERSION,
+        "narrative_sha256": narrative_sha256,
         "topic_id": topic_id,
         "topic_seal_sha256": topic_seal_sha256,
     }
@@ -379,13 +388,13 @@ def _parse_marker(path: Path) -> Mapping[str, object]:
     return row
 
 
-def _parse_manifest(body: bytes) -> tuple[str, str, str, tuple[TopicBundleMember, ...]]:
+def _parse_manifest(body: bytes) -> tuple[str, str, str, str, tuple[TopicBundleMember, ...]]:
     if len(body) > MAX_MANIFEST_BYTES:
         raise AgenticShardBundleIntegrityError("bundle manifest is too large")
     value = _strict_json(body, "bundle manifest")
     row = _exact_mapping(
         value,
-        {"members", "run_plan_sha256", "schema_version", "topic_id", "topic_seal_sha256"},
+        {"members", "narrative_sha256", "run_plan_sha256", "schema_version", "topic_id", "topic_seal_sha256"},
         "bundle manifest",
     )
     if _canonical(row) != body:
@@ -394,6 +403,7 @@ def _parse_manifest(body: bytes) -> tuple[str, str, str, tuple[TopicBundleMember
         raise AgenticShardBundleIntegrityError("unsupported bundle manifest schema")
     plan_sha256 = _require_digest(row["run_plan_sha256"], "run_plan_sha256")
     seal_sha256 = _require_digest(row["topic_seal_sha256"], "topic_seal_sha256")
+    narrative_sha256 = _require_digest(row["narrative_sha256"], "narrative_sha256")
     topic_id = _require_safe_id(row["topic_id"], "topic_id")
     raw_members = row["members"]
     if not isinstance(raw_members, list) or len(raw_members) != len(TOPIC_MEMBER_NAMES):
@@ -412,44 +422,77 @@ def _parse_manifest(body: bytes) -> tuple[str, str, str, tuple[TopicBundleMember
     if tuple(member.path for member in members) != tuple(sorted(TOPIC_MEMBER_NAMES)):
         raise AgenticShardBundleIntegrityError("bundle members are not canonical and sorted")
     _validate_prefixes([BUNDLE_MANIFEST_NAME, *(member.path for member in members)])
-    return topic_id, plan_sha256, seal_sha256, tuple(members)
+    return topic_id, narrative_sha256, plan_sha256, seal_sha256, tuple(members)
 
 
 def _decompress_archive(path: Path) -> bytes:
     size = path.stat().st_size
     if size > MAX_COMPRESSED_BYTES:
         raise AgenticShardBundleIntegrityError("compressed bundle size limit exceeded")
+    # The streaming reader limits each materialized read before it is appended,
+    # so a highly compressible hostile frame cannot allocate an unbounded
+    # output buffer.  A second bounded pass with ``decompressobj`` detects
+    # concatenated frames/trailing bytes once the first pass has proved that
+    # the total output is within the hard ceiling.
+    source = path.open("rb")
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        reader = zstandard.ZstdDecompressor(
+            max_window_size=128 * 1024 * 1024
+        ).stream_reader(source, read_across_frames=False)
+        try:
+            while chunk := reader.read(_COPY_CHUNK):
+                total += len(chunk)
+                if total > MAX_DECOMPRESSED_BYTES:
+                    raise AgenticShardBundleIntegrityError(
+                        "decompressed bundle size limit exceeded"
+                    )
+                chunks.append(chunk)
+        except zstandard.ZstdError as exc:
+            raise AgenticShardBundleIntegrityError(
+                "bundle compressed stream is invalid"
+            ) from exc
+        finally:
+            reader.close()
+    finally:
+        source.close()
+
     source = path.open("rb")
     try:
-        decoder = zstandard.ZstdDecompressor(max_window_size=128 * 1024 * 1024).decompressobj()
-        chunks: list[bytes] = []
-        total = 0
+        decoder = zstandard.ZstdDecompressor(
+            max_window_size=128 * 1024 * 1024
+        ).decompressobj()
         try:
             while raw := source.read(_COPY_CHUNK):
                 if decoder.eof:
-                    raise AgenticShardBundleIntegrityError("bundle has trailing compressed bytes")
-                output = decoder.decompress(raw)
-                total += len(output)
-                if total > MAX_DECOMPRESSED_BYTES:
-                    raise AgenticShardBundleIntegrityError("decompressed bundle size limit exceeded")
-                chunks.append(output)
+                    raise AgenticShardBundleIntegrityError(
+                        "bundle has trailing compressed bytes"
+                    )
+                decoder.decompress(raw)
                 if decoder.eof:
-                    # ``unused_data`` is the suffix in this input chunk; bytes
-                    # still in the source are a second frame or trailing data.
                     if decoder.unused_data or source.read(1):
-                        raise AgenticShardBundleIntegrityError("bundle has trailing compressed bytes")
+                        raise AgenticShardBundleIntegrityError(
+                            "bundle has trailing compressed bytes"
+                        )
                     break
             if not decoder.eof:
-                raise AgenticShardBundleIntegrityError("bundle compressed stream is truncated")
+                raise AgenticShardBundleIntegrityError(
+                    "bundle compressed stream is truncated"
+                )
         except zstandard.ZstdError as exc:
-            raise AgenticShardBundleIntegrityError("bundle compressed stream is invalid") from exc
+            raise AgenticShardBundleIntegrityError(
+                "bundle compressed stream is invalid"
+            ) from exc
     finally:
         source.close()
     return b"".join(chunks)
 
 
 def _validate_seal_payloads(
-    payloads: Mapping[str, bytes], *, topic_id: str, plan_sha256: str, seal_sha256: str
+    payloads: Mapping[str, bytes], *, topic_id: str, narrative_sha256: str,
+    plan_sha256: str, seal_sha256: str, expected_run_id: str | None = None,
+    expected_topics_source_sha256: str | None = None,
 ) -> None:
     seal_body = payloads[TOPIC_SEAL_MEMBER]
     seal = _strict_json(seal_body, "topic seal")
@@ -482,7 +525,7 @@ def _validate_seal_payloads(
     if _digest(_canonical(without_digest).rstrip(b"\n")) != seal_sha256:
         raise AgenticShardBundleIntegrityError("topic seal digest does not match contents")
     topic = _exact_mapping(seal_row["topic"], {"narrative_sha256", "topic_id"}, "sealed topic")
-    if topic["topic_id"] != topic_id:
+    if topic["topic_id"] != topic_id or topic["narrative_sha256"] != narrative_sha256:
         raise AgenticShardBundleIntegrityError("topic seal topic identity differs")
     _require_digest(topic["narrative_sha256"], "sealed narrative")
     if seal_row["status"] != "complete" or not isinstance(seal_row["stopping_reason"], str) or not seal_row["stopping_reason"]:
@@ -516,6 +559,13 @@ def _validate_seal_payloads(
     full_text = retrieval.get("full_text_record")
     if not isinstance(full_text, Mapping):
         raise AgenticShardBundleIntegrityError("retrieval topic lacks full-text record")
+    query = full_text.get("query")
+    if not isinstance(query, Mapping) or query.get("qid") != topic_id:
+        raise AgenticShardBundleIntegrityError("retrieval topic query identity differs")
+    if query.get("text_sha256") != narrative_sha256:
+        raise AgenticShardBundleIntegrityError("retrieval topic narrative identity differs")
+    if not isinstance(query.get("text"), str) or _digest(query["text"].encode("utf-8")) != narrative_sha256:
+        raise AgenticShardBundleIntegrityError("retrieval topic narrative digest differs")
     if _digest(_canonical(dict(full_text)).rstrip(b"\n")) != _require_digest(seal_row["full_text_record_sha256"], "full-text record sha256"):
         raise AgenticShardBundleIntegrityError("full-text record digest differs")
     candidates = full_text.get("candidates")
@@ -538,6 +588,12 @@ def _validate_seal_payloads(
         or generation.source_receipts.retrieval_topic_sha256 != retrieval_digest
     ):
         raise AgenticShardBundleIntegrityError("generation topic identity differs")
+    if (
+        expected_topics_source_sha256 is not None
+        and generation.source_receipts.official_topics_sha256
+        != expected_topics_source_sha256
+    ):
+        raise AgenticShardBundleIntegrityError("official topic source digest differs")
 
     receipt_body = payloads["topic_records_receipt.json"]
     receipt = _strict_json(receipt_body, "topic records receipt")
@@ -546,6 +602,10 @@ def _validate_seal_payloads(
         raise AgenticShardBundleIntegrityError("topic records receipt is not canonical")
     if receipt_row["topic_id"] != topic_id:
         raise AgenticShardBundleIntegrityError("topic records receipt topic differs")
+    if expected_run_id is not None and receipt_row["run_id"] != expected_run_id:
+        raise AgenticShardBundleIntegrityError("topic records receipt run id differs")
+    if receipt_row["schema_version"] != TOPIC_RECORDS_SCHEMA_VERSION:
+        raise AgenticShardBundleIntegrityError("topic records receipt schema changed")
     _require_safe_id(receipt_row["run_id"], "topic records receipt run id")
     _require_digest(receipt_row["database_sha256"], "topic records database")
     _require_digest(receipt_row["semantic_sha256"], "topic records semantic digest")
@@ -562,7 +622,12 @@ def _validate_seal_payloads(
         raise AgenticShardBundleIntegrityError("topic records row counts are invalid")
 
 
-def _verify_archive(archive_path: Path, marker: Mapping[str, object], expected_plan: str) -> VerifiedTopicBundle:
+def _verify_archive(
+    archive_path: Path,
+    marker: Mapping[str, object],
+    expected_plan: str,
+    expected_plan_object: AgenticRunPlan | None = None,
+) -> VerifiedTopicBundle:
     compressed_size, archive_sha256 = _file_receipt(archive_path)
     if compressed_size != marker["archive_size"] or archive_sha256 != marker["archive_sha256"]:
         raise AgenticShardBundleIntegrityError("bundle archive digest or size mismatch")
@@ -593,9 +658,18 @@ def _verify_archive(archive_path: Path, marker: Mapping[str, object], expected_p
                 if index == 0:
                     if name != BUNDLE_MANIFEST_NAME:
                         raise AgenticShardBundleIntegrityError("bundle manifest must be first")
-                    topic_id, plan_sha256, seal_sha256, members = _parse_manifest(body)
+                    topic_id, narrative_sha256, plan_sha256, seal_sha256, members = _parse_manifest(body)
                     if plan_sha256 != expected_plan or marker["topic_id"] != topic_id or marker["topic_seal_sha256"] != seal_sha256:
                         raise AgenticShardBundleIntegrityError("bundle identity differs between marker and manifest")
+                    if expected_plan_object is not None:
+                        planned = next(
+                            (row for row in expected_plan_object.topics if row.topic_id == topic_id),
+                            None,
+                        )
+                        if planned is None:
+                            raise AgenticShardBundleIntegrityError("topic is outside the expected run plan")
+                        if planned.narrative_sha256 != narrative_sha256:
+                            raise AgenticShardBundleIntegrityError("topic narrative differs from expected run plan")
                     manifest_sha256 = _digest(body)
                     declared = members
                     continue
@@ -607,7 +681,19 @@ def _verify_archive(archive_path: Path, marker: Mapping[str, object], expected_p
                 payloads[name] = body
             if declared is None or tuple(payloads) != tuple(member.path for member in declared):
                 raise AgenticShardBundleIntegrityError("bundle members are missing or reordered")
-            _validate_seal_payloads(payloads, topic_id=topic_id, plan_sha256=expected_plan, seal_sha256=seal_sha256)
+            _validate_seal_payloads(
+                payloads,
+                topic_id=topic_id,
+                narrative_sha256=narrative_sha256,
+                plan_sha256=expected_plan,
+                seal_sha256=seal_sha256,
+                expected_run_id=(expected_plan_object.run_id if expected_plan_object else None),
+                expected_topics_source_sha256=(
+                    expected_plan_object.topics_source_sha256
+                    if expected_plan_object
+                    else None
+                ),
+            )
             logical = 512 + ((infos[0].size + 511) // 512) * 512
             logical += sum(512 + ((info.size + 511) // 512) * 512 for info in infos[1:])
             expected_tar_size = ((logical + 1024 + tarfile.RECORDSIZE - 1) // tarfile.RECORDSIZE) * tarfile.RECORDSIZE
@@ -623,19 +709,29 @@ def _verify_archive(archive_path: Path, marker: Mapping[str, object], expected_p
         archive_size=compressed_size,
         manifest_sha256=manifest_sha256,
         members=declared,
+        _payloads=tuple(payloads.items()),
     )
 
 
 def verify_topic_bundle(
     archive_path: str | Path,
     marker_path: str | Path,
-    expected_run_plan_sha256: str,
+    expected_run_plan_sha256: str | AgenticRunPlan,
 ) -> VerifiedTopicBundle:
     """Verify marker, archive, topic seal, and projection/receipt closure."""
-    expected = _require_digest(expected_run_plan_sha256, "expected run plan sha256")
+    expected_plan_object = (
+        expected_run_plan_sha256
+        if isinstance(expected_run_plan_sha256, AgenticRunPlan)
+        else None
+    )
+    expected = (
+        expected_plan_object.plan_sha256
+        if expected_plan_object is not None
+        else _require_digest(expected_run_plan_sha256, "expected run plan sha256")
+    )
     archive = Path(archive_path)
     marker = _parse_marker(Path(marker_path))
-    return _verify_archive(archive, marker, expected)
+    return _verify_archive(archive, marker, expected, expected_plan_object)
 
 
 def pack_topic(
@@ -693,32 +789,23 @@ def pack_topic(
                 "topic_seal_sha256": seal.seal_sha256,
             }
         )
-        _verify_archive(temporary, _strict_marker_from_body(marker_body), plan.plan_sha256)
+        _verify_archive(
+            temporary,
+            _strict_marker_from_body(marker_body),
+            plan.plan_sha256,
+            plan,
+        )
         _publish_identical(archive, temporary.read_bytes(), "bundle archive")
         _publish_identical(marker, marker_body, "bundle completion marker")
     finally:
         temporary.unlink(missing_ok=True)
-    return verify_topic_bundle(archive, marker, plan.plan_sha256)
+    return verify_topic_bundle(archive, marker, plan)
 
 
 def _strict_marker_from_body(body: bytes) -> Mapping[str, object]:
     value = _strict_json(body, "bundle completion marker")
     row = _exact_mapping(value, {"archive_sha256", "archive_size", "run_plan_sha256", "schema_version", "topic_id", "topic_seal_sha256"}, "bundle completion marker")
     return row
-
-
-def _extract_payloads(archive_path: Path, verified: VerifiedTopicBundle) -> dict[str, bytes]:
-    tar_bytes = _decompress_archive(archive_path)
-    payloads: dict[str, bytes] = {}
-    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as archive:
-        for info in archive.getmembers()[1:]:
-            stream = archive.extractfile(info)
-            if stream is None:
-                raise AgenticShardBundleIntegrityError("bundle member unavailable during import")
-            payloads[info.name] = stream.read(info.size)
-    if set(payloads) != {member.path for member in verified.members}:
-        raise AgenticShardBundleIntegrityError("bundle extraction closure changed")
-    return payloads
 
 
 def _journal_body(*, state: str, verified: VerifiedTopicBundle) -> bytes:
@@ -778,6 +865,25 @@ def _link_or_identical(source: Path, destination: Path, label: str) -> None:
     _fsync_directory(destination.parent)
 
 
+def _destination_plan(
+    destination: Path, expected_plan_sha256: str
+) -> AgenticRunPlan | None:
+    """Read an existing destination plan without creating any import state."""
+    if not destination.exists() and not destination.is_symlink():
+        return None
+    _ensure_directory(destination, "destination run directory")
+    plan_path = destination / "run_plan.json"
+    if not plan_path.exists() and not plan_path.is_symlink():
+        return None
+    try:
+        plan = load_run_plan(destination)
+    except AgenticRunStateError as exc:
+        raise AgenticShardBundleIntegrityError("destination run plan is invalid") from exc
+    if plan.plan_sha256 != expected_plan_sha256:
+        raise AgenticShardBundleIntegrityError("destination run plan differs from bundle")
+    return plan
+
+
 def import_topic_bundle(
     archive_path: str | Path,
     marker_path: str | Path,
@@ -787,8 +893,13 @@ def import_topic_bundle(
     archive = Path(archive_path)
     marker = Path(marker_path)
     marker_row = _parse_marker(marker)
-    verified = verify_topic_bundle(archive, marker, str(marker_row["run_plan_sha256"]))
     destination = Path(destination_run_dir)
+    destination_plan = _destination_plan(destination, str(marker_row["run_plan_sha256"]))
+    verified = verify_topic_bundle(
+        archive,
+        marker,
+        destination_plan if destination_plan is not None else str(marker_row["run_plan_sha256"]),
+    )
     _ensure_directory(destination, "destination run directory", create=True)
     journal_root = destination / _JOURNAL_DIRECTORY
     _ensure_directory(journal_root, "import journal", create=True)
@@ -814,8 +925,11 @@ def import_topic_bundle(
             _write_journal_state(journal, _journal_body(state="prepare", verified=verified))
     else:
         _publish_identical(journal, _journal_body(state="prepare", verified=verified), "prepare journal")
-    payloads = _extract_payloads(archive, verified)
+    payloads = dict(verified._payloads)
+    if set(payloads) != {member.path for member in verified.members}:
+        raise AgenticShardBundleIntegrityError("verified bundle payload closure changed")
     with _import_lock(destination):
+        locked_plan = _destination_plan(destination, verified.run_plan_sha256)
         topic_root = destination / "topics" / verified.topic_id
         _ensure_directory(topic_root.parent, "topics directory", create=True)
         existing_seal = topic_root / TOPIC_SEAL_MEMBER
@@ -829,6 +943,20 @@ def import_topic_bundle(
             except AgenticShardBundleError:
                 _write_journal_state(journal, _journal_body(state="conflict", verified=verified))
                 raise
+            if locked_plan is not None:
+                try:
+                    load_topic_seal(
+                        work_dir=destination,
+                        plan=locked_plan,
+                        topic_id=verified.topic_id,
+                    )
+                except AgenticRunStateError as exc:
+                    _write_journal_state(
+                        journal, _journal_body(state="conflict", verified=verified)
+                    )
+                    raise AgenticShardBundleIntegrityError(
+                        "installed topic seal failed validation"
+                    ) from exc
             _write_journal_state(journal, _journal_body(state="complete", verified=verified))
             return verified
 
@@ -848,13 +976,9 @@ def import_topic_bundle(
                 _link_or_identical(temporary_topic / name, topic_root / name, "topic artifact")
             # The seal is published last, preserving the source manifest-last protocol.
             _link_or_identical(temporary_topic / TOPIC_SEAL_MEMBER, topic_root / TOPIC_SEAL_MEMBER, "topic seal")
-            plan_path = destination / "run_plan.json"
-            if plan_path.exists() or plan_path.is_symlink():
+            if locked_plan is not None:
                 try:
-                    plan = load_run_plan(destination)
-                    if plan.plan_sha256 != verified.run_plan_sha256:
-                        raise AgenticShardBundleConflictError("destination run plan differs")
-                    load_topic_seal(work_dir=destination, plan=plan, topic_id=verified.topic_id)
+                    load_topic_seal(work_dir=destination, plan=locked_plan, topic_id=verified.topic_id)
                 except (AgenticRunStateError, AgenticShardBundleError) as exc:
                     _write_journal_state(journal, _journal_body(state="conflict", verified=verified))
                     raise AgenticShardBundleIntegrityError("installed topic seal failed validation") from exc

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import io
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 import shutil
 import tarfile
@@ -40,9 +41,7 @@ def test_pack_and_verify_publish_a_deterministic_authenticated_topic_bundle(
     assert archive_one.read_bytes() == archive_two.read_bytes()
     assert marker_one.read_bytes() == marker_two.read_bytes()
     assert first == second
-    verified = verify_topic_bundle(
-        archive_one, marker_one, expected_run_plan_sha256=plan.plan_sha256
-    )
+    verified = verify_topic_bundle(archive_one, marker_one, expected_run_plan_sha256=plan)
     assert verified.topic_id == TOPICS[0].id
     assert verified.run_plan_sha256 == plan.plan_sha256
     marker = json.loads(marker_one.read_text())
@@ -124,7 +123,7 @@ def test_bundle_contains_only_projection_closure_and_manifest_is_canonical(
 ) -> None:
     from trec_rag.agentic_retrieval_shard_bundle import BUNDLE_MANIFEST_NAME, TOPIC_MEMBER_NAMES, pack_topic
 
-    source, _ = _sealed_run(tmp_path)
+    source, plan = _sealed_run(tmp_path)
     topic_dir = source / "topics" / TOPICS[0].id
     (topic_dir / "attempts" / "000001" / "raw-response.json").write_text("secret")
     (topic_dir / "records.sqlite3").write_bytes(b"ledger")
@@ -137,7 +136,16 @@ def test_bundle_contains_only_projection_closure_and_manifest_is_canonical(
     assert [info.name for info in infos] == [BUNDLE_MANIFEST_NAME, *sorted(TOPIC_MEMBER_NAMES)]
     manifest = _archive_payload(archive, BUNDLE_MANIFEST_NAME)
     assert manifest.endswith(b"\n")
-    assert json.loads(manifest.decode()) == json.loads(manifest.decode())
+    manifest_value = json.loads(manifest.decode())
+    assert set(manifest_value) == {
+        "members", "narrative_sha256", "run_plan_sha256", "schema_version", "topic_id", "topic_seal_sha256",
+    }
+    assert manifest == (
+        json.dumps(manifest_value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode()
+    assert manifest_value["topic_id"] == TOPICS[0].id
+    assert manifest_value["run_plan_sha256"]
     assert {info.name for info in infos[1:]} == set(TOPIC_MEMBER_NAMES)
 
 
@@ -219,6 +227,73 @@ def test_import_round_trips_against_authenticated_destination_plan(tmp_path: Pat
     assert imported.run_plan_sha256 == plan.plan_sha256
     journal = next((destination / ".agentic-bundle-imports").glob("*.json"))
     assert json.loads(journal.read_text())["state"] == "complete"
+
+
+def test_foreign_destination_plan_is_rejected_before_journal_or_topic_mutation(tmp_path: Path) -> None:
+    from trec_rag.agentic_retrieval_shard_bundle import AgenticShardBundleIntegrityError, import_topic_bundle, pack_topic
+
+    source, _ = _sealed_run(tmp_path / "source")
+    foreign = tmp_path / "foreign"
+    foreign_plan = _create(foreign, config_bytes=b"foreign-config\n")
+    archive = tmp_path / "bundle.tar.zst"
+    marker = tmp_path / "bundle.complete.json"
+    pack_topic(source, TOPICS[0].id, archive, marker)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    (destination / "run_plan.json").write_bytes((foreign / "run_plan.json").read_bytes())
+
+    with pytest.raises(AgenticShardBundleIntegrityError, match="destination run plan"):
+        import_topic_bundle(archive, marker, destination)
+    assert not (destination / "topics").exists()
+    assert not (destination / ".agentic-bundle-imports").exists()
+    assert foreign_plan.plan_sha256 != json.loads(marker.read_text())["run_plan_sha256"]
+
+
+def test_plan_bound_verify_enforces_source_run_id_and_official_topics_digest(tmp_path: Path) -> None:
+    from trec_rag.agentic_retrieval_shard_bundle import AgenticShardBundleIntegrityError, pack_topic, verify_topic_bundle
+
+    source, plan = _sealed_run(tmp_path)
+    archive = tmp_path / "bundle.tar.zst"
+    marker = tmp_path / "bundle.complete.json"
+    pack_topic(source, TOPICS[0].id, archive, marker)
+    assert verify_topic_bundle(archive, marker, plan) .topic_id == TOPICS[0].id
+
+    with pytest.raises(AgenticShardBundleIntegrityError, match="official topic source"):
+        verify_topic_bundle(archive, marker, replace(plan, topics_source_sha256="f" * 64))
+    with pytest.raises(AgenticShardBundleIntegrityError, match="run id"):
+        verify_topic_bundle(archive, marker, replace(plan, run_id="foreign-run"))
+
+
+def test_import_installs_payloads_from_the_single_verified_archive_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import trec_rag.agentic_retrieval_shard_bundle as bundle
+
+    source, _ = _sealed_run(tmp_path)
+    archive = tmp_path / "bundle.tar.zst"
+    marker = tmp_path / "bundle.complete.json"
+    bundle.pack_topic(source, TOPICS[0].id, archive, marker)
+    original = bundle._decompress_archive
+    calls = 0
+
+    def counted(path: Path) -> bytes:
+        nonlocal calls
+        calls += 1
+        return original(path)
+
+    monkeypatch.setattr(bundle, "_decompress_archive", counted)
+    bundle.import_topic_bundle(archive, marker, tmp_path / "staging")
+    assert calls == 1
+
+
+def test_decompression_limit_is_enforced_before_materializing_tar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import trec_rag.agentic_retrieval_shard_bundle as bundle
+
+    source, plan = _sealed_run(tmp_path)
+    archive = tmp_path / "bundle.tar.zst"
+    marker = tmp_path / "bundle.complete.json"
+    bundle.pack_topic(source, TOPICS[0].id, archive, marker)
+    monkeypatch.setattr(bundle, "MAX_DECOMPRESSED_BYTES", 1024)
+    with pytest.raises(bundle.AgenticShardBundleIntegrityError, match="decompressed"):
+        bundle.verify_topic_bundle(archive, marker, plan.plan_sha256)
 
 
 def test_foreign_run_plan_and_conflicting_marker_are_rejected(tmp_path: Path) -> None:
