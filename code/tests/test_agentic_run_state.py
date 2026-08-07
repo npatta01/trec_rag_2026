@@ -399,6 +399,19 @@ def test_run_plan_bytes_can_be_deserialized_and_installed_atomically(
         run_state.install_run_plan(work_dir=installed, body=conflicting)
 
 
+def test_run_plan_install_rejects_nonempty_namespace_without_a_plan(
+    tmp_path: Path,
+) -> None:
+    body = serialize_run_plan(_create(tmp_path / "source"))
+    installed = tmp_path / "installed"
+    stale = installed / "topics" / TOPICS[0].id / "stale.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale attempt\n", encoding="utf-8")
+
+    with pytest.raises(AgenticRunStateError, match="namespace|without a plan"):
+        run_state.install_run_plan(work_dir=installed, body=body)
+
+
 def test_run_plan_byte_deserialization_rejects_noncanonical_or_tampered_bytes(
     tmp_path: Path,
 ) -> None:

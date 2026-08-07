@@ -551,6 +551,19 @@ def test_initialize_only_is_identical_only_and_rejects_changed_cohort(
         agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[1].id,))
 
 
+def test_initialize_only_rejects_changed_config_under_same_experiment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, topics = _workspace(tmp_path, topic_count=2, run_id="init-config-drift")
+    monkeypatch.setattr(agentic_retrieval, "_probe_repository", lambda _root: _binding())
+
+    agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[0].id,))
+    config.write_text(config.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    with pytest.raises(agentic_retrieval.AgenticRunnerError, match="config"):
+        agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[0].id,))
+
+
 def test_initialize_only_cli_prints_machine_readable_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

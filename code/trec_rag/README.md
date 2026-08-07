@@ -256,7 +256,7 @@ worker seals successful topics locally, preserves failed attempts and existing
 seals, and never performs run-level aggregate export:
 
 ```bash
-.venv/bin/python -m trec_rag.competition_agentic_worker \
+.venv/bin/python-rocm -m trec_rag.competition_agentic_worker \
   configs/rag26_competition_agentic_retrieval_v1.yaml \
   --plan outputs/<experiment-id>/work/run_plan.json \
   --topic rag2026-0 --topic rag2026-1

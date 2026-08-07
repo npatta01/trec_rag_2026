@@ -619,8 +619,14 @@ def install_run_plan(*, work_dir: Path, body: bytes) -> AgenticRunPlan:
 
     plan = deserialize_run_plan(body)
     work = Path(work_dir)
+    plan_path = work / RUN_PLAN_FILENAME
+    if not plan_path.exists() and not plan_path.is_symlink():
+        if work.exists() and any(work.iterdir()):
+            raise AgenticRunStateError(
+                "run state namespace already exists without a plan"
+            )
     _publish_identical(
-        work / RUN_PLAN_FILENAME,
+        plan_path,
         body,
         label="run plan",
     )
