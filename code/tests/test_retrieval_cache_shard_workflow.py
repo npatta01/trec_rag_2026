@@ -45,6 +45,7 @@ def test_dstack_dev_environment_is_interactive_bounded_and_48gb_only() -> None:
     value = yaml.safe_load(DEV_CONFIG_PATH.read_text(encoding="utf-8"))
     assert value["type"] == "dev-environment"
     assert value["ide"] == "vscode"
+    assert value["working_dir"] == "/workflow"
     assert value["image"] == IMAGE
     assert value["resources"] == {
         "gpu": {"name": ["A40", "A6000", "L40S"], "count": 1, "memory": "48GB.."},

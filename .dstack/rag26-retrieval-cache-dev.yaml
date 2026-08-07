@@ -3,7 +3,7 @@ name: rag26-retrieval-cache-dev
 
 image: huggingface/trl@sha256:4de10fa68e4f4e060cb41885044208e2a44715fc0d52ce83bb071b1fc6d63db1
 ide: vscode
-working_dir: /dstack/run/trec_rag_2026
+working_dir: /workflow
 
 env:
   - HF_TOKEN=${{ secrets.hf_token }}
