@@ -89,8 +89,14 @@ esac
 cd "$REPO_ROOT"
 repo_toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || die "the dstack repo transport did not provide a Git checkout"
 [[ $repo_toplevel == "$REPO_ROOT" ]] || die "wrapper must run from its transported repository"
-tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || die "current branch has no tracking branch"
-git --no-pager diff --check "$tracking_ref"
+if tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null); then
+  git --no-pager diff --check "$tracking_ref"
+else
+  # Dstack may preserve the committed checkout bytes while omitting local
+  # branch-upstream metadata. The launcher already validates the real source
+  # upstream and seals a clean committed-only snapshot before submission.
+  git --no-pager diff --check HEAD
+fi
 
 # Dstack materializes files added since the tracking commit as untracked patch
 # bytes. Seal the complete sanitized patch before using Git's tracked-file
@@ -99,6 +105,7 @@ if ! $preflight; then
   git config user.name >/dev/null 2>&1 || git config user.name "dstack cache shard"
   git config user.email >/dev/null 2>&1 || git config user.email "dstack-cache-shard@invalid.local"
   git add -A
+  git --no-pager diff --cached --check
   if ! git diff --cached --quiet; then
     git commit --no-gpg-sign -m "dstack ephemeral cache shard ${run_id} ${topic_ids_csv}" >/dev/null
   fi

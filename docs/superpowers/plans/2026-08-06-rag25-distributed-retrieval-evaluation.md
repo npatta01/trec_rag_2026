@@ -1058,7 +1058,7 @@ ClimbMix, projected RAG 2025 development qrels.
   100 and topic `37` has nine. These are low-coverage projected diagnostics,
   not exhaustive official ground truth.
 
-- [ ] **Step 6: Obtain final measured bulk authorization**
+- [x] **Step 6: Obtain final measured bulk authorization**
 
   Incorporate the two-topic canary's actual runtime, price, hosted calls,
   RAM/VRAM, and storage into the remaining-19-topic projection. Re-preview any
@@ -1067,12 +1067,40 @@ ClimbMix, projected RAG 2025 development qrels.
   authorization after those previews. No later wave may launch under stale
   hashes or an unapproved offer.
 
+  Evidence: after reviewing the measured canary and the remaining-topic
+  proposal, the user explicitly directed the remaining 2025 topics to run if
+  the validation gates passed. At HEAD
+  `9d4703de977d1ad60963c3a7f7a479d11bdb499c`, the tracked worktree,
+  submodules, four source hashes, required secret names, task-mode lifecycle,
+  exact run-name absence, and exact immutable-prefix emptiness all passed.
+  Fresh first-wave previews returned the same eight-offer snapshot as the
+  preserved previews. A Luna xhigh read-only audit independently passed all
+  three two-topic wrapper preflights and confirmed that six synchronous topic
+  workers stay inside the organizer guidance; each worker has burst one and a
+  six-second per-host request-start interval.
+
 - [ ] **Step 7: Launch the remaining manifest in bounded waves**
 
   Start at most three tasks concurrently. A machine processes at most two
   topics in parallel. Submit each task exactly once and let dstack handle only
   configured native capacity behavior. Record run name, backend, GPU, price,
   topic IDs, submission time, and status.
+
+  Current evidence: the first wave was submitted exactly once at
+  `2026-08-07T09:16:31Z`. `rag25-cache-58-72`
+  (`01349a93-04b4-4b42-80ab-774c74bb2387`) selected a RunPod EU-SE-1 A40 at
+  $0.44/hour; `rag25-cache-84-144`
+  (`7a072337-2886-41b9-9688-7deb4231946d`) selected a RunPod EU-SE-1 A6000 at
+  $0.53/hour; and `rag25-cache-161-200`
+  (`357044c4-a6d9-46e2-9416-a288f25a63a6`) selected a RunPod US-KS-2 A6000 at
+  $0.53/hour. All three entered provisioning.
+
+  Startup incident: the first two tasks exited 2 before any topic worker,
+  hosted request, or artifact receipt with ordinary-log error `current branch
+  has no tracking branch`. The third was still provisioning and was stopped
+  by exact name once the deterministic wrapper fault was known. Their costs
+  were $0.0335, $0.0304, and $0.0828 respectively ($0.1467 total). A fresh
+  component-aware HF listing confirmed all six topic prefixes remained empty.
 
 - [ ] **Step 8: Consolidate each completed wave**
 
@@ -1086,6 +1114,17 @@ ClimbMix, projected RAG 2025 development qrels.
   A failed task gets root-cause diagnosis before any retry. Reuse already
   completed immutable topic prefixes; retry only topics whose prefixes remain
   empty. Never overwrite or delete a completion marker.
+
+  Current evidence: a real-wrapper no-upstream checkout fixture reproduced the
+  exact exit-2 error. Dstack preserves the committed checkout bytes but may
+  omit local branch-upstream metadata. The launcher already authenticates the
+  real upstream, clean source, approved public remote, and exact committed-only
+  snapshot. The minimal remote-wrapper repair retains the stronger upstream
+  diff when available, falls back to `HEAD` when that local metadata is absent,
+  and validates the fully staged diff before the ephemeral seal commit. The
+  new regression changed red to green; the complete shard workflow suite
+  passes 45 tests. No failed task will be retried under its old name or old
+  source hash.
 
 ### Task 8: Final Consolidation, Offline Replay, and 22-Topic Evaluation
 
@@ -1168,6 +1207,9 @@ ClimbMix, projected RAG 2025 development qrels.
 | 2026 closure | `rag26-cache-dev-r4` | `rag2026-0` | stopped | `ea9d2799…9622` | staging + main complete | staging + main zero-work | n/a |
 | 2025 singleton canary | `rag25-cache-31` | `31` | done, exit 0, $0.2182 | `0d9b77f4…8fe98fe` | staging + main complete | 186 rows, staging + main zero-work | projected-qrels complete |
 | 2025 concurrency canary | `rag25-cache-14-37` | `14,37` | done, exit 0, $0.3687 | `6331cf4b…ad01`; `bc36bb96…dc3f` | `7f282dc6…6d62`; `33b9d200…fc88` | 482 rows, staging + main zero-work | nDCG@10 0.0; judged rate@100 0.065 |
+| 2025 bulk wave 1 startup | `rag25-cache-58-72` | `58,72` | failed before workers, exit 2, $0.0335 | exact prefixes empty | n/a | n/a | n/a |
+| 2025 bulk wave 1 startup | `rag25-cache-84-144` | `84,144` | failed before workers, exit 2, $0.0304 | exact prefixes empty | n/a | n/a | n/a |
+| 2025 bulk wave 1 startup | `rag25-cache-161-200` | `161,200` | stopped while provisioning, $0.0828 | exact prefixes empty | n/a | n/a | n/a |
 
 ## Completion Criteria
 

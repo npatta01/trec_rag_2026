@@ -176,6 +176,7 @@ def _run_fake_live_wrapper(
     fail_topic: str = "",
     preexisting_topic_ids: tuple[str, ...] = (),
     force_14_144_order: bool = False,
+    configure_upstream: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, str]:
     checkout = tmp_path / "checkout"
     wrapper = checkout / WRAPPER_PATH.relative_to(REPO_ROOT)
@@ -206,18 +207,19 @@ def _run_fake_live_wrapper(
         cwd=checkout,
         check=True,
     )
-    remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "--quiet", "--bare", str(remote)], check=True)
-    subprocess.run(
-        ["git", "remote", "add", "origin", str(remote)],
-        cwd=checkout,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "push", "--quiet", "--set-upstream", "origin", "task"],
-        cwd=checkout,
-        check=True,
-    )
+    if configure_upstream:
+        remote = tmp_path / "remote.git"
+        subprocess.run(["git", "init", "--quiet", "--bare", str(remote)], check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote)],
+            cwd=checkout,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "push", "--quiet", "--set-upstream", "origin", "task"],
+            cwd=checkout,
+            check=True,
+        )
 
     git_exclude = checkout / ".git" / "info" / "exclude"
     git_exclude.write_text("/.venv/\n/configs/local/\n", encoding="utf-8")
@@ -536,6 +538,31 @@ def test_wrapper_live_single_topic_behavior_is_preserved(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr
     assert "shard_status=complete" in result.stdout
     assert "topic_id=31" in result.stdout
+    assert _published_bundle_names(runtime, "31") == {
+        "bundle.tar.zst",
+        "bundle-complete.json",
+    }
+
+
+def test_wrapper_live_accepts_clean_transport_checkout_without_upstream(
+    tmp_path: Path,
+) -> None:
+    result, checkout, runtime, _ = _run_fake_live_wrapper(
+        tmp_path,
+        topic_ids=("31",),
+        configure_upstream=False,
+    )
+
+    upstream = subprocess.run(
+        ["git", "rev-parse", "@{upstream}"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert upstream.returncode != 0
+    assert result.returncode == 0, result.stderr
+    assert "shard_status=complete" in result.stdout
     assert _published_bundle_names(runtime, "31") == {
         "bundle.tar.zst",
         "bundle-complete.json",
