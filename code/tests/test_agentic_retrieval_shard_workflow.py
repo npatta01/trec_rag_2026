@@ -152,6 +152,7 @@ def _fake_agentic_checkout(tmp_path: Path, *, fail_topic: str = "") -> tuple[Pat
     runtime = tmp_path / "runtime"
     (runtime / "remote").mkdir(parents=True)
     (runtime / "bin").mkdir()
+    fake_bin = runtime / "bin"
     venv = checkout / ".venv/bin"
     venv.mkdir(parents=True)
     real_python = shutil.which("python3")
@@ -227,6 +228,23 @@ if args[:2] == ["auth", "whoami"] or args[:2] == ["buckets", "info"] or args == 
     print("{\\"private\\":true}")
     raise SystemExit(0)
 raise SystemExit(0)
+""",
+    )
+    _write_executable(
+        fake_bin / "python3",
+        f"""#!/usr/bin/env bash
+if [[ ${{1:-}} == -c ]]; then
+  printf '3.12\\n'
+else
+  exec {REPO_ROOT / '.venv/bin/python'} \"$@\"
+fi
+""",
+    )
+    _write_executable(
+        fake_bin / "uv",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv-sync\\n' >>"$FAKE_RUNTIME/events.log"
 """,
     )
     env = os.environ.copy()
@@ -376,3 +394,47 @@ printf 'fake-preview-ok\\n'
     )
     assert result.returncode == 0, result.stderr
     assert "fake-preview-ok" in result.stdout
+
+
+def test_wrapper_bootstraps_locked_environment_before_using_venv(tmp_path: Path) -> None:
+    checkout, plan, env = _fake_agentic_checkout(tmp_path)
+    runtime = tmp_path / "runtime"
+    fake_bin = runtime / "bin"
+    prebuilt_python = runtime / "prebuilt-python"
+    prebuilt_hf = runtime / "prebuilt-hf"
+    shutil.copy2(checkout / ".venv/bin/python", prebuilt_python)
+    shutil.copy2(checkout / ".venv/bin/hf", prebuilt_hf)
+    shutil.rmtree(checkout / ".venv")
+    _write_executable(
+        fake_bin / "python3",
+        f"""#!/usr/bin/env bash
+if [[ ${{1:-}} == -c ]]; then
+  printf '3.12\\n'
+else
+  exec {REPO_ROOT / '.venv/bin/python'} \"$@\"
+fi
+""",
+    )
+    _write_executable(
+        fake_bin / "uv",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv-sync\\n' >"$FAKE_RUNTIME/uv-sync"
+mkdir -p .venv/bin
+cp {prebuilt_python} .venv/bin/python
+cp {prebuilt_hf} .venv/bin/hf
+chmod 0755 .venv/bin/python .venv/bin/hf
+""",
+    )
+    result = _run(
+        checkout / "code/tools/run_agentic_retrieval_worker.sh",
+        "--task-name", "task-0", "--run-id", "run-0", "--plan", str(plan),
+        "--plan-sha256", "a" * 64, "--config", "configs/agentic.yaml",
+        "--artifact-prefix", "hf://buckets/private/trec_rag_2026/experiments/run-0",
+        "--topic", "rag2026-0", cwd=checkout, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (runtime / "uv-sync").read_text(encoding="utf-8") == "uv-sync\n"
+    assert (runtime / "events/worker.log").read_text(encoding="utf-8").splitlines() == [
+        "worker|rag2026-0"
+    ]

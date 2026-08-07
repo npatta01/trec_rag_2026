@@ -249,6 +249,26 @@ if $preflight; then
   exit 0
 fi
 
+# The dstack repository transport contains source, not the local virtual
+# environment. Recreate the locked environment from the digest-pinned image's
+# existing interpreter before any secret-dependent or live work.
+git submodule update --init --recursive
+tracked_status=$(git status --porcelain=v1 --untracked-files=no --ignore-submodules=none)
+[[ -z $tracked_status ]] || die "transported source changed while initializing submodules"
+image_python=$(command -v python3) || die "python3 is required"
+case "$image_python" in
+  /*) ;;
+  *) die "python3 did not resolve to an absolute image path" ;;
+esac
+python_version=$($image_python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+[[ $python_version == 3.11 || $python_version == 3.12 ]] || die "the digest-pinned image must provide Python 3.11 or 3.12 (found $python_version)"
+uv sync \
+  --group cuda \
+  --locked \
+  --no-managed-python \
+  --no-python-downloads \
+  --python "$image_python"
+
 for secret_name in INDEX_URL PYSERINI_API_TOKEN OPENROUTER_API_KEY HF_TOKEN; do
   [[ -n ${!secret_name:-} ]] || die "required dstack secret is missing: $secret_name"
 done
