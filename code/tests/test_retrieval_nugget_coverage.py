@@ -6,10 +6,15 @@ import json
 import pytest
 
 from trec_rag.retrieval_nugget_coverage import (
+    BackendReply,
     CoverageNugget,
+    CoverageModelRequest,
     EvaluatorIdentity,
     FrozenPlan,
     NuggetCoverageError,
+    evaluate_nugget_coverage,
+    render_judge_request,
+    render_planner_request,
     score_coverage,
     validate_and_freeze_plan,
     validate_judgments,
@@ -364,3 +369,201 @@ def test_score_coverage_reports_null_when_no_supplemental_obligations() -> None:
     report = score_coverage(plan, _nuggets(), judgments, _identity())
 
     assert report.supplemental_coverage is None
+
+
+class RecordingBackend:
+    def __init__(self, replies: list[BackendReply]) -> None:
+        self.replies = list(replies)
+        self.requests: list[CoverageModelRequest] = []
+
+    def complete(self, request: CoverageModelRequest) -> BackendReply:
+        self.requests.append(request)
+        return self.replies.pop(0)
+
+
+def _reply(payload: object, *, metadata: dict[str, object] | None = None) -> BackendReply:
+    content = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return BackendReply(
+        content=content,
+        response_body=b'{"provider":"raw"}',
+        status=200,
+        metadata={} if metadata is None else metadata,
+    )
+
+
+def _judge_payload(plan: FrozenPlan) -> dict[str, object]:
+    return {
+        "schema_version": "retrieval_nugget_judgment_v1",
+        "judgments": [
+            {
+                "obligation_id": obligation.obligation_id,
+                "label": "full",
+                "supporting_nugget_aliases": ["n001"],
+                "missing_elements": "",
+            }
+            for obligation in plan.obligations
+        ],
+    }
+
+
+def test_planner_request_isolated_and_schema_is_strict() -> None:
+    request = render_planner_request(NARRATIVE, _identity().planner_model)
+
+    assert request.stage == "planner"
+    assert request.model == "planner-model"
+    request_text = json.dumps(request.messages, ensure_ascii=False)
+    assert NARRATIVE in request_text
+    assert "claim-cost" not in request_text
+    assert "The projected cost is $10 million." not in request_text
+    assert all(term not in request_text.casefold() for term in ("passages", "docids", "ranks", "importance"))
+
+    schema = request.response_schema
+    assert set(schema["required"]) == {
+        "schema_version",
+        "facets",
+        "unmapped_narrative_spans",
+    }
+    assert set(schema["properties"]) == set(schema["required"])
+    assert schema["additionalProperties"] is False
+    facet_schema = schema["properties"]["facets"]["items"]
+    assert set(facet_schema["required"]) == {"title", "obligations"}
+    obligation_schema = facet_schema["properties"]["obligations"]["items"]
+    assert set(obligation_schema["required"]) == {
+        "requirement",
+        "support_test",
+        "kind",
+        "narrative_spans",
+    }
+    assert obligation_schema["properties"]["kind"]["enum"] == [
+        "required_explicit",
+        "supplemental_inferred",
+    ]
+
+
+def test_judge_request_contains_only_aliases_and_frozen_plan() -> None:
+    plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    request = render_judge_request(NARRATIVE, plan, _nuggets(), _identity().judge_model)
+
+    assert request.stage == "judge"
+    request_text = json.dumps(request.messages, ensure_ascii=False)
+    assert NARRATIVE in request_text
+    assert "f001-o001" in request_text
+    assert "f001-o002" in request_text
+    assert "n001: The projected cost is $10 million." in request_text
+    assert "n002: Historically, the comparable cost was lower." in request_text
+    assert "n003: An uncited related detail." in request_text
+    assert "claim-cost" not in request_text
+    assert all(term not in request_text.casefold() for term in ("passages", "docids", "ranks", "importance"))
+
+    schema = request.response_schema
+    assert set(schema["required"]) == {"schema_version", "judgments"}
+    judgment_schema = schema["properties"]["judgments"]["items"]
+    assert set(judgment_schema["required"]) == {
+        "obligation_id",
+        "label",
+        "supporting_nugget_aliases",
+        "missing_elements",
+    }
+    assert judgment_schema["properties"]["obligation_id"]["enum"] == ["f001-o001", "f001-o002"]
+    assert judgment_schema["properties"]["label"]["enum"] == ["full", "partial", "unsupported"]
+    assert judgment_schema["properties"]["supporting_nugget_aliases"]["items"]["enum"] == [
+        "n001",
+        "n002",
+        "n003",
+    ]
+
+
+def test_evaluation_makes_exactly_two_calls_and_returns_safe_metadata() -> None:
+    plan_payload = VALID_PLAN
+    frozen = validate_and_freeze_plan(NARRATIVE, plan_payload)
+    planner = RecordingBackend([_reply(plan_payload, metadata={"provider": "planner"})])
+    judge = RecordingBackend([_reply(_judge_payload(frozen), metadata={"provider": "judge"})])
+
+    result = evaluate_nugget_coverage(
+        narrative=NARRATIVE,
+        nuggets=_nuggets(),
+        planner=planner,
+        judge=judge,
+        identity=_identity(),
+    )
+
+    assert len(planner.requests) == 1
+    assert len(judge.requests) == 1
+    assert result[0].plan_sha256 == frozen.plan_sha256
+    assert result[1][0].label == "full"
+    assert result[2].required_coverage == pytest.approx(1.0)
+    assert result[3].planner_metadata == {"provider": "planner"}
+    assert result[3].judge_metadata == {"provider": "judge"}
+    assert not hasattr(result[3], "planner_response_body")
+
+
+def test_malformed_planner_prevents_judge_without_repair_call() -> None:
+    planner = RecordingBackend([_reply({"not": "a plan"}), _reply(VALID_PLAN)])
+    judge = RecordingBackend([])
+
+    with pytest.raises(NuggetCoverageError) as caught:
+        evaluate_nugget_coverage(
+            narrative=NARRATIVE,
+            nuggets=_nuggets(),
+            planner=planner,
+            judge=judge,
+            identity=_identity(),
+        )
+
+    assert caught.value.stage == "planner"
+    assert len(planner.requests) == 1
+    assert judge.requests == []
+
+
+def test_malformed_judge_does_not_trigger_semantic_repair() -> None:
+    planner = RecordingBackend([_reply(VALID_PLAN)])
+    judge = RecordingBackend([_reply({"not": "judgments"}), _reply({})])
+
+    with pytest.raises(NuggetCoverageError) as caught:
+        evaluate_nugget_coverage(
+            narrative=NARRATIVE,
+            nuggets=_nuggets(),
+            planner=planner,
+            judge=judge,
+            identity=_identity(),
+        )
+
+    assert caught.value.stage == "judge"
+    assert len(planner.requests) == 1
+    assert len(judge.requests) == 1
+
+
+def test_oversized_judge_request_prevents_judge_call() -> None:
+    huge_nuggets = (CoverageNugget("huge", "x" * 1_000_001),)
+    planner = RecordingBackend([_reply(VALID_PLAN)])
+    judge = RecordingBackend([])
+
+    with pytest.raises(NuggetCoverageError, match="1,000,000") as caught:
+        evaluate_nugget_coverage(
+            narrative=NARRATIVE,
+            nuggets=huge_nuggets,
+            planner=planner,
+            judge=judge,
+            identity=_identity(),
+        )
+
+    assert caught.value.stage == "judge"
+    assert len(planner.requests) == 1
+    assert judge.requests == []
+
+
+def test_empty_nuggets_are_rejected_before_either_backend_call() -> None:
+    planner = RecordingBackend([])
+    judge = RecordingBackend([])
+
+    with pytest.raises(NuggetCoverageError, match="at least one"):
+        evaluate_nugget_coverage(
+            narrative=NARRATIVE,
+            nuggets=(),
+            planner=planner,
+            judge=judge,
+            identity=_identity(),
+        )
+
+    assert planner.requests == []
+    assert judge.requests == []

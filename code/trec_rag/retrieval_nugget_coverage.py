@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 from types import MappingProxyType
+from typing import Literal, Protocol
 import unicodedata
+
+from trec_rag.facet_extraction import BackendReply
 
 
 PLAN_SCHEMA_VERSION = "retrieval_nugget_plan_v1"
@@ -20,6 +23,18 @@ JUDGMENT_SCHEMA_VERSION = "retrieval_nugget_judgment_v1"
 MAX_FACETS = 12
 MAX_OBLIGATIONS_PER_FACET = 8
 MAX_OBLIGATIONS = 40
+MAX_JUDGE_REQUEST_BYTES = 1_000_000
+MAX_COMPLETION_TOKENS = 4096
+PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v1"
+JUDGE_PROMPT_VERSION = "retrieval_nugget_judge_v1"
+PLANNER_SYSTEM_PROMPT = (
+    "Create a complete, minimal obligation plan from the supplied narrative. "
+    "Return only the requested JSON object."
+)
+JUDGE_SYSTEM_PROMPT = (
+    "Judge each frozen obligation against the supplied retrieval nuggets. "
+    "Use only the supplied text and return only the requested JSON object."
+)
 MAX_TEXT_CHARACTERS = 300
 _PLAN_ROOT_KEYS = frozenset({"schema_version", "facets", "unmapped_narrative_spans"})
 _FACET_KEYS = frozenset({"title", "obligations"})
@@ -59,6 +74,44 @@ class EvaluatorIdentity:
     judge_prompt_version: str
     planner_model: str
     judge_model: str
+
+
+@dataclass(frozen=True)
+class CoverageModelRequest:
+    """Backend-neutral structured request for one planner or judge call."""
+
+    stage: Literal["planner", "judge"]
+    model: str
+    messages: tuple[Mapping[str, str], ...]
+    response_schema_name: str
+    response_schema: Mapping[str, object]
+    max_tokens: int
+
+
+class CoverageModelBackend(Protocol):
+    """Injected backend for exactly one structured model completion."""
+
+    def complete(self, request: CoverageModelRequest) -> BackendReply: ...
+
+
+@dataclass(frozen=True)
+class EvaluationCallMetadata:
+    """Secret-free metadata returned for the planner and judge calls."""
+
+    planner_metadata: Mapping[str, object]
+    judge_metadata: Mapping[str, object]
+    planner_status: int
+    judge_status: int
+    planner_request_sha256: str
+    judge_request_sha256: str
+
+    @property
+    def planner(self) -> Mapping[str, object]:
+        return self.planner_metadata
+
+    @property
+    def judge(self) -> Mapping[str, object]:
+        return self.judge_metadata
 
 
 @dataclass(frozen=True)
@@ -159,6 +212,129 @@ class CoverageReport:
     @property
     def required_facet_scores(self) -> Mapping[str, float]:
         return self.facet_scores
+
+
+EvaluationResult = tuple[
+    FrozenPlan,
+    tuple[CoverageJudgment, ...],
+    CoverageReport,
+    EvaluationCallMetadata,
+]
+
+
+def render_planner_request(
+    narrative: str,
+    model: str | EvaluatorIdentity,
+    *,
+    max_tokens: int = MAX_COMPLETION_TOKENS,
+) -> CoverageModelRequest:
+    """Render the narrative-only planner request deterministically."""
+
+    narrative = _text(narrative, "narrative", None, stage="planner")
+    if isinstance(model, EvaluatorIdentity):
+        model = model.planner_model
+    model = _text(model, "planner model", None, stage="planner")
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1:
+        _error("planner", "max_tokens must be a positive integer")
+    user_payload = {"narrative": narrative}
+    return CoverageModelRequest(
+        stage="planner",
+        model=model,
+        messages=_messages(PLANNER_SYSTEM_PROMPT, user_payload, stage="planner"),
+        response_schema_name=PLAN_SCHEMA_VERSION,
+        response_schema=_planner_response_schema(),
+        max_tokens=max_tokens,
+    )
+
+
+def render_judge_request(
+    narrative: str,
+    plan: FrozenPlan,
+    nuggets: Sequence[CoverageNugget],
+    model: str | EvaluatorIdentity,
+    *,
+    max_tokens: int = MAX_COMPLETION_TOKENS,
+) -> CoverageModelRequest:
+    """Render the frozen-plan and ordered local-alias judge request."""
+
+    narrative = _text(narrative, "narrative", None, stage="judge")
+    if not isinstance(plan, FrozenPlan):
+        _error("judge", "plan must be a FrozenPlan")
+    if plan.narrative != narrative:
+        _error("judge", "plan narrative does not match the judge narrative")
+    nugget_rows = _validate_nuggets(nuggets, stage="judge")
+    if isinstance(model, EvaluatorIdentity):
+        model = model.judge_model
+    model = _text(model, "judge model", None, stage="judge")
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1:
+        _error("judge", "max_tokens must be a positive integer")
+    try:
+        frozen_plan = json.loads(plan.canonical_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:  # pragma: no cover - invariant guard
+        _error("judge", f"frozen plan is not canonical JSON: {exc}")
+    user_payload = {
+        "narrative": narrative,
+        "plan": frozen_plan,
+        "nuggets": [
+            f"n{index:03d}: {nugget.text}"
+            for index, nugget in enumerate(nugget_rows, start=1)
+        ],
+    }
+    return CoverageModelRequest(
+        stage="judge",
+        model=model,
+        messages=_messages(JUDGE_SYSTEM_PROMPT, user_payload, stage="judge"),
+        response_schema_name=JUDGMENT_SCHEMA_VERSION,
+        response_schema=_judge_response_schema(plan, len(nugget_rows)),
+        max_tokens=max_tokens,
+    )
+
+
+def evaluate_nugget_coverage(
+    *,
+    narrative: str,
+    nuggets: Sequence[CoverageNugget],
+    planner: CoverageModelBackend,
+    judge: CoverageModelBackend,
+    identity: EvaluatorIdentity,
+) -> EvaluationResult:
+    """Run one planner call followed by one judge call and score the result."""
+
+    narrative = _text(narrative, "narrative", None, stage="input")
+    nugget_rows = _validate_nuggets(nuggets, stage="input")
+    if not isinstance(identity, EvaluatorIdentity):
+        _error("input", "identity must be an EvaluatorIdentity")
+    if not callable(getattr(planner, "complete", None)):
+        _error("input", "planner must provide complete(request)")
+    if not callable(getattr(judge, "complete", None)):
+        _error("input", "judge must provide complete(request)")
+
+    planner_request = render_planner_request(narrative, identity)
+    planner_body = _serialized_provider_request(planner_request, stage="planner")
+    planner_reply = _complete(planner, planner_request, stage="planner")
+    planner_payload = _decode_model_payload(planner_reply, stage="planner")
+    frozen_plan = validate_and_freeze_plan(narrative, planner_payload)
+
+    judge_request = render_judge_request(narrative, frozen_plan, nugget_rows, identity)
+    judge_body = _serialized_provider_request(judge_request, stage="judge")
+    if len(judge_body) > MAX_JUDGE_REQUEST_BYTES:
+        _error(
+            "judge",
+            f"judge request exceeds the {MAX_JUDGE_REQUEST_BYTES:,}-byte limit",
+        )
+    judge_reply = _complete(judge, judge_request, stage="judge")
+    judge_payload = _decode_model_payload(judge_reply, stage="judge")
+    judgments = validate_judgments(frozen_plan, nugget_rows, judge_payload)
+    report = score_coverage(frozen_plan, nugget_rows, judgments, identity)
+    metadata = EvaluationCallMetadata(
+        planner_metadata=_safe_metadata(planner_reply, stage="planner"),
+        judge_metadata=_safe_metadata(judge_reply, stage="judge"),
+        planner_status=planner_reply.status,
+        judge_status=judge_reply.status,
+        planner_request_sha256=sha256(planner_body).hexdigest(),
+        judge_request_sha256=sha256(judge_body).hexdigest(),
+    )
+    return frozen_plan, judgments, report, metadata
 
 
 def validate_and_freeze_plan(narrative: str, payload: object) -> FrozenPlan:
@@ -509,6 +685,185 @@ def score_coverage(
     )
 
 
+def _messages(
+    system_prompt: str,
+    user_payload: Mapping[str, object],
+    *,
+    stage: str,
+) -> tuple[Mapping[str, str], ...]:
+    try:
+        user_content = json.dumps(
+            user_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:  # pragma: no cover - typed inputs guard this
+        _error(stage, f"request JSON serialization failed: {exc}")
+    return (
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    )
+
+
+def _planner_response_schema() -> dict[str, object]:
+    obligation = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["requirement", "support_test", "kind", "narrative_spans"],
+        "properties": {
+            "requirement": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_CHARACTERS},
+            "support_test": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_CHARACTERS},
+            "kind": {
+                "type": "string",
+                "enum": ["required_explicit", "supplemental_inferred"],
+            },
+            "narrative_spans": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+    }
+    facet = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "obligations"],
+        "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_CHARACTERS},
+            "obligations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_OBLIGATIONS_PER_FACET,
+                "items": obligation,
+            },
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["schema_version", "facets", "unmapped_narrative_spans"],
+        "properties": {
+            "schema_version": {"type": "string", "const": PLAN_SCHEMA_VERSION},
+            "facets": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_FACETS,
+                "items": facet,
+            },
+            "unmapped_narrative_spans": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+    }
+
+
+def _judge_response_schema(plan: FrozenPlan, nugget_count: int) -> dict[str, object]:
+    obligation_ids = [obligation.obligation_id for obligation in plan.obligations]
+    aliases = [f"n{index:03d}" for index in range(1, nugget_count + 1)]
+    judgment = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "obligation_id",
+            "label",
+            "supporting_nugget_aliases",
+            "missing_elements",
+        ],
+        "properties": {
+            "obligation_id": {"type": "string", "enum": obligation_ids},
+            "label": {
+                "type": "string",
+                "enum": ["full", "partial", "unsupported"],
+            },
+            "supporting_nugget_aliases": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": nugget_count,
+                "items": {"type": "string", "enum": aliases},
+            },
+            "missing_elements": {
+                "type": "string",
+                "maxLength": MAX_TEXT_CHARACTERS,
+            },
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["schema_version", "judgments"],
+        "properties": {
+            "schema_version": {"type": "string", "const": JUDGMENT_SCHEMA_VERSION},
+            "judgments": {
+                "type": "array",
+                "minItems": len(obligation_ids),
+                "maxItems": len(obligation_ids),
+                "items": judgment,
+            },
+        },
+    }
+
+
+def _serialized_provider_request(
+    request: CoverageModelRequest,
+    *,
+    stage: str,
+) -> bytes:
+    if not isinstance(request, CoverageModelRequest):
+        _error(stage, "request must be a CoverageModelRequest")
+    body = {
+        "model": request.model,
+        "messages": [dict(message) for message in request.messages],
+        "max_tokens": request.max_tokens,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": request.response_schema_name,
+                "strict": True,
+                "schema": request.response_schema,
+            },
+        },
+    }
+    return _canonical_json(body, stage=stage)
+
+
+def _complete(
+    backend: CoverageModelBackend,
+    request: CoverageModelRequest,
+    *,
+    stage: str,
+) -> BackendReply:
+    try:
+        reply = backend.complete(request)
+    except NuggetCoverageError:
+        raise
+    except Exception as exc:
+        _error(stage, f"backend completion failed: {type(exc).__name__}")
+    if not isinstance(reply, BackendReply):
+        _error(stage, "backend must return BackendReply")
+    return reply
+
+
+def _decode_model_payload(reply: BackendReply, *, stage: str) -> Mapping[str, object]:
+    if not isinstance(reply.content, bytes):
+        _error(stage, "backend reply content must be UTF-8 JSON bytes")
+    try:
+        decoded = reply.content.decode("utf-8")
+        payload = json.loads(decoded)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _error(stage, f"backend reply content is not valid JSON: {exc}")
+    return _mapping(payload, "model payload", stage=stage)
+
+
+def _safe_metadata(reply: BackendReply, *, stage: str) -> Mapping[str, object]:
+    if not isinstance(reply.metadata, Mapping) or not all(
+        isinstance(key, str) for key in reply.metadata
+    ):
+        _error(stage, "backend reply metadata must be a string-keyed object")
+    return MappingProxyType(dict(reply.metadata))
+
+
 def _error(stage: str, reason: str) -> None:
     raise NuggetCoverageError(stage, reason)
 
@@ -593,14 +948,28 @@ def _validate_nuggets(
 
 
 __all__ = [
+    "BackendReply",
     "CoverageFacet",
     "CoverageJudgment",
+    "CoverageModelBackend",
+    "CoverageModelRequest",
     "CoverageNugget",
     "CoverageObligation",
     "CoverageReport",
+    "EvaluationCallMetadata",
+    "EvaluationResult",
     "EvaluatorIdentity",
     "FrozenPlan",
+    "JUDGE_PROMPT_VERSION",
+    "JUDGE_SYSTEM_PROMPT",
+    "MAX_COMPLETION_TOKENS",
+    "MAX_JUDGE_REQUEST_BYTES",
     "NuggetCoverageError",
+    "PLANNER_PROMPT_VERSION",
+    "PLANNER_SYSTEM_PROMPT",
+    "evaluate_nugget_coverage",
+    "render_judge_request",
+    "render_planner_request",
     "score_coverage",
     "validate_and_freeze_plan",
     "validate_judgments",
