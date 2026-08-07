@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from html.parser import HTMLParser
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,12 +12,17 @@ import trec_rag.retrieval_nugget_coverage_report as report_module
 from trec_rag.facet_extraction import plan_facet_queries
 from trec_rag.retrieval_nugget_coverage import (
     CoverageFacet,
+    CoverageJudgment,
+    CoverageNugget,
     CoverageObligation,
     CoverageReport,
+    EvaluatorIdentity,
     FrozenPlan,
 )
 from trec_rag.retrieval_nugget_coverage_report import (
+    CoverageReportData,
     CoverageReportTopic,
+    CoverageRunSummary,
     RetrievalPlanContext,
     RetrievalSubnarrativeContext,
     load_coverage_report_data,
@@ -490,3 +496,179 @@ def test_report_data_ignores_unrelated_regular_files(tmp_path: Path, monkeypatch
     )
 
     assert len(data.topics) == 1
+
+
+class _ReportHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.text_chunks: list[str] = []
+        self.tags: list[str] = []
+        self.ids: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.tags.append(tag)
+        for key, value in attrs:
+            if key == "id" and value is not None:
+                self.ids.append(value)
+
+    def handle_data(self, data: str) -> None:
+        self.text_chunks.append(data)
+
+
+def _html_fixture_data() -> tuple[CoverageReportData, dict[str, str]]:
+    values = {
+        "narrative": '<script>alert("narrative")</script> & "quotes" \u2028 \u2029',
+        "facet": '<script>alert("facet")</script> & "quotes" \u2028 \u2029',
+        "requirement": '<script>alert("requirement")</script> & "quotes" \u2028 \u2029',
+        "support_test": '<script>alert("support")</script> & "quotes" \u2028 \u2029',
+        "span": '<script>alert("span")</script> & "quotes" \u2028 \u2029',
+        "missing": '<script>alert("missing")</script> & "quotes" \u2028 \u2029',
+        "subnarrative": '<script>alert("subnarrative")</script> & "quotes" \u2028 \u2029',
+        "query": '<script>alert("query")</script> & "quotes" \u2028 \u2029',
+        "nugget": '<script>alert("nugget")</script> & "quotes" \u2028 \u2029',
+        "planner": '<script>alert("planner")</script> & "quotes" \u2028 \u2029',
+    }
+    obligation = CoverageObligation(
+        obligation_id="obligation-1",
+        requirement=values["requirement"],
+        support_test=values["support_test"],
+        kind="required_explicit",
+        narrative_spans=(values["span"],),
+    )
+    plan = FrozenPlan(
+        narrative=values["narrative"],
+        schema_version="retrieval_nugget_plan_v1",
+        facets=(CoverageFacet("facet-1", values["facet"], (obligation,)),),
+        unmapped_narrative_spans=("unmapped span",),
+        canonical_bytes=b"{}",
+        plan_sha256="a" * 64,
+    )
+    nugget = CoverageNugget("canonical-id-1", values["nugget"])
+    judgment = CoverageJudgment(
+        obligation_id=obligation.obligation_id,
+        label="partial",
+        supporting_nugget_ids=(nugget.nugget_id,),
+        missing_elements=values["missing"],
+    )
+    evaluation = SimpleNamespace(
+        bound_input=SimpleNamespace(
+            topic_id="topic-safe",
+            narrative=values["narrative"],
+            nuggets=(nugget,),
+            manifest_sha256="d" * 64,
+            narrative_sha256="e" * 64,
+            nugget_text_sha256s=("f" * 64,),
+        ),
+        identity=EvaluatorIdentity("eval-v1", values["planner"], "judge-v1", "planner-model", "judge-model"),
+        plan=plan,
+        judgments=(judgment,),
+        report=CoverageReport(
+            plan_sha256=plan.plan_sha256,
+            identity=EvaluatorIdentity("eval-v1", values["planner"], "judge-v1", "planner-model", "judge-model"),
+            required_coverage=0.5,
+            strict_full_rate=0.0,
+            supplemental_coverage=None,
+            label_counts={"full": 0, "partial": 1, "unsupported": 0},
+            facet_scores={"facet-1": 0.5},
+            judgments=(judgment,),
+            unmapped_narrative_spans=("unmapped span",),
+            uncited_nugget_ids=(),
+            uncited_nugget_aliases=(),
+        ),
+        artifact_hashes={"input.json": "1" * 64, "report.json": "2" * 64},
+        manifest_sha256="3" * 64,
+    )
+    topic = CoverageReportTopic(
+        evaluation=evaluation,
+        retrieval_plan=RetrievalPlanContext(
+            used_fallback=False,
+            subnarratives=(
+                RetrievalSubnarrativeContext("sub-1", values["subnarrative"], (values["query"],)),
+            ),
+            planner_identity={"provider": values["planner"]},
+            manifest_sha256="4" * 64,
+            result_sha256="5" * 64,
+        ),
+    )
+    data = CoverageReportData(
+        topics=(topic,),
+        summary=CoverageRunSummary(
+            topic_count=1,
+            nugget_count=1,
+            required_obligation_count=1,
+            supplemental_obligation_count=0,
+            topic_macro_required_coverage=0.5,
+            topic_macro_strict_full_rate=0.0,
+            label_counts={"full": 0, "partial": 1, "unsupported": 0},
+            perfect_required_topic_count=0,
+        ),
+    )
+    return data, values
+
+
+def test_renderer_escapes_semantic_text_and_is_deterministic() -> None:
+    data, values = _html_fixture_data()
+
+    first = report_module.render_coverage_report_html(data)
+    second = report_module.render_coverage_report_html(data)
+    source = first.decode("utf-8")
+    parser = _ReportHTMLParser()
+    parser.feed(source)
+    visible_text = "".join(parser.text_chunks)
+
+    assert first == second
+    for value in values.values():
+        assert value in visible_text
+    assert "<script>alert(\"narrative\")</script>" not in source
+    assert "DOC-SENTINEL" not in source
+    assert "PASSAGE-SENTINEL" not in source
+    assert "PROVIDER-BODY-SENTINEL" not in source
+    assert 'src="http' not in source
+    assert 'href="http' not in source
+    assert "fetch(" not in source
+    assert "XMLHttpRequest" not in source
+    assert "WebSocket" not in source
+    assert "EventSource" not in source
+    assert "innerHTML" not in source
+    assert parser.tags.count("script") == 2
+    assert len(parser.ids) == len(set(parser.ids))
+    assert source.count('class="nugget-inventory"') == 1
+    assert source.count("n001") >= 2
+
+
+def test_renderer_contract_has_theme_navigation_and_accessibility_landmarks() -> None:
+    data, _ = _html_fixture_data()
+    source = report_module.render_coverage_report_html(data).decode("utf-8")
+    parser = _ReportHTMLParser()
+    parser.feed(source)
+
+    assert source.startswith("<!doctype html>")
+    assert '<meta charset="utf-8">' in source
+    assert 'name="viewport"' in source
+    assert "<title>Retrieval nugget coverage report</title>" in source
+    assert 'class="skip-link" href="#main-content"' in source
+    assert '<main id="main-content">' in source
+    assert 'role="search"' in source
+    assert 'for="topic-search"' in source
+    assert 'for="status-filter"' in source
+    assert 'for="sort-topics"' in source
+    assert 'role="status" aria-live="polite"' in source
+    assert "<details" in source and "<summary>" in source
+    assert '<details class="obligation" open>' in source
+    assert '<details class="obligation" >' not in source
+    assert "--color-bg:" in source
+    assert "--color-surface:" in source
+    assert "--color-text:" in source
+    assert '[data-theme="light"]' in source
+    assert '[data-theme="dark"]' in source
+    assert "@media (prefers-color-scheme: dark)" in source
+    assert "@media (prefers-reduced-motion: reduce)" in source
+    assert "@media print" in source
+    assert "history.pushState" in source
+    assert "popstate" in source
+    assert "hashchange" in source
+    assert 'data-theme-choice="light"' in source
+    assert 'data-theme-choice="system"' in source
+    assert 'data-theme-choice="dark"' in source
+    assert 'aria-pressed="false"' in source
+    assert len(parser.ids) == len(set(parser.ids))
