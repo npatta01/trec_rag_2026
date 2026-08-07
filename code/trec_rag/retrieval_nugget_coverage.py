@@ -45,9 +45,9 @@ MAX_FACETS = 12
 MAX_OBLIGATIONS_PER_FACET = 8
 MAX_OBLIGATIONS = 40
 MAX_JUDGE_REQUEST_BYTES = 1_000_000
-MAX_COMPLETION_TOKENS = 4096
-PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v1"
-JUDGE_PROMPT_VERSION = "retrieval_nugget_judge_v1"
+MAX_COMPLETION_TOKENS = 8192
+PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v2"
+JUDGE_PROMPT_VERSION = "retrieval_nugget_judge_v2"
 EVALUATOR_SCHEMA_VERSION = "retrieval_nugget_coverage_v1"
 INPUT_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_input_v1"
 PLAN_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_plan_v1"
@@ -58,11 +58,23 @@ DEFAULT_PLANNER_MODEL = "openai/gpt-5"
 DEFAULT_JUDGE_MODEL = "openai/gpt-5"
 PLANNER_SYSTEM_PROMPT = (
     "Create a complete, minimal obligation plan from the supplied narrative. "
-    "Return only the requested JSON object."
+    "Return only the requested JSON object. Every explicit request in the "
+    "narrative must be represented. For each required_explicit obligation, "
+    "narrative_spans must contain one or more exact, non-empty substrings copied "
+    "verbatim from the narrative. For each supplemental_inferred obligation, "
+    "narrative_spans must be an empty list. Every unmapped_narrative_spans entry "
+    "must also be an exact narrative substring. Keep the total number of "
+    "obligations across all facets at 40 or fewer."
 )
 JUDGE_SYSTEM_PROMPT = (
-    "Judge each frozen obligation against the supplied retrieval nuggets. "
-    "Use only the supplied text and return only the requested JSON object."
+    "Judge each frozen obligation against the supplied retrieval nuggets. Use "
+    "only the supplied text and return only the requested JSON object. Return "
+    "exactly one judgment for every obligation ID, with no duplicates or "
+    "missing rows. supporting_nugget_aliases may contain only the supplied "
+    "aliases and must not repeat an alias. A full or partial label requires at "
+    "least one supporting alias; an unsupported label requires an empty alias "
+    "list. missing_elements must be empty for full and non-empty for partial or "
+    "unsupported. Labels are exactly full, partial, or unsupported."
 )
 MAX_TEXT_CHARACTERS = 300
 _PLAN_ROOT_KEYS = frozenset({"schema_version", "facets", "unmapped_narrative_spans"})
@@ -268,10 +280,12 @@ class BoundCoverageInput:
             raise NuggetCoverageError("input", "handoff manifest identity is invalid")
         if not isinstance(self.topic_id, str) or not self.topic_id:
             raise NuggetCoverageError("input", "topic identity is invalid")
-        _text(self.narrative, "narrative", None, stage="input")
+        _sealed_text(self.narrative, "narrative", stage="input")
         if not isinstance(self.narrative_sha256, str) or len(self.narrative_sha256) != 64:
             raise NuggetCoverageError("input", "narrative identity is invalid")
-        rows = _validate_nuggets(self.nuggets, stage="input")
+        rows = _validate_nuggets(
+            self.nuggets, stage="input", allow_sealed_text=True
+        )
         if tuple(rows) != self.nuggets:
             object.__setattr__(self, "nuggets", rows)
         expected_nugget_hashes = tuple(
@@ -324,8 +338,7 @@ class CoverageRunConfig:
             object.__setattr__(self, "work_dir", Path(self.work_dir))
         if self.mode not in {"create", "resume"}:
             raise NuggetCoverageError("config", "mode must be create or resume")
-        if not isinstance(self.topic_id, str) or not self.topic_id:
-            raise NuggetCoverageError("config", "topic is required")
+        _validate_topic_id(self.topic_id, stage="config")
         _text(self.planner_model, "planner model", None, stage="config")
         _text(self.judge_model, "judge model", None, stage="config")
 
@@ -475,7 +488,7 @@ class OpenRouterCoverageBackend:
                     raise RuntimeError("OpenRouter completion reflected a credential")
             except RuntimeError:
                 raise
-            except Exception as exc:
+            except Exception:
                 # Semantic response failures are deliberately never retried.
                 raise RuntimeError("OpenRouter response failed validation") from None
             metadata = {
@@ -504,7 +517,7 @@ def render_planner_request(
 ) -> CoverageModelRequest:
     """Render the narrative-only planner request deterministically."""
 
-    narrative = _text(narrative, "narrative", None, stage="planner")
+    narrative = _sealed_text(narrative, "narrative", stage="planner")
     if isinstance(model, EvaluatorIdentity):
         model = model.planner_model
     model = _text(model, "planner model", None, stage="planner")
@@ -531,12 +544,12 @@ def render_judge_request(
 ) -> CoverageModelRequest:
     """Render the frozen-plan and ordered local-alias judge request."""
 
-    narrative = _text(narrative, "narrative", None, stage="judge")
+    narrative = _sealed_text(narrative, "narrative", stage="judge")
     if not isinstance(plan, FrozenPlan):
         _error("judge", "plan must be a FrozenPlan")
     if plan.narrative != narrative:
         _error("judge", "plan narrative does not match the judge narrative")
-    nugget_rows = _validate_nuggets(nuggets, stage="judge")
+    nugget_rows = _validate_nuggets(nuggets, stage="judge", allow_sealed_text=True)
     if isinstance(model, EvaluatorIdentity):
         model = model.judge_model
     model = _text(model, "judge model", None, stage="judge")
@@ -574,8 +587,8 @@ def evaluate_nugget_coverage(
 ) -> EvaluationResult:
     """Run one planner call followed by one judge call and score the result."""
 
-    narrative = _text(narrative, "narrative", None, stage="input")
-    nugget_rows = _validate_nuggets(nuggets, stage="input")
+    narrative = _sealed_text(narrative, "narrative", stage="input")
+    nugget_rows = _validate_nuggets(nuggets, stage="input", allow_sealed_text=True)
     if not isinstance(identity, EvaluatorIdentity):
         _error("input", "identity must be an EvaluatorIdentity")
     if not callable(getattr(planner, "complete", None)):
@@ -617,7 +630,7 @@ def coverage_input_from_handoff(path: Path, topic_id: str) -> BoundCoverageInput
     try:
         handoff = load_generation_handoff(Path(path))
         topics = select_generation_topics(handoff, [topic_id])
-    except HandoffIntegrityError as exc:
+    except HandoffIntegrityError:
         raise NuggetCoverageError("handoff", "sealed generation handoff was rejected") from None
     except (OSError, TypeError, ValueError):
         raise NuggetCoverageError("handoff", "sealed generation handoff was rejected") from None
@@ -679,6 +692,7 @@ def run_coverage_evaluation(
     else:
         if not work_dir.is_dir():
             raise NuggetCoverageError("cache", "cache-only is missing planner and judge stages")
+        _validate_artifact_order(work_dir)
         input_path = work_dir / "input.json"
         if not input_path.exists():
             raise NuggetCoverageError("cache", "cache-only is missing planner and judge stages")
@@ -731,7 +745,7 @@ def run_coverage_evaluation(
             existing_hashes,
             planner_metadata,
             judge_metadata,
-            _manifest_call_count(plan, judgments),
+            _completed_stage_count(plan, judgments),
         )
 
     backend: CoverageModelBackend | None = None
@@ -739,10 +753,6 @@ def run_coverage_evaluation(
     def get_backend() -> CoverageModelBackend:
         nonlocal backend
         if backend is None:
-            if planner is not None and judge is not None and planner is not judge:
-                # The caller supplied separate stage backends; this helper is used only
-                # when one of them is selected below.
-                raise AssertionError("separate backends are handled per stage")
             if not config.allow_hosted_calls:
                 missing = []
                 if plan is None:
@@ -810,7 +820,7 @@ def run_coverage_evaluation(
         artifact_hashes,
         planner_metadata,
         judge_metadata,
-        _manifest_call_count(plan, judgments),
+        _completed_stage_count(plan, judgments),
     )
     manifest_path = work_dir / "manifest.json"
     if existing_manifest is not None:
@@ -821,7 +831,7 @@ def run_coverage_evaluation(
             artifact_hashes,
             planner_metadata,
             judge_metadata,
-            _manifest_call_count(plan, judgments),
+            _completed_stage_count(plan, judgments),
         )
     else:
         _publish_once(manifest_path, manifest_payload)
@@ -964,7 +974,7 @@ def _manifest_payload(
     artifact_hashes: Mapping[str, str],
     planner_metadata: Mapping[str, object],
     judge_metadata: Mapping[str, object],
-    hosted_calls: int,
+    completed_stages: int,
 ) -> dict[str, object]:
     return {
         "schema_version": MANIFEST_ARTIFACT_SCHEMA_VERSION,
@@ -975,7 +985,7 @@ def _manifest_payload(
         "narrative_sha256": bound.narrative_sha256,
         "nugget_text_sha256s": list(bound.nugget_text_sha256s),
         "artifact_hashes": dict(artifact_hashes),
-        "hosted_calls": hosted_calls,
+        "completed_stages": completed_stages,
         "provider_metadata": {
             "planner": _safe_provider_metadata(planner_metadata),
             "judge": _safe_provider_metadata(judge_metadata),
@@ -983,7 +993,7 @@ def _manifest_payload(
     }
 
 
-def _manifest_call_count(
+def _completed_stage_count(
     plan: FrozenPlan | None, judgments: Sequence[CoverageJudgment] | None
 ) -> int:
     """Return deterministic completed-stage provenance for the sealed manifest."""
@@ -1143,6 +1153,18 @@ def _load_judgments_artifact(
     if not isinstance(rows, list):
         raise NuggetCoverageError("persistence", "judge artifact judgments are invalid")
     nugget_aliases = {nugget.nugget_id: f"n{index:03d}" for index, nugget in enumerate(nuggets, start=1)}
+    known_nugget_ids = set(nugget_aliases)
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise NuggetCoverageError("persistence", "judge artifact judgments are invalid")
+        persisted_ids = row.get("supporting_nugget_ids")
+        if not isinstance(persisted_ids, list) or any(
+            not isinstance(nugget_id, str) or nugget_id not in known_nugget_ids
+            for nugget_id in persisted_ids
+        ):
+            raise NuggetCoverageError(
+                "persistence", "judge artifact contains an unknown nugget ID"
+            )
     canonical_rows = {
         "schema_version": JUDGMENT_SCHEMA_VERSION,
         "judgments": [
@@ -1160,7 +1182,12 @@ def _load_judgments_artifact(
         ],
     }
     # Validate the persisted canonical IDs through the same semantic validator.
-    parsed = validate_judgments(plan, nuggets, canonical_rows)
+    try:
+        parsed = validate_judgments(plan, nuggets, canonical_rows)
+    except NuggetCoverageError:
+        raise NuggetCoverageError(
+            "persistence", "judge artifact judgments are invalid"
+        ) from None
     expected_rows = [
         {
             "obligation_id": row.obligation_id,
@@ -1186,7 +1213,7 @@ def _validate_manifest(
     artifact_hashes: Mapping[str, str],
     planner_metadata: Mapping[str, object],
     judge_metadata: Mapping[str, object],
-    hosted_calls: int,
+    completed_stages: int,
 ) -> None:
     expected = _manifest_payload(
         bound,
@@ -1194,7 +1221,7 @@ def _validate_manifest(
         artifact_hashes,
         planner_metadata,
         judge_metadata,
-        hosted_calls,
+        completed_stages,
     )
     if dict(payload) != expected:
         raise NuggetCoverageError("persistence", "manifest identity or artifact hash does not match")
@@ -1204,23 +1231,49 @@ def _work_has_artifacts(path: Path) -> bool:
     return path.exists() and (not path.is_dir() or any(path.iterdir()))
 
 
+def _validate_artifact_order(path: Path) -> None:
+    """Reject impossible persisted stage order before loading or backend calls."""
+
+    artifact_paths = [
+        path / name
+        for name in ("input.json", "plan.json", "judgments.json", "report.json", "manifest.json")
+    ]
+    missing_predecessor = False
+    for artifact_path in artifact_paths:
+        if artifact_path.exists():
+            if missing_predecessor:
+                raise NuggetCoverageError(
+                    "persistence", "persisted artifacts are out of stage order"
+                )
+        else:
+            missing_predecessor = True
+
+
 def _provider_request_bytes(request: CoverageModelRequest) -> bytes:
-    return _canonical_json(
-        {
-            "model": request.model,
-            "messages": [dict(message) for message in request.messages],
-            "max_tokens": request.max_tokens,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": request.response_schema_name,
-                    "strict": True,
-                    "schema": request.response_schema,
-                },
+    return _canonical_json(_request_payload(request), stage=request.stage)
+
+
+def _request_payload(request: CoverageModelRequest) -> dict[str, object]:
+    """Build the deterministic, privacy-constrained OpenRouter request body."""
+
+    return {
+        "model": request.model,
+        "messages": [dict(message) for message in request.messages],
+        "max_tokens": request.max_tokens,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": request.response_schema_name,
+                "strict": True,
+                "schema": request.response_schema,
             },
         },
-        stage=request.stage,
-    )
+        "provider": {"require_parameters": True, "data_collection": "deny"},
+        "reasoning": {"enabled": False},
+        "temperature": 0,
+        "seed": 0,
+        "stream": False,
+    }
 
 
 def _contains_credential(value: object, credential: str) -> bool:
@@ -1245,7 +1298,7 @@ def _is_transient_transport_error(error: BaseException) -> bool:
 def validate_and_freeze_plan(narrative: str, payload: object) -> FrozenPlan:
     """Validate one planner payload and return a deterministic immutable plan."""
 
-    narrative = _text(narrative, "narrative", None, stage="planner")
+    narrative = _sealed_text(narrative, "narrative", stage="planner")
     root = _mapping(payload, "planner payload", stage="planner")
     _require_keys(root, _PLAN_ROOT_KEYS, "planner payload", stage="planner")
     if root["schema_version"] != PLAN_SCHEMA_VERSION:
@@ -1412,7 +1465,7 @@ def validate_judgments(
 
     if not isinstance(plan, FrozenPlan):
         _error("judge", "plan must be a FrozenPlan")
-    nugget_rows = _validate_nuggets(nuggets, stage="judge")
+    nugget_rows = _validate_nuggets(nuggets, stage="judge", allow_sealed_text=True)
     root = _mapping(payload, "judge payload", stage="judge")
     _require_keys(root, _JUDGMENT_ROOT_KEYS, "judge payload", stage="judge")
     if root["schema_version"] != JUDGMENT_SCHEMA_VERSION:
@@ -1491,7 +1544,7 @@ def score_coverage(
         _error("scoring", "plan must be a FrozenPlan")
     if not isinstance(identity, EvaluatorIdentity):
         _error("scoring", "identity must be an EvaluatorIdentity")
-    nugget_rows = _validate_nuggets(nuggets, stage="scoring")
+    nugget_rows = _validate_nuggets(nuggets, stage="scoring", allow_sealed_text=True)
     if not isinstance(judgments, Sequence) or isinstance(judgments, (str, bytes)):
         _error("scoring", "judgments must be a sequence")
     expected_obligations = plan.obligations
@@ -1552,6 +1605,8 @@ def score_coverage(
             if obligation.kind == "supplemental_inferred"
         )
 
+    if not required_values:
+        _error("scoring", "plan must contain at least one required obligation")
     required_coverage = sum(required_values) / len(required_values)
     required_count = sum(
         obligation.kind == "required_explicit" for obligation in expected_obligations
@@ -1615,6 +1670,10 @@ def _messages(
 def _planner_response_schema() -> dict[str, object]:
     obligation = {
         "type": "object",
+        "description": (
+            "A required_explicit obligation needs exact narrative substrings; a "
+            "supplemental_inferred obligation must have no narrative spans."
+        ),
         "additionalProperties": False,
         "required": ["requirement", "support_test", "kind", "narrative_spans"],
         "properties": {
@@ -1623,10 +1682,15 @@ def _planner_response_schema() -> dict[str, object]:
             "kind": {
                 "type": "string",
                 "enum": ["required_explicit", "supplemental_inferred"],
+                "description": (
+                    "required_explicit has one or more exact narrative substrings; "
+                    "supplemental_inferred has an empty narrative_spans list."
+                ),
             },
             "narrative_spans": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
+                "description": "For required_explicit, copy exact non-empty narrative substrings; for supplemental_inferred, use an empty list.",
             },
         },
     }
@@ -1646,6 +1710,10 @@ def _planner_response_schema() -> dict[str, object]:
     }
     return {
         "type": "object",
+        "description": (
+            "Every span must be an exact narrative substring, and the total "
+            "number of obligations across all facets must be at most 40."
+        ),
         "additionalProperties": False,
         "required": ["schema_version", "facets", "unmapped_narrative_spans"],
         "properties": {
@@ -1659,6 +1727,7 @@ def _planner_response_schema() -> dict[str, object]:
             "unmapped_narrative_spans": {
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
+                "description": "Each entry must be an exact substring of the supplied narrative.",
             },
         },
     }
@@ -1669,6 +1738,10 @@ def _judge_response_schema(plan: FrozenPlan, nugget_count: int) -> dict[str, obj
     aliases = [f"n{index:03d}" for index in range(1, nugget_count + 1)]
     judgment = {
         "type": "object",
+        "description": (
+            "Return exactly one row per obligation. Full and partial require a "
+            "supporting alias; unsupported requires an empty alias list."
+        ),
         "additionalProperties": False,
         "required": [
             "obligation_id",
@@ -1681,21 +1754,25 @@ def _judge_response_schema(plan: FrozenPlan, nugget_count: int) -> dict[str, obj
             "label": {
                 "type": "string",
                 "enum": ["full", "partial", "unsupported"],
+                "description": "full, partial, and unsupported are the only labels; unsupported has no supporting aliases.",
             },
             "supporting_nugget_aliases": {
                 "type": "array",
                 "minItems": 0,
                 "maxItems": nugget_count,
                 "items": {"type": "string", "enum": aliases},
+                "description": "Use only supplied aliases, without duplicates; full and partial require at least one.",
             },
             "missing_elements": {
                 "type": "string",
                 "maxLength": MAX_TEXT_CHARACTERS,
+                "description": "Use an empty string for full and non-empty text for partial or unsupported.",
             },
         },
     }
     return {
         "type": "object",
+        "description": "Return exactly one judgment for every frozen obligation ID, with no missing or duplicate rows.",
         "additionalProperties": False,
         "required": ["schema_version", "judgments"],
         "properties": {
@@ -1717,20 +1794,7 @@ def _serialized_provider_request(
 ) -> bytes:
     if not isinstance(request, CoverageModelRequest):
         _error(stage, "request must be a CoverageModelRequest")
-    body = {
-        "model": request.model,
-        "messages": [dict(message) for message in request.messages],
-        "max_tokens": request.max_tokens,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": request.response_schema_name,
-                "strict": True,
-                "schema": request.response_schema,
-            },
-        },
-    }
-    return _canonical_json(body, stage=stage)
+    return _canonical_json(_request_payload(request), stage=stage)
 
 
 def _complete(
@@ -1766,7 +1830,7 @@ def _safe_metadata(reply: BackendReply, *, stage: str) -> Mapping[str, object]:
         isinstance(key, str) for key in reply.metadata
     ):
         _error(stage, "backend reply metadata must be a string-keyed object")
-    return MappingProxyType(dict(reply.metadata))
+    return MappingProxyType(_safe_provider_metadata(reply.metadata))
 
 
 def _error(stage: str, reason: str) -> None:
@@ -1818,6 +1882,30 @@ def _text(
     return value
 
 
+def _sealed_text(value: object, name: str, *, stage: str) -> str:
+    """Validate authenticated source text without changing its sealed bytes."""
+
+    if not isinstance(value, str) or not value:
+        _error(stage, f"{name} must be non-empty text")
+    for character in value:
+        category = unicodedata.category(character)
+        if (category == "Cc" and character not in "\n\r\t") or category == "Cf":
+            _error(stage, f"{name} contains unsafe control characters")
+    return value
+
+
+def _validate_topic_id(value: object, *, stage: str) -> str:
+    topic_id = _text(value, "topic", None, stage=stage)
+    if (
+        topic_id in {".", ".."}
+        or "/" in topic_id
+        or "\\" in topic_id
+        or Path(topic_id).is_absolute()
+    ):
+        _error(stage, "topic is unsafe for a work-directory path")
+    return topic_id
+
+
 def _canonical_json(value: object, *, stage: str) -> bytes:
     try:
         return json.dumps(
@@ -1832,7 +1920,7 @@ def _canonical_json(value: object, *, stage: str) -> bytes:
 
 
 def _validate_nuggets(
-    nuggets: Sequence[CoverageNugget], *, stage: str
+    nuggets: Sequence[CoverageNugget], *, stage: str, allow_sealed_text: bool = False
 ) -> tuple[CoverageNugget, ...]:
     if not isinstance(nuggets, Sequence) or isinstance(nuggets, (str, bytes)):
         _error(stage, "nuggets must be a sequence")
@@ -1842,7 +1930,11 @@ def _validate_nuggets(
         if not isinstance(nugget, CoverageNugget):
             _error(stage, f"nugget {index} must be a CoverageNugget")
         nugget_id = _text(nugget.nugget_id, f"nugget {index} ID", None, stage=stage)
-        text = _text(nugget.text, f"nugget {index} text", None, stage=stage)
+        text = (
+            _sealed_text(nugget.text, f"nugget {index} text", stage=stage)
+            if allow_sealed_text
+            else _text(nugget.text, f"nugget {index} text", None, stage=stage)
+        )
         if nugget_id in seen_ids:
             _error(stage, f"nugget {index} has a duplicate nugget ID")
         seen_ids.add(nugget_id)
@@ -1873,15 +1965,24 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def _safe_cli_error(error: Exception) -> dict[str, object]:
     if isinstance(error, NuggetCoverageError):
         stage = error.stage
-        reason = {
-            "handoff": "sealed handoff rejected",
-            "input": "coverage input rejected",
-            "planner": "planner stage failed",
-            "judge": "judge stage failed",
-            "cache": "required cache stage is missing",
-            "persistence": "private artifact state is invalid",
-            "config": "run configuration is invalid",
-        }.get(stage, "coverage evaluation failed")
+        if stage == "cache":
+            if "planner and judge" in error.reason:
+                reason = "missing planner and judge stages"
+            elif "planner" in error.reason:
+                reason = "missing planner stage"
+            elif "judge" in error.reason:
+                reason = "missing judge stage"
+            else:
+                reason = "required cache stage is missing"
+        else:
+            reason = {
+                "handoff": "sealed handoff rejected",
+                "input": "coverage input rejected",
+                "planner": "planner stage failed",
+                "judge": "judge stage failed",
+                "persistence": "private artifact state is invalid",
+                "config": "run configuration is invalid",
+            }.get(stage, "coverage evaluation failed")
     else:
         stage = "run"
         reason = "coverage evaluation failed"

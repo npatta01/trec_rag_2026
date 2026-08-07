@@ -397,6 +397,25 @@ def test_score_coverage_reports_null_when_no_supplemental_obligations() -> None:
     assert report.supplemental_coverage is None
 
 
+def test_score_coverage_rejects_a_hand_built_plan_with_no_required_obligations() -> None:
+    valid = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    supplemental = replace(
+        valid.facets[0].obligations[0],
+        kind="supplemental_inferred",
+        narrative_spans=(),
+    )
+    hand_built = replace(
+        valid,
+        facets=(replace(valid.facets[0], obligations=(supplemental,)),),
+    )
+    judgments = validate_judgments(hand_built, _nuggets(), _judge_payload(hand_built))
+
+    with pytest.raises(NuggetCoverageError, match="required") as caught:
+        score_coverage(hand_built, _nuggets(), judgments, _identity())
+
+    assert caught.value.stage == "scoring"
+
+
 class RecordingBackend:
     def __init__(self, replies: list[BackendReply]) -> None:
         self.replies = list(replies)
@@ -466,6 +485,32 @@ def test_planner_request_isolated_and_schema_is_strict() -> None:
     ]
 
 
+def test_planner_and_judge_contracts_describe_all_local_invariants() -> None:
+    planner_request = render_planner_request(NARRATIVE, _identity().planner_model)
+    planner_text = json.dumps(planner_request.messages, ensure_ascii=False).casefold()
+    planner_schema = planner_request.response_schema
+    planner_obligation = planner_schema["properties"]["facets"]["items"]["properties"]["obligations"]["items"]
+
+    assert "exact" in planner_text and "substring" in planner_text
+    assert "required_explicit" in planner_text and "supplemental_inferred" in planner_text
+    assert "40" in planner_text
+    assert "empty" in planner_text
+    assert "exact" in str(planner_schema).casefold()
+    assert "40" in str(planner_schema)
+    assert "supplemental" in str(planner_obligation).casefold()
+
+    plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    judge_request = render_judge_request(NARRATIVE, plan, _nuggets(), _identity().judge_model)
+    judge_text = json.dumps(judge_request.messages, ensure_ascii=False).casefold()
+    judge_schema = judge_request.response_schema
+
+    for term in ("full", "partial", "unsupported", "supporting_nugget_aliases", "missing_elements"):
+        assert term in judge_text
+        assert term in str(judge_schema).casefold()
+    assert "empty" in judge_text
+    assert "exactly one" in judge_text
+
+
 def test_judge_request_contains_only_aliases_and_frozen_plan() -> None:
     plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
     request = render_judge_request(NARRATIVE, plan, _nuggets(), _identity().judge_model)
@@ -521,6 +566,39 @@ def test_evaluation_makes_exactly_two_calls_and_returns_safe_metadata() -> None:
     assert result[3].planner_metadata == {"provider": "planner"}
     assert result[3].judge_metadata == {"provider": "judge"}
     assert not hasattr(result[3], "planner_response_body")
+
+
+def test_evaluation_metadata_uses_the_persisted_provider_allowlist() -> None:
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    metadata = {
+        "provider": "planner",
+        "requested_model": "planner-model",
+        "secret": "do-not-persist",
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3,
+            "secret": "do-not-persist",
+        },
+    }
+    planner = RecordingBackend([_reply(VALID_PLAN, metadata=metadata)])
+    judge = RecordingBackend([_reply(_judge_payload(frozen), metadata=metadata)])
+
+    result = evaluate_nugget_coverage(
+        narrative=NARRATIVE,
+        nuggets=_nuggets(),
+        planner=planner,
+        judge=judge,
+        identity=_identity(),
+    )
+
+    expected = {
+        "provider": "planner",
+        "requested_model": "planner-model",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+    }
+    assert result[3].planner_metadata == expected
+    assert result[3].judge_metadata == expected
 
 
 def test_malformed_planner_prevents_judge_without_repair_call() -> None:
@@ -595,7 +673,12 @@ def test_empty_nuggets_are_rejected_before_either_backend_call() -> None:
     assert judge.requests == []
 
 
-def _coverage_handoff(*, empty_claim_hints: bool = False) -> GenerationHandoff:
+def _coverage_handoff(
+    *,
+    empty_claim_hints: bool = False,
+    narrative: str = NARRATIVE,
+    claim_texts: tuple[str, str] | None = None,
+) -> GenerationHandoff:
     evidence_text = "A selected passage supporting the first canonical claim."
     evidence = EvidencePassage(
         evidence_id="ev-1",
@@ -628,25 +711,30 @@ def _coverage_handoff(*, empty_claim_hints: bool = False) -> GenerationHandoff:
             ),
         ),
     )
+    if claim_texts is None:
+        claim_texts = (
+            "The first canonical retrieval claim.",
+            "The second canonical retrieval claim.",
+        )
     claims = () if empty_claim_hints else (
         ClaimHint(
             claim_id="claim-z",
             group_id="group-1",
             kind="canonical",
-            text="The first canonical retrieval claim.",
+            text=claim_texts[0],
             evidence_ids=("ev-1",),
         ),
         ClaimHint(
             claim_id="claim-a",
             group_id="group-1",
             kind="canonical",
-            text="The second canonical retrieval claim.",
+            text=claim_texts[1],
             evidence_ids=("ev-1",),
         ),
     )
     topic = GenerationTopic(
         topic_id="topic-coverage",
-        narrative=NARRATIVE,
+        narrative=narrative,
         groups=(group,),
         evidence=(evidence,),
         claim_hints=claims,
@@ -701,6 +789,66 @@ def test_coverage_input_rejects_altered_manifest_bytes(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         coverage_input_from_handoff(path, "topic-coverage")
+
+
+def test_coverage_input_preserves_authenticated_surrounding_whitespace_and_multiline_text(
+    tmp_path: Path,
+) -> None:
+    narrative = "\n  " + NARRATIVE + "\n"
+    claim_texts = ("\n first claim\n", "  second claim\n")
+    path = tmp_path / "whitespace" / "generation_handoff_manifest.json"
+    write_generation_handoff(
+        path,
+        _coverage_handoff(narrative=narrative, claim_texts=claim_texts),
+    )
+
+    bound = coverage_input_from_handoff(path, "topic-coverage")
+
+    assert bound.narrative == narrative
+    assert tuple(nugget.text for nugget in bound.nuggets) == claim_texts
+    assert bound.narrative_sha256 == hashlib.sha256(narrative.encode()).hexdigest()
+    assert bound.nugget_text_sha256s == tuple(
+        hashlib.sha256(text.encode()).hexdigest() for text in claim_texts
+    )
+
+
+@pytest.mark.parametrize("field", ["narrative", "claim"])
+def test_coverage_input_rejects_control_text_from_authenticated_handoff(
+    tmp_path: Path, field: str
+) -> None:
+    narrative = NARRATIVE + "\x00" if field == "narrative" else NARRATIVE
+    claim_texts = ("claim\x00", "second claim") if field == "claim" else None
+    path = tmp_path / field / "generation_handoff_manifest.json"
+    write_generation_handoff(
+        path,
+        _coverage_handoff(narrative=narrative, claim_texts=claim_texts),
+    )
+
+    with pytest.raises(NuggetCoverageError, match="control"):
+        coverage_input_from_handoff(path, "topic-coverage")
+
+
+def test_run_accepts_whitespace_preserving_source_text_from_a_sealed_handoff(
+    tmp_path: Path,
+) -> None:
+    handoff_path = tmp_path / "generation_handoff_manifest.json"
+    write_generation_handoff(
+        handoff_path,
+        _coverage_handoff(
+            narrative="\n  " + NARRATIVE + "\n",
+            claim_texts=("\n first claim\n", "  second claim\n"),
+        ),
+    )
+    work_dir = tmp_path / "whitespace-run"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+
+    receipt = run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    assert receipt.required_coverage == pytest.approx(1.0)
 
 
 def _coverage_config(
@@ -908,6 +1056,12 @@ def test_openrouter_backend_uses_strict_schema_and_redacts_credentials() -> None
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["strict"] is True
     assert body["response_format"]["json_schema"]["name"] == request.response_schema_name
+    assert body["provider"] == {"require_parameters": True, "data_collection": "deny"}
+    assert body["reasoning"] == {"enabled": False}
+    assert body["temperature"] == 0
+    assert body["seed"] == 0
+    assert body["stream"] is False
+    assert body["max_tokens"] == 8192
     assert reply.metadata["provider"] == "provider-name"
     assert b"fake-secret" not in reply.response_body
 
@@ -955,6 +1109,41 @@ def test_cli_cache_only_emits_one_safe_json_error(tmp_path: Path, capsys: pytest
     assert "OPENROUTER_API_KEY" not in captured.out
     payload = json.loads(captured.out)
     assert payload["error"]["stage"] == "cache"
+    assert payload["error"]["reason"] == "missing planner and judge stages"
+
+
+def test_cli_cache_errors_name_exact_missing_stage_on_partial_resume(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "partial-cli"
+
+    class FailingJudge:
+        def complete(self, request: CoverageModelRequest) -> BackendReply:
+            raise RuntimeError("simulated interruption")
+
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir),
+            planner=RecordingBackend([_reply(VALID_PLAN)]),
+            judge=FailingJudge(),
+        )
+
+    code = main([
+        "--handoff-manifest", str(handoff_path),
+        "--topic", "topic-coverage",
+        "--work-dir", str(work_dir),
+        "--planner-model", "planner-model",
+        "--judge-model", "judge-model",
+        "--mode", "resume",
+    ])
+    captured = capsys.readouterr()
+
+    assert code != 0
+    payload = json.loads(captured.out)
+    assert payload["error"]["stage"] == "cache"
+    assert payload["error"]["reason"] == "missing judge stage"
+    assert "planner" not in payload["error"]["reason"]
 
 
 def test_manifest_rejects_unknown_fields_and_changed_provider_or_call_history(
@@ -971,7 +1160,7 @@ def test_manifest_rejects_unknown_fields_and_changed_provider_or_call_history(
 
     manifest_path = work_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["hosted_calls"] = 99
+    manifest["completed_stages"] = 99
     manifest["provider_metadata"]["planner"]["provider"] = "tampered-provider"
     manifest["unexpected"] = True
     manifest_path.write_bytes(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode())
@@ -1005,7 +1194,64 @@ def test_interrupted_then_resumed_stages_seal_deterministic_call_count(tmp_path:
         judge=RecordingBackend([_reply(_judge_payload(frozen))]),
     )
     manifest = json.loads((work_dir / "manifest.json").read_text())
-    assert manifest["hosted_calls"] == 2
+    assert manifest["completed_stages"] == 2
+    assert "hosted_calls" not in manifest
+
+
+def test_resume_classifies_unknown_persisted_nugget_ids_as_persistence_errors(
+    tmp_path: Path,
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "unknown-nugget"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    judgments_path = work_dir / "judgments.json"
+    payload = json.loads(judgments_path.read_text())
+    payload["judgments"][0]["supporting_nugget_ids"] = ["unknown-nugget-id"]
+    judgments_path.write_bytes(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+    with pytest.raises(NuggetCoverageError) as caught:
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=RecordingBackend([]),
+            judge=RecordingBackend([]),
+        )
+
+    assert caught.value.stage == "persistence"
+
+
+def test_resume_rejects_orphan_report_before_any_backend_call(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "orphan-report"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+    (work_dir / "plan.json").unlink()
+    (work_dir / "judgments.json").unlink()
+    (work_dir / "manifest.json").unlink()
+
+    planner = RecordingBackend([])
+    judge = RecordingBackend([])
+    with pytest.raises(NuggetCoverageError) as caught:
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=planner,
+            judge=judge,
+        )
+
+    assert caught.value.stage == "persistence"
+    assert planner.requests == []
+    assert judge.requests == []
 
 
 def test_openrouter_does_not_retry_permanent_transport_errors() -> None:
@@ -1030,6 +1276,17 @@ def test_cli_argument_errors_are_safe_json_and_do_not_echo_credentials(
     assert "fake-secret" not in captured.out
     payload = json.loads(captured.out)
     assert payload["error"]["stage"] == "config"
+
+
+@pytest.mark.parametrize("topic_id", ["../escape", "nested/topic", "/absolute", ".."])
+def test_topic_id_rejects_path_unsafe_work_directory_names(
+    tmp_path: Path, topic_id: str
+) -> None:
+    with pytest.raises(NuggetCoverageError, match="topic"):
+        CoverageRunConfig(
+            handoff_manifest_path=tmp_path / "handoff.json",
+            topic_id=topic_id,
+        )
 
 
 def test_empty_narrative_is_rejected_before_model_calls(
