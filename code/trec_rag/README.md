@@ -19,6 +19,51 @@ boundaries:
   including exact string contents. Native JSONL remains authoritative for
   source bytes such as whitespace and object-key order.
 
+## Retrieval nugget coverage HTML reports
+
+Use the year-neutral report route to view, render, browse, summarize, or
+inspect completed retrieval nugget coverage results. It makes zero hosted
+calls and consumes only an authenticated handoff manifest plus completed
+coverage bundles:
+
+```bash
+.venv/bin/python -m trec_rag.retrieval_nugget_coverage_report \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --coverage-root COVERAGE_ROOT \
+  --output REPORT_HTML \
+  --topic TOPIC_ID
+```
+
+Inputs are the handoff manifest, coverage root, local `.html` output path, and
+optional repeated topic selectors. Outputs are a standalone deterministic HTML
+file and a JSON receipt with the selected topic count, output SHA-256, and
+`hosted_calls: 0`. The loader validates authenticated handoff identities,
+complete coverage bundles, checkpoint hashes, topic selectors, and the output
+path before atomic publication. Subnarratives and BM25 queries are retrieval
+plan context; canonical nuggets are the judgment evidence representation.
+Selected passages, full-text archives, document identifiers, provider bodies,
+credentials, and private work directories are not report inputs.
+
+The HTML has overview search/filter/sort controls, topic detail navigation,
+back/forward history, disclosure panels, focus restoration, and print styles.
+Choose system, light, or dark theme from the page; the default follows the
+system preference. Keep the canonical report and source bundles private. A
+presentation copy requires a privacy review and the existing tailnet-only
+portal; do not expose a new listener or public endpoint.
+
+Validate the route with:
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_retrieval_nugget_coverage.py \
+  code/tests/test_retrieval_nugget_coverage_report.py \
+  code/tests/test_retrieval_nugget_coverage_skill.py -q
+
+.venv/bin/python -m compileall -q \
+  code/trec_rag/retrieval_nugget_coverage.py \
+  code/trec_rag/retrieval_nugget_coverage_report.py
+```
+
 ## Temporary organizer Pi reproduction harness
 
 `trec_rag.experiments.organizer_pi` is a temporary experimental reproduction

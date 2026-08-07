@@ -202,6 +202,36 @@ generation, passage egress, another topic, another model or provider, or any
 publication or serving action. Keep the handoff, private work directory, model
 responses, and report outside git and do not expose them through a listener.
 
+### Zero-hosted-call HTML report
+
+Use this existing-skill route when the user asks to view, render, browse,
+summarize, or inspect retrieval nugget coverage results. It performs no
+planner, judge, retrieval, reranking, generation, or backend calls. The
+report's allowlist is the authenticated handoff manifest, the completed
+coverage bundle root, repeated topic selectors, and a local `.html` output
+path. Subnarratives and BM25 queries are retrieval-plan context; canonical
+nuggets are the judgment evidence representation. Do not pass raw passages,
+document archives or identifiers, provider responses, credentials, private
+work directories, reference-label files, or other unlisted pipeline artifacts.
+
+Run the exact zero-hosted-call command below. Repeat `--topic TOPIC_ID` to
+preserve a deliberate topic order; omit it to render every topic in the
+authenticated handoff order:
+
+```bash
+.venv/bin/python -m trec_rag.retrieval_nugget_coverage_report \
+  --handoff-manifest HANDOFF_MANIFEST \
+  --coverage-root COVERAGE_ROOT \
+  --output REPORT_HTML \
+  --topic TOPIC_ID
+```
+
+Read the compact receipt and verify `status`, `selected_topic_count`,
+`output_sha256`, and `hosted_calls: 0`. Keep the source inputs and report
+private. Before serving a presentation copy, perform a privacy review and use
+the existing tailnet-only portal; never expose it through a new listener or a
+public endpoint.
+
 ## RAGDoll Evaluation
 
 Run this section only with explicit evaluation authorization.

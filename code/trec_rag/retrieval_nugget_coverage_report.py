@@ -7,14 +7,19 @@ does not inspect retrieval, passage, canonicalization, or provider artifacts.
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from html import escape
 import json
 import math
+import os
 from pathlib import Path
 import re
+import stat
+import sys
+import tempfile
 from types import MappingProxyType
 
 from trec_rag.competition_retrieval import load_validated_decomposition
@@ -974,6 +979,165 @@ code {{ color: var(--color-accent-strong); overflow-wrap: anywhere; }}
     return html.encode("utf-8")
 
 
+class _CliError(Exception):
+    """An expected command-line failure rendered as structured stderr JSON."""
+
+
+class _ParserExit(Exception):
+    def __init__(self, status: int) -> None:
+        super().__init__(status)
+        self.status = status
+
+
+class _SafeArgumentParser(argparse.ArgumentParser):
+    """Argparse parser that never raises a user-facing ``SystemExit`` error."""
+
+    def error(self, message: str) -> None:
+        raise _CliError(message)
+
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if message:
+            self._print_message(message, sys.stdout if status == 0 else sys.stderr)
+        raise _ParserExit(status)
+
+
+def _coverage_report_parser() -> argparse.ArgumentParser:
+    parser = _SafeArgumentParser(
+        description="Render a retrieval nugget coverage report without hosted calls."
+    )
+    parser.add_argument("--handoff-manifest", required=True, type=Path)
+    parser.add_argument("--coverage-root", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--topic", action="append", default=[], dest="topic_ids")
+    return parser
+
+
+def _validate_report_output_path(path: Path) -> Path:
+    """Validate a report destination before opening or replacing anything."""
+    path = Path(path)
+    if path.suffix != ".html":
+        raise ValueError("output path must have a .html suffix")
+    parent = path.parent
+    if not parent.exists() or not parent.is_dir():
+        raise ValueError("output parent directory is missing or not a directory")
+
+    # Check every lexical parent component before any resolve operation.  This
+    # keeps a symlinked directory from redirecting a temporary file or replace.
+    current = parent
+    while True:
+        if current.is_symlink():
+            raise ValueError(f"output parent is a symbolic link: {current}")
+        if not current.is_dir():
+            raise ValueError(f"output parent is not a directory: {current}")
+        if current == current.parent:
+            break
+        current = current.parent
+
+    if path.is_symlink():
+        raise ValueError(f"output path is a symbolic link: {path}")
+    if path.exists():
+        try:
+            mode = path.stat().st_mode
+        except OSError as exc:
+            raise ValueError(f"output path is unreadable: {path}") from exc
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"output path is not a regular file: {path}")
+        if mode & 0o222 == 0 or not os.access(path, os.W_OK):
+            raise OSError(f"output path is not writable: {path}")
+
+    try:
+        parent_mode = parent.stat().st_mode
+    except OSError as exc:
+        raise ValueError(f"output parent is unreadable: {parent}") from exc
+    if parent_mode & 0o222 == 0 or not os.access(parent, os.W_OK | os.X_OK):
+        raise OSError(f"output parent is not writable: {parent}")
+    return path
+
+
+def _fsync_parent_directory(parent: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(parent, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def publish_coverage_report(path: Path, body: bytes) -> Path:
+    """Atomically publish deterministic report bytes to a validated HTML path."""
+    if not isinstance(body, bytes):
+        raise TypeError("report body must be bytes")
+    path = _validate_report_output_path(Path(path))
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(body)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        _fsync_parent_directory(path.parent)
+        return path
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Render and atomically publish one zero-hosted-call coverage report."""
+    parser = _coverage_report_parser()
+    try:
+        arguments = parser.parse_args(sys.argv[1:] if argv is None else argv)
+        topic_ids = tuple(arguments.topic_ids)
+        if any(not isinstance(topic_id, str) or not topic_id.strip() for topic_id in topic_ids):
+            raise ValueError("topic selector cannot be empty")
+        if len(set(topic_ids)) != len(topic_ids):
+            raise ValueError("duplicate topic selector")
+        output_path = _validate_report_output_path(arguments.output)
+        data = load_coverage_report_data(
+            handoff_manifest_path=arguments.handoff_manifest,
+            coverage_root=arguments.coverage_root,
+            topic_ids=topic_ids,
+        )
+        body = render_coverage_report_html(data)
+        output = publish_coverage_report(output_path, body)
+        receipt = {
+            "status": "ok",
+            "selected_topic_count": len(data.topics),
+            "output": str(output),
+            "output_sha256": sha256(body).hexdigest(),
+            "hosted_calls": 0,
+        }
+        print(json.dumps(receipt, separators=(",", ":"), sort_keys=True))
+        return 0
+    except _ParserExit as exc:
+        return exc.status
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"status": "error", "error": str(exc)},
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
 __all__ = [
     "CoverageReportData",
     "CoverageReportTopic",
@@ -981,6 +1145,8 @@ __all__ = [
     "RetrievalPlanContext",
     "RetrievalSubnarrativeContext",
     "load_coverage_report_data",
+    "main",
+    "publish_coverage_report",
     "render_coverage_report_html",
     "summarize_coverage_topics",
 ]

@@ -26,6 +26,8 @@ from trec_rag.retrieval_nugget_coverage_report import (
     RetrievalPlanContext,
     RetrievalSubnarrativeContext,
     load_coverage_report_data,
+    main,
+    publish_coverage_report,
     summarize_coverage_topics,
 )
 from trec_rag.pipeline_models import jsonable
@@ -688,3 +690,180 @@ def test_renderer_focus_contract_moves_into_detail_and_restores_overview_target(
     assert 'showOverview("", true);' in source
     assert 'showOverview("That link was not a valid topic; showing the overview.", true);' in source
     assert 'showOverview("That topic was not found; showing the overview.", true);' in source
+
+
+def _patch_cli_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    body: bytes = b"<!doctype html>\nfixture\n",
+) -> list[tuple[Path, Path, tuple[str, ...]]]:
+    calls: list[tuple[Path, Path, tuple[str, ...]]] = []
+    data, _ = _html_fixture_data()
+
+    def load(*, handoff_manifest_path: Path, coverage_root: Path, topic_ids: tuple[str, ...]):
+        calls.append((handoff_manifest_path, coverage_root, tuple(topic_ids)))
+        return data
+
+    monkeypatch.setattr(report_module, "load_coverage_report_data", load)
+    monkeypatch.setattr(report_module, "render_coverage_report_html", lambda _data: body)
+    return calls
+
+
+def test_cli_publishes_renderer_bytes_and_reports_zero_hosted_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = _patch_cli_dependencies(monkeypatch, body=b"renderer bytes\n")
+    handoff = tmp_path / "handoff.json"
+    coverage_root = tmp_path / "coverage"
+    coverage_root.mkdir()
+    output = tmp_path / "report.html"
+
+    assert main(
+        [
+            "--handoff-manifest",
+            str(handoff),
+            "--coverage-root",
+            str(coverage_root),
+            "--output",
+            str(output),
+            "--topic",
+            "topic-safe",
+            "--topic",
+            "topic-other",
+        ]
+    ) == 0
+
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt == {
+        "status": "ok",
+        "selected_topic_count": 1,
+        "output": str(output),
+        "output_sha256": sha256(b"renderer bytes\n").hexdigest(),
+        "hosted_calls": 0,
+    }
+    assert output.read_bytes() == b"renderer bytes\n"
+    assert calls == [(handoff, coverage_root, ("topic-safe", "topic-other"))]
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (("--topic", "missing"), "unknown"),
+        (("--topic", "topic-safe", "--topic", "topic-safe"), "duplicate"),
+        (("--topic", ""), "empty"),
+        (("--topic", "incomplete"), "incomplete"),
+        (("--topic", "contradictory"), "contradictory"),
+    ],
+)
+def test_cli_rejects_invalid_topic_state_with_structured_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: tuple[str, ...],
+    message: str,
+) -> None:
+    def load(**kwargs: object) -> CoverageReportData:
+        raise ValueError(message)
+
+    monkeypatch.setattr(report_module, "load_coverage_report_data", load)
+    output = tmp_path / "report.html"
+    output.write_bytes(b"keep me")
+    result = main(
+        [
+            "--handoff-manifest",
+            str(tmp_path / "handoff.json"),
+            "--coverage-root",
+            str(tmp_path / "coverage"),
+            "--output",
+            str(output),
+            *argv,
+        ]
+    )
+
+    assert result != 0
+    assert output.read_bytes() == b"keep me"
+    stderr = capsys.readouterr().err
+    assert "traceback" not in stderr.casefold()
+    error = json.loads(stderr)
+    assert error["status"] == "error"
+    assert message in error["error"]
+
+
+@pytest.mark.parametrize(
+    "path_factory",
+    [
+        lambda tmp_path: tmp_path / "report.txt",
+        lambda tmp_path: _symlink_output(tmp_path),
+        lambda tmp_path: _symlink_parent_output(tmp_path),
+    ],
+)
+def test_publish_rejects_unsafe_output_without_changing_existing_file(
+    tmp_path: Path,
+    path_factory: object,
+) -> None:
+    output = path_factory(tmp_path)
+    existing = output.resolve() if output.is_symlink() else output
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    if not output.is_symlink():
+        output.write_bytes(b"keep me")
+    else:
+        existing.write_bytes(b"keep me")
+
+    with pytest.raises((ValueError, OSError)):
+        publish_coverage_report(output, b"new bytes")
+    assert existing.read_bytes() == b"keep me"
+
+
+def _symlink_output(tmp_path: Path) -> Path:
+    target = tmp_path / "target.html"
+    target.write_bytes(b"keep me")
+    output = tmp_path / "report.html"
+    output.symlink_to(target)
+    return output
+
+
+def _symlink_parent_output(tmp_path: Path) -> Path:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    output = tmp_path / "linked-parent" / "report.html"
+    output.parent.symlink_to(real_parent, target_is_directory=True)
+    (real_parent / "report.html").write_bytes(b"keep me")
+    return output
+
+
+def test_publish_atomically_replaces_regular_report_and_cleans_temp_files(tmp_path: Path) -> None:
+    output = tmp_path / "report.html"
+    output.write_bytes(b"old bytes")
+
+    assert publish_coverage_report(output, b"new bytes") == output
+    assert output.read_bytes() == b"new bytes"
+    assert list(tmp_path.iterdir()) == [output]
+
+
+def test_publish_rejects_unwritable_existing_report_without_changing_it(tmp_path: Path) -> None:
+    output = tmp_path / "report.html"
+    output.write_bytes(b"old bytes")
+    output.chmod(0o444)
+
+    with pytest.raises(OSError, match="not writable"):
+        publish_coverage_report(output, b"new bytes")
+    assert output.read_bytes() == b"old bytes"
+
+
+def test_publish_cleans_temporary_file_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "report.html"
+    output.write_bytes(b"old bytes")
+
+    def fail_replace(_source: str, _target: Path) -> None:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(report_module.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected"):
+        publish_coverage_report(output, b"new bytes")
+    assert output.read_bytes() == b"old bytes"
+    assert list(tmp_path.iterdir()) == [output]

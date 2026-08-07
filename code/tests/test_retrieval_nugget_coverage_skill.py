@@ -1,7 +1,11 @@
 """Contract tests for the retrieval-nugget-coverage skill route."""
 
 from pathlib import Path
+import json
 import re
+import shlex
+
+import trec_rag.retrieval_nugget_coverage_report as report_module
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
@@ -84,3 +88,66 @@ def test_explicit_nugget_request_authorizes_only_planner_and_judge_calls() -> No
     assert "inspect, explain, debug, or audit" in normalized
     assert "does not authorize hosted calls" in normalized
     assert "only these planner and judge calls" in normalized
+
+
+def test_html_report_route_executes_exact_zero_hosted_call_cli(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    section = _route_section()
+    match = re.search(
+        r"```bash\n(?P<command>\.venv/bin/python -m trec_rag\.retrieval_nugget_coverage_report .*?)\n```",
+        section,
+        flags=re.DOTALL,
+    )
+    assert match is not None, "the HTML report route command is missing"
+    command = " ".join(line.strip().rstrip("\\") for line in match.group("command").splitlines())
+    arguments = shlex.split(command)[3:]
+    handoff = tmp_path / "handoff.json"
+    coverage_root = tmp_path / "coverage"
+    output = tmp_path / "coverage.html"
+    coverage_root.mkdir()
+    substitutions = {
+        "HANDOFF_MANIFEST": str(handoff),
+        "COVERAGE_ROOT": str(coverage_root),
+        "REPORT_HTML": str(output),
+        "TOPIC_ID": "topic-safe",
+    }
+    arguments = [substitutions.get(argument, argument) for argument in arguments]
+    hosted_calls = []
+
+    monkeypatch.setattr(
+        report_module,
+        "load_coverage_report_data",
+        lambda **kwargs: _route_fixture_data(kwargs, hosted_calls),
+    )
+    monkeypatch.setattr(
+        report_module,
+        "render_coverage_report_html",
+        lambda _data: b"route html\n",
+    )
+
+    assert report_module.main(arguments) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["hosted_calls"] == 0
+    assert output.read_bytes() == b"route html\n"
+    assert hosted_calls == []
+
+
+def _route_fixture_data(kwargs: dict[str, object], hosted_calls: list[object]):
+    if kwargs["topic_ids"] != ("topic-safe",):
+        hosted_calls.append(kwargs["topic_ids"])
+    return report_module.CoverageReportData(
+        topics=(),
+        summary=report_module.CoverageRunSummary(
+            topic_count=0,
+            nugget_count=0,
+            required_obligation_count=0,
+            supplemental_obligation_count=0,
+            topic_macro_required_coverage=0.0,
+            topic_macro_strict_full_rate=0.0,
+            label_counts={},
+            perfect_required_topic_count=0,
+        ),
+    )
