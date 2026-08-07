@@ -743,6 +743,27 @@ def test_create_persists_private_canonical_artifacts_and_safe_receipt(tmp_path: 
     assert receipt.required_coverage == pytest.approx(1.0)
 
 
+def test_report_artifact_carries_v1_assumption_and_honest_limits(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "report-contract"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    report = json.loads((work_dir / "report.json").read_text())
+    assert "canonical retrieval nuggets are assumed to faithfully represent" in report["core_assumption"].casefold()
+    assert "does not reopen passages" in report["core_assumption"].casefold()
+    limits = " ".join(report["limits"]).casefold()
+    assert "planner-derived" in limits and "not ground truth" in limits
+    assert "cannot detect a nugget that misstates its source" in limits
+    assert "retrieval, selection, and canonicalization" in limits
+    assert "not comparable" in limits and "model identities" in limits
+
+
 def test_create_refuses_nonempty_work_dir_and_cache_only_names_missing_stages(tmp_path: Path) -> None:
     handoff_path = _write_coverage_handoff(tmp_path)
     work_dir = tmp_path / "nonempty"
