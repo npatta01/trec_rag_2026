@@ -410,6 +410,121 @@ def test_real_production_worker_crosses_process_boundary_with_pinned_config(
     assert child_pids != {os.getpid()}
 
 
+@pytest.mark.parametrize("topic_raises", [False, True], ids=("success", "topic-error"))
+def test_production_worker_closes_both_score_caches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    topic_raises: bool,
+) -> None:
+    """Catches worker exit while either scorer still owns a SQLite connection."""
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(
+        base,
+        root_dir=tmp_path,
+        experiment=replace(base.experiment, id="score-cache-lifecycle"),
+        topics_path=tmp_path / "topics.tsv",
+    )
+    topic = Topic("topic-a", "", "narrative")
+    config_bytes = b"pinned score cache lifecycle config\n"
+    config_path = (tmp_path / "config.yaml").resolve()
+    config_path.write_bytes(config_bytes)
+    job = TopicJob(
+        topic_id=topic.id,
+        run_id=config.run_id,
+        config_path=config_path,
+        config_bytes=config_bytes,
+        config_sha256=sha256(config_bytes).hexdigest(),
+        topic_root=(config.output_dir / topic.id).resolve(),
+    )
+
+    class TrackingCache:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    caches: list[TrackingCache] = []
+
+    class TrackingScorer:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.score_cache = TrackingCache()
+            caches.append(self.score_cache)
+
+    projection = SimpleNamespace(topic_id=topic.id, manifest_sha256="a" * 64)
+
+    monkeypatch.setattr(
+        competition_retrieval,
+        "load_facet_pilot_config",
+        lambda _path, *, source_bytes=None: config,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "load_narrative_topics",
+        lambda _path: (topic,),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_production_dependencies",
+        lambda **_kwargs: competition_retrieval._RuntimeDependencies(
+            code_commit="c" * 40,
+            document_scorer=None,
+            candidate_scorer=None,
+            similarity=None,
+            cache_ignore_checker=None,
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "build_pyserini_retriever",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            identity={"name": "fake", "type": "test", "hits": 1000}
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_validated_existing_topic_job_receipt",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadPassageScorer",
+        TrackingScorer,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadSentencePairScorer",
+        TrackingScorer,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "LocalMiniLMSimilarity",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    def run_topic(*_args, **_kwargs):
+        if topic_raises:
+            raise RuntimeError("topic run failed")
+        return SimpleNamespace(topic_id=topic.id, projection_receipt=projection)
+
+    monkeypatch.setattr(competition_retrieval, "_run_topic", run_topic)
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_topic_completion_for_dispatch",
+        lambda *_args: ("complete", "coverage_sufficient"),
+    )
+
+    if topic_raises:
+        with pytest.raises(RuntimeError, match="topic run failed"):
+            competition_retrieval._run_production_topic_job(job)
+    else:
+        receipt = competition_retrieval._run_production_topic_job(job)
+        assert receipt.projection_manifest_sha256 == projection.manifest_sha256
+
+    assert len(caches) == 2
+    assert [cache.close_calls for cache in caches] == [1, 1]
+
+
 @pytest.mark.parametrize("operation_exists", [True, False], ids=("sealed", "missing"))
 def test_production_worker_recovers_projection_only_after_operation_accounting(
     tmp_path: Path,
@@ -554,12 +669,16 @@ def test_production_worker_recovers_projection_only_after_operation_accounting(
     monkeypatch.setattr(
         competition_retrieval,
         "MixedbreadPassageScorer",
-        lambda *_args, **_kwargs: object(),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            score_cache=SimpleNamespace(close=lambda: None)
+        ),
     )
     monkeypatch.setattr(
         competition_retrieval,
         "MixedbreadSentencePairScorer",
-        lambda *_args, **_kwargs: object(),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            score_cache=SimpleNamespace(close=lambda: None)
+        ),
     )
     monkeypatch.setattr(
         competition_retrieval,

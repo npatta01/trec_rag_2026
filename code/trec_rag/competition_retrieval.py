@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 import ctypes
 from dataclasses import dataclass, replace
 import errno
@@ -3074,56 +3075,62 @@ def _run_production_topic_job(job: TopicJob) -> TopicJobReceipt:
         )
         if recovered is not None:
             return recovered
-    passage_scorer = MixedbreadPassageScorer(
-        score_cache_root=config.passage.score_cache_dir,
-        device=config.passage.device,
-        read_only=job.offline_cache_only,
-    )
-    candidate_scorer = MixedbreadSentencePairScorer(
-        score_cache_root=config.passage.score_cache_dir,
-        device=config.passage.device,
-        read_only=job.offline_cache_only,
-    )
-    similarity = LocalMiniLMSimilarity(
-        device=config.passage.device,
-        cache_root=cache_root,
-        cache_only=job.offline_cache_only,
-    )
-    dependencies = replace(
-        dependencies,
-        retriever=retriever,
-        document_scorer=passage_scorer,
-        candidate_scorer=candidate_scorer,
-        similarity=similarity,
-    )
-    if job.offline_cache_only:
-        outcome = _run_offline_topic_staged(
-            job,
-            topic,
-            config,
-            _topics_sha256(official_topics),
-            dependencies,
-            config_sha256=job.config_sha256,
-            expected_retriever_identity=expected_retriever_identity,
+    with ExitStack() as score_cache_cleanup:
+        passage_scorer = MixedbreadPassageScorer(
+            score_cache_root=config.passage.score_cache_dir,
+            device=config.passage.device,
+            read_only=job.offline_cache_only,
         )
-    else:
-        outcome = _run_topic(
-            topic,
-            config,
-            _topics_sha256(official_topics),
-            dependencies,
-            config_sha256=job.config_sha256,
-            expected_retriever_identity=expected_retriever_identity,
+        score_cache_cleanup.callback(passage_scorer.score_cache.close)
+        candidate_scorer = MixedbreadSentencePairScorer(
+            score_cache_root=config.passage.score_cache_dir,
+            device=config.passage.device,
+            read_only=job.offline_cache_only,
         )
-    if outcome.topic_id != topic.id or outcome.projection_receipt.topic_id != topic.id:
-        raise ValueError("topic worker produced a wrong topic")
-    status, stopping_reason = _topic_completion_for_dispatch(config, topic)
-    return TopicJobReceipt(
-        topic_id=topic.id,
-        projection_manifest_sha256=outcome.projection_receipt.manifest_sha256,
-        status=status,
-        stopping_reason=stopping_reason,
-    )
+        score_cache_cleanup.callback(candidate_scorer.score_cache.close)
+        similarity = LocalMiniLMSimilarity(
+            device=config.passage.device,
+            cache_root=cache_root,
+            cache_only=job.offline_cache_only,
+        )
+        dependencies = replace(
+            dependencies,
+            retriever=retriever,
+            document_scorer=passage_scorer,
+            candidate_scorer=candidate_scorer,
+            similarity=similarity,
+        )
+        if job.offline_cache_only:
+            outcome = _run_offline_topic_staged(
+                job,
+                topic,
+                config,
+                _topics_sha256(official_topics),
+                dependencies,
+                config_sha256=job.config_sha256,
+                expected_retriever_identity=expected_retriever_identity,
+            )
+        else:
+            outcome = _run_topic(
+                topic,
+                config,
+                _topics_sha256(official_topics),
+                dependencies,
+                config_sha256=job.config_sha256,
+                expected_retriever_identity=expected_retriever_identity,
+            )
+        if (
+            outcome.topic_id != topic.id
+            or outcome.projection_receipt.topic_id != topic.id
+        ):
+            raise ValueError("topic worker produced a wrong topic")
+        status, stopping_reason = _topic_completion_for_dispatch(config, topic)
+        return TopicJobReceipt(
+            topic_id=topic.id,
+            projection_manifest_sha256=outcome.projection_receipt.manifest_sha256,
+            status=status,
+            stopping_reason=stopping_reason,
+        )
 
 
 def _rename_directory_noreplace(source: Path, destination: Path) -> None:
