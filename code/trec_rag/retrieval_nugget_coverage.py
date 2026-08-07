@@ -51,14 +51,14 @@ MAX_UNMAPPED_NARRATIVE_SPANS = 40
 MAX_NARRATIVE_SPAN_CHARACTERS = 1000
 PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v4"
 JUDGE_PROMPT_VERSION = "retrieval_nugget_judge_v2"
-EVALUATOR_SCHEMA_VERSION = "retrieval_nugget_coverage_v1"
+EVALUATOR_SCHEMA_VERSION = "retrieval_nugget_coverage_v2"
 INPUT_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_input_v1"
 PLAN_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_plan_v1"
 JUDGMENTS_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_judgments_v1"
 REPORT_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_report_v1"
 MANIFEST_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_manifest_v1"
-DEFAULT_PLANNER_MODEL = "openai/gpt-5"
-DEFAULT_JUDGE_MODEL = "openai/gpt-5"
+DEFAULT_PLANNER_MODEL = "openai/gpt-5.6-sol"
+DEFAULT_JUDGE_MODEL = "openai/gpt-5.6-sol"
 PLANNER_SYSTEM_PROMPT = (
     "Create a complete, minimal obligation plan from the supplied narrative. "
     "Return only the requested JSON object. Every explicit request in the "
@@ -1307,7 +1307,6 @@ def _request_payload(request: CoverageModelRequest) -> dict[str, object]:
         },
         "provider": {"require_parameters": True, "data_collection": "deny"},
         "reasoning": {"enabled": False},
-        "temperature": 0,
         "seed": 0,
         "stream": False,
     }

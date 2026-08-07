@@ -112,6 +112,14 @@ def _identity() -> EvaluatorIdentity:
     )
 
 
+def test_current_default_identity_uses_sol_and_v2_schema(tmp_path: Path) -> None:
+    config = CoverageRunConfig(tmp_path / "handoff.json", "topic-defaults")
+
+    assert coverage_module.EVALUATOR_SCHEMA_VERSION == "retrieval_nugget_coverage_v2"
+    assert config.planner_model == "openai/gpt-5.6-sol"
+    assert config.judge_model == "openai/gpt-5.6-sol"
+
+
 def test_plan_validation_assigns_local_ids_and_freezes_deterministically() -> None:
     first = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
     second = validate_and_freeze_plan(NARRATIVE, json.loads(json.dumps(VALID_PLAN)))
@@ -1174,7 +1182,7 @@ def test_openrouter_backend_uses_strict_schema_and_redacts_credentials() -> None
     assert body["response_format"]["json_schema"]["name"] == request.response_schema_name
     assert body["provider"] == {"require_parameters": True, "data_collection": "deny"}
     assert body["reasoning"] == {"enabled": False}
-    assert body["temperature"] == 0
+    assert "temperature" not in body
     assert body["seed"] == 0
     assert body["stream"] is False
     assert body["max_tokens"] == 8192
