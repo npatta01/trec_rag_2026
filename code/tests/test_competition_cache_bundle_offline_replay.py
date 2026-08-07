@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
+import tarfile
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import zstandard
 
 from trec_rag import competition_cache_bundle as bundle_module
 from trec_rag import competition_retrieval
@@ -61,6 +64,74 @@ def _canonical_json(value: object) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _tar_entry(name: str, body: bytes) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.size = len(body)
+    info.mode = 0o600
+    info.mtime = 0
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    return info
+
+
+def _remove_bundle_member(bundle: Path, member_path: str) -> None:
+    """Rebuild a verified test bundle without one legacy-absent member."""
+    archive_path = bundle / "bundle.tar.zst"
+    with zstandard.ZstdDecompressor().stream_reader(
+        io.BytesIO(archive_path.read_bytes())
+    ) as source:
+        tar_bytes = source.read()
+    bodies: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as archive:
+        members = archive.getmembers()
+        manifest_source = archive.extractfile(members[0])
+        assert manifest_source is not None
+        manifest = json.loads(manifest_source.read())
+        for member in members[1:]:
+            source = archive.extractfile(member)
+            assert source is not None
+            bodies[member.name] = source.read()
+    declarations = {row["path"]: row for row in manifest["members"]}
+    assert member_path in bodies
+    assert member_path in declarations
+    del bodies[member_path]
+    del declarations[member_path]
+    manifest["members"] = [declarations[name] for name in sorted(declarations)]
+    manifest_body = _canonical_json(manifest)
+    rebuilt = io.BytesIO()
+    with tarfile.open(
+        fileobj=rebuilt, mode="w", format=tarfile.USTAR_FORMAT
+    ) as archive:
+        archive.addfile(
+            _tar_entry("bundle-manifest.json", manifest_body),
+            io.BytesIO(manifest_body),
+        )
+        for name in sorted(bodies):
+            body = bodies[name]
+            archive.addfile(_tar_entry(name, body), io.BytesIO(body))
+    compressed = zstandard.ZstdCompressor(
+        level=3,
+        write_checksum=True,
+        write_content_size=False,
+    ).compress(rebuilt.getvalue())
+    archive_path.write_bytes(compressed)
+    (bundle / "bundle-complete.json").write_bytes(
+        _canonical_json(
+            {
+                "archive": "bundle.tar.zst",
+                "archive_sha256": hashlib.sha256(compressed).hexdigest(),
+                "archive_size": len(compressed),
+                "manifest_sha256": hashlib.sha256(manifest_body).hexdigest(),
+                "member_count": len(manifest["members"]),
+                "schema_version": manifest["schema_version"],
+                "topic_id": manifest["topic_id"],
+            }
+        )
+    )
 
 
 def _write_config(
@@ -573,6 +644,40 @@ def test_pack_self_verification_preserves_full_official_topics_identity(
     assert topics_member.sha256 == hashlib.sha256(
         (tmp_path / "online/topics.tsv").read_bytes()
     ).hexdigest()
+
+
+def test_verify_legacy_singleton_bundle_without_topics_member_uses_fallback(
+    tmp_path: Path,
+) -> None:
+    config_path, _config, _topic, _identity, _topics_sha = _prepare_online_topic(
+        tmp_path / "online"
+    )
+    bundle = (tmp_path / "legacy-bundle").resolve()
+    pack_bundle(config_path, _TOPIC_ID, bundle)
+    _remove_bundle_member(bundle, "source-config/official-topics")
+
+    verified = verify_bundle(bundle)
+
+    assert verified.topic_id == _TOPIC_ID
+    assert all(member.kind != "topics" for member in verified.members)
+
+
+def test_legacy_fallback_does_not_replace_multi_topic_identity(
+    tmp_path: Path,
+) -> None:
+    config_path, _config, _topic, _identity, _topics_sha = _prepare_online_topic(
+        tmp_path / "online",
+        include_other_topic=True,
+    )
+    bundle = (tmp_path / "incomplete-legacy-bundle").resolve()
+    pack_bundle(config_path, _TOPIC_ID, bundle)
+    _remove_bundle_member(bundle, "source-config/official-topics")
+
+    with pytest.raises(
+        CacheBundleIntegrityError,
+        match="fresh offline cache replay",
+    ):
+        verify_bundle(bundle)
 
 
 @pytest.mark.parametrize("control", ("\t", "\n", "\r"))

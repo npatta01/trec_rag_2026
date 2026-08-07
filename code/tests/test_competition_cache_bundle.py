@@ -1318,6 +1318,9 @@ def test_merge_installs_verified_files_and_is_idempotent(tmp_path: Path) -> None
     config = _write_fixture(tmp_path / "repo")
     bundle = (tmp_path / "bundle").resolve()
     pack_bundle(config, "rag2026-0", bundle)
+    assert "source-config/official-topics" in {
+        member.path for member in verify_bundle(bundle).members
+    }
     cache_root = (tmp_path / "merged-cache").resolve()
     outputs_root = (tmp_path / "merged-outputs").resolve()
 
@@ -1343,6 +1346,8 @@ def test_merge_installs_verified_files_and_is_idempotent(tmp_path: Path) -> None
     assert (state / "conflicts.json").is_file()
     assert first.completion_path == state / "complete.json"
     assert first.completion_path.is_file()
+    for destination_root in (cache_root, outputs_root):
+        assert not (destination_root / "source-config/official-topics").exists()
 
 
 def test_merge_preflights_strict_conflicts_before_destination_mutation(
