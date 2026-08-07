@@ -1255,8 +1255,10 @@ documented here for future dstack/cache reuse.
   complete topic receipts and 4,128 TREC run rows, and every stage reported
   zero cache misses, network calls, provider calls, and model batches. The
   authenticated export and manifest-last handoff passed; the handoff manifest
-  records 22 topics and SHA-256
-  `451bd0478f5419e0f5471b170757fb641195ef42d3fde771914260077d03c7ad`.
+  records 22 topics and embedded manifest SHA-256
+  `451bd0478f5419e0f5471b170757fb641195ef42d3fde771914260077d03c7ad`;
+  the raw manifest file SHA-256 is
+  `6b2cdd576282cf28779bdd6e97d6f333ec2b98d815fb440ed4df06d3c607227b`.
   The local p4 output directory and config are ignored and are not in Git;
   retain their paths for future cache reuse.
 
@@ -1379,6 +1381,12 @@ documented here for future dstack/cache reuse.
 
 ## Next dstack Run
 
+- The self-contained 22-topic generation handoff is retained in the private
+  GitHub prerelease
+  [`rag25-retrieval-handoff-20260807`](https://github.com/npatta01/trec_rag_2026/releases/tag/rag25-retrieval-handoff-20260807)
+  as
+  `generation_handoff_manifest.json`. GitHub's asset digest matches the raw
+  file SHA-256 above, and a release download passed the strict handoff loader.
 - Start from a clean committed branch and keep the four dstack project secrets
   configured: `HF_TOKEN`, `INDEX_URL`, `PYSERINI_API_TOKEN`, and
   `OPENROUTER_API_KEY`.
