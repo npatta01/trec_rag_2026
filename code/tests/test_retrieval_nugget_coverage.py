@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+import socket
 import ssl
 from urllib.error import URLError
 
@@ -1155,6 +1156,34 @@ def test_openrouter_retries_transient_url_errors(reason: Exception) -> None:
 )
 def test_openrouter_does_not_retry_permanent_or_certificate_url_errors(reason: Exception) -> None:
     transport = FakeOpenRouterTransport([URLError(reason)])
+    backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "key"}, transport=transport, transport_max_attempts=3
+    )
+
+    with pytest.raises(RuntimeError, match="transport failed"):
+        backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+    assert len(transport.requests) == 1
+
+
+def test_openrouter_retries_temporary_dns_url_errors() -> None:
+    transport = FakeOpenRouterTransport([
+        URLError(socket.gaierror(socket.EAI_AGAIN, "temporary DNS failure")),
+        _openrouter_response(VALID_PLAN),
+    ])
+    backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "key"}, transport=transport, transport_max_attempts=2
+    )
+
+    backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+
+    assert len(transport.requests) == 2
+
+
+@pytest.mark.parametrize("dns_errno", [socket.EAI_NONAME, socket.EAI_FAIL])
+def test_openrouter_does_not_retry_permanent_dns_url_errors(dns_errno: int) -> None:
+    transport = FakeOpenRouterTransport([
+        URLError(socket.gaierror(dns_errno, "permanent DNS failure")),
+    ])
     backend = OpenRouterCoverageBackend(
         environ={"OPENROUTER_API_KEY": "key"}, transport=transport, transport_max_attempts=3
     )

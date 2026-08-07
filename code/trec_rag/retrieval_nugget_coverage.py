@@ -1233,7 +1233,9 @@ def _is_transient_transport_error(error: BaseException) -> bool:
     """Classify only known transient network causes for bounded retries."""
 
     reason = error.reason if isinstance(error, URLError) else error
-    return isinstance(reason, (TimeoutError, ConnectionError, socket.gaierror))
+    if isinstance(reason, (TimeoutError, ConnectionError)):
+        return True
+    return isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN
 
 
 def validate_and_freeze_plan(narrative: str, payload: object) -> FrozenPlan:
