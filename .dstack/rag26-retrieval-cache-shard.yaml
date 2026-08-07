@@ -27,7 +27,7 @@ commands:
 
 resources:
   gpu:
-    name: [A40, A6000, L40S]
+    name: [A40, A6000, L40, L40S, RTX6000Ada, RTXPRO5000]
     count: 1
     memory: 48GB..
   memory: 32GB..
