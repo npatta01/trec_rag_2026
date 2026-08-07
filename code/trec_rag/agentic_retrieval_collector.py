@@ -16,8 +16,9 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import fcntl
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -73,6 +74,7 @@ class WaveReceipt:
     complete: bool
     exported: bool = False
     export_error: str | None = None
+    topic_digests: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -86,6 +88,10 @@ class WaveReceipt:
             "complete": self.complete,
             "exported": self.exported,
             "export_error": self.export_error,
+            "topic_digests": {
+                topic_id: dict(digests)
+                for topic_id, digests in self.topic_digests.items()
+            },
         }
 
     @classmethod
@@ -113,6 +119,16 @@ class WaveReceipt:
             raise CollectorError("collector receipt completion fields are invalid")
         if error is not None and not isinstance(error, str):
             raise CollectorError("collector receipt export error is invalid")
+        raw_digests = payload.get("topic_digests", {})
+        if not isinstance(raw_digests, Mapping):
+            raise CollectorError("collector receipt topic digests are invalid")
+        topic_digests: dict[str, Mapping[str, str]] = {}
+        for topic_id, value in raw_digests.items():
+            if not isinstance(topic_id, str) or not isinstance(value, Mapping):
+                raise CollectorError("collector receipt topic digest row is invalid")
+            if any(not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()):
+                raise CollectorError("collector receipt topic digest values are invalid")
+            topic_digests[topic_id] = dict(value)
         return cls(
             wave,
             ids("imported"),
@@ -123,6 +139,7 @@ class WaveReceipt:
             complete,
             exported,
             error,
+            topic_digests,
         )
 
 
@@ -411,6 +428,9 @@ class IncrementalCollector:
     ) -> None:
         if not isinstance(bucket_prefix, str) or not bucket_prefix.strip("/"):
             raise CollectorError("bucket prefix is required")
+        prefix_parts = bucket_prefix.split("://", 1)[-1].strip("/").split("/")
+        if any(part in {"", ".", ".."} for part in prefix_parts):
+            raise CollectorError("bucket prefix contains an unsafe path component")
         if poll_interval < 0:
             raise CollectorError("poll interval cannot be negative")
         self.bucket_prefix = bucket_prefix.rstrip("/")
@@ -449,6 +469,7 @@ class IncrementalCollector:
         self._uses_default_export = export_fn is None
         self.export_output_dir = Path(export_output_dir or self.destination_run_dir)
         self.producer_revision = producer_revision
+        self._topic_digests: dict[str, Mapping[str, str]] = {}
         _ensure_private_directory(self.staging_root)
         _ensure_private_directory(self.destination_run_dir)
         _ensure_private_directory(self.staging_root / QUARANTINE_DIRNAME)
@@ -513,6 +534,38 @@ class IncrementalCollector:
             payload["error"] = error
         _append_jsonl(self.journal_path, payload)
 
+    def _export_receipt_valid(self) -> bool:
+        path = self.staging_root / EXPORT_RECEIPT_FILENAME
+        if not path.exists():
+            return False
+        try:
+            rows = _read_jsonl(path)
+        except CollectorError:
+            return False
+        if len(rows) != 1:
+            return False
+        row = rows[0]
+        valid = (
+            row.get("schema_version") == _EXPORT_SCHEMA
+            and type(row.get("wave")) is int
+            and row["wave"] > 0
+            and row.get("topic_ids") == list(self.cohort_topic_ids)
+        )
+        if not valid:
+            return False
+        if self.plan.__class__.__name__ == "AgenticRunPlan":
+            try:
+                from .agentic_retrieval_export import load_agentic_retrieval_export
+
+                load_agentic_retrieval_export(
+                    output_dir=self.export_output_dir,
+                    work_dir=self.destination_run_dir,
+                    plan=self.plan,
+                )
+            except Exception:
+                return False
+        return True
+
     def _process_topic_unlocked(self, topic_id: str, wave: int, *, rejected: bool = False) -> str:
         incoming = self.staging_root / INCOMING_DIRNAME / f"{topic_id}.{wave}.{uuid.uuid4().hex}"
         incoming.mkdir(mode=0o700)
@@ -533,33 +586,51 @@ class IncrementalCollector:
             verified = self.verify_bundle(archive, marker, self.plan_sha256)
             if _verified_topic(verified, marker) != topic_id:
                 raise CollectorError("verified bundle topic differs from remote path")
+            seal_digest = (
+                verified.get("topic_seal_sha256")
+                if isinstance(verified, Mapping)
+                else getattr(verified, "topic_seal_sha256", None)
+            )
+            if not isinstance(seal_digest, str):
+                try:
+                    marker_payload = json.loads(marker.read_bytes())
+                    seal_digest = marker_payload.get("topic_seal_sha256")
+                except (OSError, json.JSONDecodeError):
+                    seal_digest = None
+            if not isinstance(seal_digest, str):
+                raise CollectorError("verified bundle has no topic-seal digest")
+            self._topic_digests[topic_id] = {
+                "plan_sha256": self.plan_sha256,
+                "archive_sha256": sha256(archive.read_bytes()).hexdigest(),
+                "marker_sha256": sha256(marker.read_bytes()).hexdigest(),
+                "topic_seal_sha256": seal_digest,
+            }
         except Exception as exc:
             self._quarantine(incoming, topic_id, wave)
             self._journal(wave, topic_id, "rejected", str(exc))
             return "rejected"
         try:
-            self.import_bundle(archive, marker, self.destination_run_dir)
+            with _collector_lock(self.export_output_dir / ".agentic-retrieval-export.lock"):
+                self.import_bundle(archive, marker, self.destination_run_dir)
+                if not _is_present(self.destination_run_dir, topic_id, self.plan):
+                    raise CollectorError("import completed without a valid topic seal")
         except Exception as exc:
             self._quarantine(incoming, topic_id, wave)
             self._journal(wave, topic_id, "failed", str(exc))
             return "failed"
-        shutil.rmtree(incoming, ignore_errors=True)
         self._journal(wave, topic_id, "imported")
         return "imported"
 
     def _process_topic(self, topic_id: str, wave: int, *, rejected: bool = False) -> str:
-        # The aggregate exporter uses this same lock file.  Hold it only for
-        # the download/verify/import mutation; the exporter itself acquires it
-        # later, avoiding a non-reentrant nested flock while still preventing
-        # an export from racing a topic installation.
-        with _collector_lock(self.export_output_dir / ".agentic-retrieval-export.lock"):
-            return self._process_topic_unlocked(topic_id, wave, rejected=rejected)
+        # Download and verify remain outside the shared mutation lock.  The
+        # unlocked helper takes that lock only around import and seal validation.
+        return self._process_topic_unlocked(topic_id, wave, rejected=rejected)
 
     def _export_complete_cohort(self, wave: int) -> tuple[bool, str | None]:
-        if (not self._uses_default_export and self.export_fn is None) or (
-            self.staging_root / EXPORT_RECEIPT_FILENAME
-        ).exists():
-            return ((self.staging_root / EXPORT_RECEIPT_FILENAME).exists(), None)
+        if not self._uses_default_export and self.export_fn is None:
+            return False, None
+        if self._export_receipt_valid():
+            return True, None
         status = self.status()
         try:
             # Injected fakes receive a compact status mapping.  The production
@@ -596,8 +667,9 @@ class IncrementalCollector:
 
     def run_once(self) -> WaveReceipt:
         """Perform one listing, download, verify, import, and receipt cycle."""
-        wave = self._next_wave()
         with _collector_lock(self.destination_run_dir / COLLECTOR_LOCK_FILENAME):
+            wave = self._next_wave()
+            self._topic_digests = {}
             present_before = self._present_ids()
             try:
                 raw_listing = self.transport.list(self.bucket_prefix)  # type: ignore[attr-defined]
@@ -625,6 +697,12 @@ class IncrementalCollector:
             # ``144``.
             for topic_id in sorted(set(listing.complete) | set(listing.malformed)):
                 if topic_id in handled:
+                    continue
+                if _SAFE_COMPONENT.fullmatch(topic_id) is None:
+                    rejected.append(topic_id)
+                    self._quarantine(None, "malformed-path", wave)
+                    self._journal(wave, "malformed-path", "rejected", "unsafe listing topic component")
+                    handled.add(topic_id)
                     continue
                 if topic_id in self.cohort_topic_ids and topic_id not in self.expected_topic_ids:
                     # A caller-provided subset bounds this collector's work;
@@ -668,6 +746,7 @@ class IncrementalCollector:
                 complete,
                 exported,
                 export_error,
+                dict(self._topic_digests),
             )
             _append_jsonl(self.wave_receipts_path, receipt.to_payload())
             return receipt
@@ -692,7 +771,10 @@ class IncrementalCollector:
             return
         cycle = 0
         while max_cycles is None or cycle < max_cycles:
-            receipt = self.run_once()
+            try:
+                receipt = self.run_once()
+            except KeyboardInterrupt:
+                return
             yield receipt
             cycle += 1
             if receipt.complete:

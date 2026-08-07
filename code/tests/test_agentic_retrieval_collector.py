@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+import fcntl
 from threading import Event, Thread
 
 from trec_rag.agentic_retrieval_collector import (
@@ -136,6 +137,21 @@ def test_marker_last_makes_bundle_eligible_and_verifies_offline(tmp_path: Path) 
     assert len(hf.download_calls) == 1
 
 
+def test_successful_download_is_preserved_after_import(tmp_path: Path) -> None:
+    plan = FakePlan(("rag2026-14",))
+    hf = FakeHF(_remote_listing("rag2026-14"))
+    archive = b"bundle-14"
+    hf.payloads["rag2026-14"] = (archive, _marker("rag2026-14", archive))
+    verify, importer, _ = _successful_bundle_fakes(hf, plan)
+    collector = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer)
+
+    collector.run_once()
+
+    downloaded = hf.download_calls[0][1]
+    assert (downloaded / "bundle.tar.zst").read_bytes() == archive
+    assert (downloaded / "bundle-complete.json").is_file()
+
+
 def test_archive_without_completion_marker_remains_missing(tmp_path: Path) -> None:
     plan = FakePlan(("rag2026-14",))
     hf = FakeHF(_remote_listing("rag2026-14", include_marker=False))
@@ -233,6 +249,125 @@ def test_wave_receipts_are_append_only_and_report_all_categories(tmp_path: Path)
     assert (tmp_path / "staging" / COLLECTOR_JOURNAL_FILENAME).exists()
 
 
+def test_wave_number_allocation_is_serialized_across_two_collectors(tmp_path: Path, monkeypatch) -> None:
+    plan = FakePlan(("rag2026-14",))
+    hf = FakeHF(_remote_listing("rag2026-14"))
+    archive = b"bundle-14"
+    hf.payloads["rag2026-14"] = (archive, _marker("rag2026-14", archive))
+    verify, importer, _ = _successful_bundle_fakes(hf, plan)
+    first = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer)
+    second = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer)
+    barrier = Event()
+    original_first = first._next_wave
+    original_second = second._next_wave
+
+    def delayed_first():
+        barrier.wait(2)
+        return original_first()
+
+    def delayed_second():
+        barrier.set()
+        return original_second()
+
+    monkeypatch.setattr(first, "_next_wave", delayed_first)
+    monkeypatch.setattr(second, "_next_wave", delayed_second)
+    threads = [Thread(target=collector.run_once) for collector in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+    rows = [json.loads(line) for line in (tmp_path / "staging" / WAVE_RECEIPTS_FILENAME).read_text().splitlines()]
+
+    assert sorted(row["wave"] for row in rows) == [1, 2]
+
+
+def test_receipt_records_plan_archive_marker_and_seal_digests(tmp_path: Path) -> None:
+    plan = FakePlan(("rag2026-14",))
+    hf = FakeHF(_remote_listing("rag2026-14"))
+    archive = b"bundle-14"
+    marker = _marker("rag2026-14", archive)
+    hf.payloads["rag2026-14"] = (archive, marker)
+    verify, importer, _ = _successful_bundle_fakes(hf, plan)
+    collector = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer)
+
+    collector.run_once()
+    row = json.loads((tmp_path / "staging" / WAVE_RECEIPTS_FILENAME).read_text())
+    digests = row["topic_digests"]["rag2026-14"]
+
+    assert digests == {
+        "plan_sha256": plan.plan_sha256,
+        "archive_sha256": sha256(archive).hexdigest(),
+        "marker_sha256": sha256(marker).hexdigest(),
+        "topic_seal_sha256": "s" * 64,
+    }
+
+
+def test_import_requires_an_installed_topic_seal(tmp_path: Path) -> None:
+    plan = FakePlan(("rag2026-14",))
+    hf = FakeHF(_remote_listing("rag2026-14"))
+    archive = b"bundle-14"
+    hf.payloads["rag2026-14"] = (archive, _marker("rag2026-14", archive))
+    verify, _, _ = _successful_bundle_fakes(hf, plan)
+    collector = _collector(tmp_path, hf, plan=plan, verify=verify, importer=lambda *_: None)
+
+    receipt = collector.run_once()
+
+    assert receipt.failed == ("rag2026-14",)
+    assert receipt.imported == ()
+
+
+def test_traversal_listing_never_constructs_a_remote_download_prefix(tmp_path: Path) -> None:
+    plan = FakePlan(("rag2026-14",))
+    hf = FakeHF(
+        [
+            {"path": "run/../rag2026-14/bundle.tar.zst", "type": "file"},
+            {"path": "run/../rag2026-14/bundle-complete.json", "type": "file"},
+        ]
+    )
+    collector = _collector(tmp_path, hf, plan=plan)
+
+    receipt = collector.run_once()
+
+    assert not hf.download_calls
+    assert receipt.rejected == ("..",)
+    assert receipt.missing == ("rag2026-14",)
+
+
+def test_stale_export_receipt_does_not_suppress_complete_export(tmp_path: Path) -> None:
+    plan = FakePlan(("rag2026-14", "rag2026-37"))
+    hf = FakeHF(_remote_listing(*plan.planned_topic_ids))
+    for topic_id in plan.planned_topic_ids:
+        archive = topic_id.encode()
+        hf.payloads[topic_id] = (archive, _marker(topic_id, archive))
+    verify, importer, _ = _successful_bundle_fakes(hf, plan)
+    exports: list[object] = []
+    collector = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer, export=exports.append)
+    (tmp_path / "staging" / "collector-export-receipt.json").write_text("partial\n")
+
+    collector.run_once()
+
+    assert len(exports) == 1
+
+
+def test_verification_happens_before_shared_import_export_lock(tmp_path: Path) -> None:
+    plan = FakePlan(("rag2026-14",))
+    hf = FakeHF(_remote_listing("rag2026-14"))
+    archive = b"bundle-14"
+    hf.payloads["rag2026-14"] = (archive, _marker("rag2026-14", archive))
+    lock_path = tmp_path / "run-state" / ".agentic-retrieval-export.lock"
+
+    def verify(archive_path: Path, marker_path: Path, expected_plan_sha256: str):
+        with lock_path.open("a+b") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        return {"topic_id": "rag2026-14", "topic_seal_sha256": "s" * 64}
+
+    _, importer, _ = _successful_bundle_fakes(hf, plan)
+    collector = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer)
+
+    collector.run_once()
+
+
 def test_incomplete_cohort_does_not_call_export(tmp_path: Path) -> None:
     plan = FakePlan(("rag2026-14", "rag2026-37"))
     hf = FakeHF(_remote_listing("rag2026-14"))
@@ -278,12 +413,24 @@ def test_import_and_export_share_a_lock(tmp_path: Path) -> None:
         assert release.wait(2)
 
     collector = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer, export=export)
+    second = _collector(tmp_path, hf, plan=plan, verify=verify, importer=importer, export=export)
     thread = Thread(target=collector.run_once)
+    second_done = Event()
+
+    def run_second() -> None:
+        second.run_once()
+        second_done.set()
+
+    second_thread = Thread(target=run_second)
     thread.start()
     assert entered.wait(2)
+    second_thread.start()
+    assert not second_done.wait(0.1)
     release.set()
     thread.join(timeout=2)
+    second_thread.join(timeout=2)
     assert not thread.is_alive()
+    assert second_done.is_set()
 
 
 def test_watch_stops_when_cohort_is_complete(tmp_path: Path) -> None:
