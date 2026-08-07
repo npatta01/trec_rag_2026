@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from trec_rag.evidence_local import MixedbreadSentencePairScorer
+from trec_rag.evidence_local import LocalCacheAccounting, MixedbreadSentencePairScorer
 from trec_rag.facet_evidence import SCORING_NORMALIZATION_VERSION, SentencePair
 
 
@@ -158,3 +158,25 @@ def test_identity_names_effective_scoring_normalization_policy(tmp_path) -> None
 
     assert scorer.identity["input_policy"] == SCORING_NORMALIZATION_VERSION
     assert scorer.score_cache.context.input_policy == SCORING_NORMALIZATION_VERSION
+
+
+def test_sentence_scorer_exposes_cumulative_hit_miss_and_model_batch_accounting(
+    tmp_path,
+) -> None:
+    """Catches reporting pair count as model work or omitting warm unique hits."""
+    warm = _scorer(tmp_path, _RecordingModel(responses=[(9.0,)]))
+    cached = _pair("cached")
+    assert warm.score_pairs((cached,)) == (9.0,)
+
+    scorer = _scorer(tmp_path, _RecordingModel(), batch_size=2)
+    first = _pair("first")
+    second = _pair("second")
+    third = _pair("third")
+    scorer.score_pairs((cached, first, second, third, first))
+    scorer.score_pairs((cached, first, second, third))
+
+    assert scorer.accounting == LocalCacheAccounting(
+        cache_hits=5,
+        cache_misses=3,
+        model_batches=2,
+    )

@@ -37,7 +37,7 @@ from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate
 from trec_rag.remote_client import RemoteSearchResponse
 from trec_rag.remote_config import RemotePyseriniConfig
 from trec_rag.retrieval_cache import RetrievalCacheIntegrityError
-from trec_rag.retrievers import PyseriniRemoteRetriever, cache_path, request_cache_key
+from trec_rag.retrievers import PyseriniRemoteRetriever, request_cache_key
 from trec_rag.topics import Topic
 from trec_rag.topic_passage_search import (
     FocusedQuery,
@@ -1337,6 +1337,30 @@ def test_configured_retriever_binds_index_and_candidate_depth(tmp_path: Path) ->
 
     assert retriever.config.index == "climbmix-test"
     assert retriever.config.hits == 500
+
+
+def test_configured_retriever_forwards_cache_only_without_constructing_transport(
+    tmp_path: Path,
+) -> None:
+    """Catches the fixed-path builder silently falling back to online retrieval."""
+    class Client:
+        config = RemotePyseriniConfig(
+            "http://api.example.test/v1/climbmix-test/search",
+            None,
+            500,
+            (),
+        )
+
+    retriever = build_pyserini_retriever(
+        tmp_path,
+        index="climbmix-test",
+        hits=500,
+        corpus_epoch="test-epoch",
+        client=Client(),
+        cache_only=True,
+    )
+
+    assert retriever.cache_only is True
 
 
 def test_configured_retrieval_depth_limits_audit_and_reranking() -> None:

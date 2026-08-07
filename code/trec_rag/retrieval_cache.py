@@ -17,8 +17,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
-import tempfile
-from typing import Any, Callable, Mapping
+from typing import Callable, Mapping
 import uuid
 
 from filelock import FileLock
@@ -562,6 +561,34 @@ class RetrievalCache:
                 f"offline cache miss for request {transport_identity.request_key}"
             )
         return result
+
+    def lookup_complete(
+        self,
+        transport_identity: TransportIdentity,
+        derivation_identity: DerivationIdentity,
+        query_text: str,
+    ) -> CachedRetrieval | None:
+        """Read one fully published entry without locks, repairs, or writes."""
+        self._bind_derivation_identity(derivation_identity)
+        self._validate_query(transport_identity, query_text)
+        entry = self._entry_path(transport_identity.request_key)
+        if not entry.exists():
+            return None
+        raw = self._load_transport(entry, transport_identity, query_text)
+        self._validate_response_identity(raw, transport_identity, query_text)
+        parsed = self._parse(raw)
+        derived = entry / "derived" / derivation_identity.derivation_key
+        if not derived.exists():
+            return None
+        hits = self._verify_hits(parsed)
+        return self._load_derivation(
+            derived,
+            transport_identity,
+            derivation_identity,
+            query_text,
+            raw,
+            hits,
+        )
 
     def commit(
         self,

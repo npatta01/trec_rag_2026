@@ -173,6 +173,18 @@ class CanonicalNuggetBackend(Protocol):
     def complete(self, request: CanonicalNuggetRequest) -> BackendReply: ...
 
 
+class CanonicalValidatedCacheError(RuntimeError):
+    """Base class for fail-closed validated canonical cache reads."""
+
+
+class CanonicalValidatedCacheMiss(CanonicalValidatedCacheError):
+    """The exact validated canonical response is absent."""
+
+
+class CanonicalValidatedCacheIntegrityError(CanonicalValidatedCacheError):
+    """A validated canonical response is malformed or semantically invalid."""
+
+
 class OpenRouterCanonicalNuggetBackend:
     """One-shot bounded OpenRouter adapter for the fixed canonical request."""
 
@@ -285,12 +297,20 @@ def run_canonical_stage(
     scorer_mode: str = "hosted",
     backend_factory: Callable[[], object] | None = None,
     cache_ignore_checker: Callable[[Path], bool] | None = None,
+    cache_only: bool = False,
+    cache_stats: dict[str, int] | None = None,
 ) -> CanonicalArtifacts:
     """Canonicalize sealed selections through typed paths and settings."""
     if isinstance(selected_budget, bool) or not isinstance(selected_budget, int):
         raise TypeError("selected_budget must be a non-Boolean integer")
     if scorer_mode not in SCORER_MODE_VALUES:
         raise ValueError("scorer_mode must be 'hosted' or 'local_all_okay'")
+    if not isinstance(cache_only, bool):
+        raise TypeError("cache_only must be Boolean")
+    if cache_stats is not None and not isinstance(cache_stats, dict):
+        raise TypeError("cache_stats must be a dict")
+    if cache_stats is not None:
+        cache_stats.update(cache_hits=0, cache_misses=0, provider_calls=0)
     paths = tuple(
         _typed_path(value, label)
         for value, label in (
@@ -374,7 +394,10 @@ def run_canonical_stage(
         "prompt_version": PROMPT_VERSION,
     }
     artifacts = CanonicalArtifacts(output_path, manifest_path)
-    if _validate_existing_run(output_path, manifest_path, existing_identity, requests):
+    existing_run = _validate_existing_run(
+        output_path, manifest_path, existing_identity, requests
+    )
+    if existing_run and not cache_only:
         return artifacts
 
     live_backend: object | None = None
@@ -386,6 +409,17 @@ def run_canonical_stage(
     for request in requests:
         validated_path = cache_dir / "validated" / f"{request.request_sha256}.json"
         raw_path = cache_dir / "raw" / f"{request.request_sha256}.json"
+        if cache_only:
+            if request.evidence and cache_stats is not None:
+                cache_stats["cache_misses"] += 1
+            result = require_validated_canonical_result(cache_dir, request)
+            validated_hits += int(bool(request.evidence))
+            if request.evidence and cache_stats is not None:
+                cache_stats["cache_misses"] -= 1
+                cache_stats["cache_hits"] += 1
+            validate_canonical_nugget_result(_result_json(result), request)
+            results.append(result)
+            continue
         cached = _load_validated(validated_path, request) if validated_path.is_file() else None
         result: CanonicalNuggetResult | None = None
         if cached is not None:
@@ -419,9 +453,10 @@ def run_canonical_stage(
                         if scorer_mode == "hosted":
                             factory = NuggetizerCanonicalNuggetBackend
                         else:
-                            factory = lambda: NuggetizerCanonicalNuggetBackend(
-                                scorer_mode=scorer_mode
-                            )
+                            def factory() -> object:
+                                return NuggetizerCanonicalNuggetBackend(
+                                    scorer_mode=scorer_mode
+                                )
                     else:
                         factory = backend_factory
                     live_backend = factory()
@@ -449,6 +484,17 @@ def run_canonical_stage(
             raise RuntimeError("canonical nugget result was not resolved")
         validate_canonical_nugget_result(_result_json(result), request)
         results.append(result)
+
+    if cache_stats is not None and not cache_only:
+        required = sum(bool(request.evidence) for request in requests)
+        cache_stats.update(
+            cache_hits=validated_hits,
+            cache_misses=required - validated_hits,
+            provider_calls=hosted_calls,
+        )
+
+    if existing_run:
+        return artifacts
 
     output_bytes = b"".join(
         _canonical_json(_result_json(result)) + b"\n" for result in results
@@ -1679,6 +1725,55 @@ def _load_validated(
         )
     except (OSError, ValueError):
         return None
+
+
+def require_validated_canonical_result(
+    cache_dir: Path,
+    request: CanonicalNuggetRequest,
+) -> CanonicalNuggetResult:
+    """Purely read and semantically validate one exact canonical cache hit."""
+    if not isinstance(cache_dir, Path):
+        raise TypeError("cache_dir must be a Path")
+    if not isinstance(request, CanonicalNuggetRequest):
+        raise TypeError("request must be CanonicalNuggetRequest")
+    if not request.evidence:
+        return canonicalize_subnarrative(request, _NoBackend())
+    path = cache_dir / "validated" / f"{request.request_sha256}.json"
+    if not path.exists():
+        raise CanonicalValidatedCacheMiss(
+            f"validated canonical cache miss for {request.request_sha256}"
+        )
+    if not path.is_file():
+        raise CanonicalValidatedCacheIntegrityError(
+            f"validated canonical cache entry is invalid: {path}"
+        )
+    try:
+        source = path.read_bytes()
+        decoded = _decode_json(source, "validated canonical cache")
+        if source != _canonical_json(decoded) + b"\n":
+            raise ValueError("validated canonical cache is not canonical JSON")
+    except (OSError, ValueError) as exc:
+        raise CanonicalValidatedCacheIntegrityError(
+            f"validated canonical cache entry is invalid: {path}"
+        ) from exc
+    reply = _load_validated(path, request)
+    if reply is None:
+        raise CanonicalValidatedCacheIntegrityError(
+            f"validated canonical cache entry is invalid: {path}"
+        )
+    result = canonicalize_subnarrative(request, _FixedReplyBackend(reply))
+    if result.state != "complete":
+        raise CanonicalValidatedCacheIntegrityError(
+            f"validated canonical cache entry is invalid: {path}"
+        )
+    result = replace(result, backend_attempts=0)
+    try:
+        validate_canonical_nugget_result(_result_json(result), request)
+    except ValueError as exc:
+        raise CanonicalValidatedCacheIntegrityError(
+            f"validated canonical cache entry is invalid: {path}"
+        ) from exc
+    return result
 
 
 def _result_evidence_json(row: CanonicalEvidence) -> dict[str, object]:

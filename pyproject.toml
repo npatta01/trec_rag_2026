@@ -6,12 +6,15 @@ dependencies = [
     "arize-phoenix-otel==0.16.1",
     "deepagents==0.7.0",
     "filelock==3.20.3",
+    "httpx-retries==0.6.0",
     "langchain-openrouter==0.2.7",
     "PyYAML",
     "requests==2.32.5",
     "requests-ratelimiter==0.7.0",
     "semantic-text-splitter",
+    "zstandard==0.25.0",
     "nuggetizer==0.0.5",
+    "openai==2.50.0",
     "openinference-instrumentation-langchain==0.1.67",
     "openinference-semantic-conventions==0.1.30",
     "ragdoll",
@@ -46,10 +49,10 @@ rocm = [
 # `sentence-transformers` backend version and write interchangeable reranker
 # score-cache entries. Only the torch build differs.
 cuda = [
-    "numpy==2.3.3 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "sentence-transformers==5.6.0 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch==2.9.1 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "transformers==5.13.0 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "numpy==2.3.3 ; python_version >= '3.11' and python_version < '3.13' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sentence-transformers==5.6.0 ; python_version >= '3.11' and python_version < '3.13' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch==2.9.1 ; python_version >= '3.11' and python_version < '3.13' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "transformers==5.13.0 ; python_version >= '3.11' and python_version < '3.13' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [tool.uv]
@@ -59,7 +62,7 @@ conflicts = [[{ group = "rocm" }, { group = "cuda" }]]
 
 [tool.uv.dependency-groups]
 rocm = { requires-python = ">=3.12,<3.13" }
-cuda = { requires-python = ">=3.12,<3.13" }
+cuda = { requires-python = ">=3.11,<3.13" }
 
 [build-system]
 requires = ["setuptools>=69"]

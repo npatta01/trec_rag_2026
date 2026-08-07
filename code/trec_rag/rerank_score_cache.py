@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
@@ -40,6 +41,7 @@ DEFAULT_INFERENCE_DTYPE = "bfloat16"
 ARTIFACT_SCHEMA_VERSION = 2
 SCORE_CACHE_SCHEMA_VERSION = "score-cache-v2"
 SCORE_CACHE_CONTEXT_VERSION = 2
+PORTABLE_SCORE_CACHE_SCHEMA_VERSION = "portable-score-cache-v1"
 _HASH_BYTES = 32
 _CLAIM_TOKEN_BYTES = 16
 _SQLITE_BUSY_TIMEOUT_MS = 60_000
@@ -188,6 +190,32 @@ class _Claim:
     token: bytes
 
 
+@dataclass(frozen=True)
+class ScoreCacheMissEntry:
+    """Stable content identity for one required score absent from a cache."""
+
+    cache_key: str
+    query_sha256: str
+    text_sha256: str
+
+
+class ScoreCacheMiss(RuntimeError):
+    """One or more required content-addressed reranker scores are absent."""
+
+    def __init__(
+        self,
+        *,
+        context_sha256: str,
+        missing: Sequence[ScoreCacheMissEntry],
+    ) -> None:
+        self.context_sha256 = context_sha256
+        self.missing = tuple(missing)
+        super().__init__(
+            f"{len(self.missing)} required score-cache entries are missing "
+            f"for context {context_sha256}"
+        )
+
+
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
@@ -255,10 +283,19 @@ class GlobalScoreCache:
 
     schema_version = 2
 
-    def __init__(self, root_dir: Path, context: ScoreCacheContext) -> None:
+    def __init__(
+        self,
+        root_dir: Path,
+        context: ScoreCacheContext,
+        *,
+        read_only: bool = False,
+    ) -> None:
+        if not isinstance(read_only, bool):
+            raise TypeError("read_only must be a bool")
         self.context = context
         self.root_dir = Path(root_dir)
         self.path = self.root_dir.joinpath(*context.path_parts)
+        self.read_only = read_only
         self._local = threading.local()
         self._owner_prefix = f"{os.getpid()}:{uuid4().hex}"
         self._integrity_check_lock = threading.Lock()
@@ -354,6 +391,31 @@ class GlobalScoreCache:
         validate_integrity: bool = True,
     ) -> sqlite3.Connection:
         database = path or self.path
+        if self.read_only:
+            if not database.is_file():
+                raise FileNotFoundError(f"score cache database does not exist: {database}")
+            database_uri = f"file:{quote(str(database.resolve()), safe='/')}?mode=ro&immutable=1"
+            connection = sqlite3.connect(
+                database_uri,
+                uri=True,
+                timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
+                isolation_level=None,
+                check_same_thread=False,
+            )
+            try:
+                connection.execute("PRAGMA query_only = ON")
+                self._validate_existing_schema(connection, database)
+                self._validate_or_initialize_meta(connection, initialize=False)
+                if validate_integrity and database == self.path:
+                    with self._integrity_check_lock:
+                        if not self._integrity_checked:
+                            if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                                raise ValueError(f"{database}: SQLite integrity check failed")
+                            self._integrity_checked = True
+                return connection
+            except BaseException:
+                connection.close()
+                raise
         database.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(
             database,
@@ -613,6 +675,27 @@ class GlobalScoreCache:
         found = self._lookup_normalized(_unique)
         return [found.get(pair.key) for pair in ordered]
 
+    def require_many(self, pairs: Iterable[Any]) -> list[float]:
+        unique, ordered = self._normalize_pairs(pairs)
+        if not ordered:
+            return []
+        found = self._lookup_normalized(unique)
+        missing = [
+            ScoreCacheMissEntry(
+                cache_key=pair.key.hex(),
+                query_sha256=pair.query_sha256.hex(),
+                text_sha256=pair.text_sha256.hex(),
+            )
+            for pair in unique
+            if pair.key not in found
+        ]
+        if missing:
+            raise ScoreCacheMiss(
+                context_sha256=self.context_sha256,
+                missing=missing,
+            )
+        return [found[pair.key] for pair in ordered]
+
     def get(self, *, query_text: str, text: str) -> float | None:
         return self.lookup_many([(query_text, text)])[0]
 
@@ -828,17 +911,20 @@ class GlobalScoreCache:
         authorization_sha256: str | bytes | None = None,
         expected_row_count: int | None = None,
         expected_logical_digest: str | bytes | None = None,
+        conflict_policy: str = "strict",
     ) -> dict[str, object]:
         """Import normalized score rows in one durable transaction.
 
         The primitive deliberately knows nothing about JSONL or any producer
         artifact.  The caller supplies normalized rows and an authenticated
-        source identity.  All source iteration and duplicate/conflict checks
-        happen before the destination transaction; publication of scores and
-        their internal import receipt is one SQLite transaction.
+        source identity.  Source iteration and duplicate validation happen
+        before the destination transaction; target conflict checks,
+        publication, and the internal import receipt share one transaction.
         """
         if not str(source_path):
             raise ValueError("score import requires a source path or identifier")
+        if conflict_policy not in {"strict", "keep-existing"}:
+            raise ValueError("score conflict policy must be 'strict' or 'keep-existing'")
         source_digest = _hash_blob(source_sha256)
         authorization_digest = (
             _hash_blob(authorization_sha256) if authorization_sha256 is not None else None
@@ -876,6 +962,8 @@ class GlobalScoreCache:
         connection = self.connection
         connection.execute("BEGIN IMMEDIATE")
         inserted_keys: list[bytes] = []
+        identical_count = 0
+        conflicts: list[dict[str, str]] = []
         try:
             existing = connection.execute(
                 "SELECT source_row_count, inserted_count, logical_digest, authorization_sha256 "
@@ -892,41 +980,54 @@ class GlobalScoreCache:
                     or existing_authorization != authorization_digest
                 ):
                     raise ValueError("score import source conflict")
-                connection.commit()
-                return {
-                    "source_path": str(source_path),
-                    "source_sha256": source_digest.hex(),
-                    "source_row_count": row_count,
-                    "unique_row_count": len(normalized),
-                    "duplicate_count": duplicate_count,
-                    "inserted_count": 0,
-                    "already_identical_count": len(normalized),
-                    "logical_digest": logical_digest.hex(),
-                    "authorization_sha256": (
-                        authorization_digest.hex()
-                        if authorization_digest is not None
-                        else None
-                    ),
-                    "receipt_reused": True,
-                    "_inserted_keys": (),
-                    "_new_import": False,
-                }
+            receipt_reused = existing is not None
 
-            for row in normalized:
-                if self._insert_score(connection, row, claim=None):
-                    inserted_keys.append(row.pair.key)
-            connection.execute(
-                "INSERT INTO imports(source_sha256, source_path, source_row_count, inserted_count, logical_digest, authorization_sha256) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    source_digest,
-                    str(source_path),
-                    row_count,
-                    len(inserted_keys),
-                    logical_digest,
-                    authorization_digest,
-                ),
-            )
+            for row in sorted(normalized, key=lambda item: item.pair.key):
+                stored = connection.execute(
+                    "SELECT query_sha256, text_sha256, score FROM scores "
+                    "WHERE key_sha256 = ?",
+                    (row.pair.key,),
+                ).fetchone()
+                if stored is None:
+                    if receipt_reused:
+                        raise ValueError("score import receipt references a missing score")
+                    if self._insert_score(connection, row, claim=None):
+                        inserted_keys.append(row.pair.key)
+                    continue
+                if (
+                    bytes(stored[0]) != row.pair.query_sha256
+                    or bytes(stored[1]) != row.pair.text_sha256
+                ):
+                    raise ValueError("score-cache key/hash mismatch")
+                stored_score = _finite_score(stored[2], source="stored score")
+                if stored_score == row.score:
+                    identical_count += 1
+                    continue
+                if conflict_policy == "strict":
+                    raise ValueError("conflicting score for existing global cache key")
+                conflicts.append(
+                    {
+                        "cache_key": row.pair.key.hex(),
+                        "existing_score_hex": stored_score.hex(),
+                        "query_sha256": row.pair.query_sha256.hex(),
+                        "source_score_hex": row.score.hex(),
+                        "text_sha256": row.pair.text_sha256.hex(),
+                    }
+                )
+
+            if not receipt_reused:
+                connection.execute(
+                    "INSERT INTO imports(source_sha256, source_path, source_row_count, inserted_count, logical_digest, authorization_sha256) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        source_digest,
+                        str(source_path),
+                        row_count,
+                        len(inserted_keys),
+                        logical_digest,
+                        authorization_digest,
+                    ),
+                )
             connection.commit()
         except BaseException:
             connection.rollback()
@@ -938,14 +1039,17 @@ class GlobalScoreCache:
             "unique_row_count": len(normalized),
             "duplicate_count": duplicate_count,
             "inserted_count": len(inserted_keys),
-            "already_identical_count": len(normalized) - len(inserted_keys),
+            "already_identical_count": identical_count,
+            "conflict_policy": conflict_policy,
+            "conflict_count": len(conflicts),
+            "conflicts": conflicts,
             "logical_digest": logical_digest.hex(),
             "authorization_sha256": (
                 authorization_digest.hex() if authorization_digest is not None else None
             ),
-            "receipt_reused": False,
+            "receipt_reused": receipt_reused,
             "_inserted_keys": tuple(inserted_keys),
-            "_new_import": True,
+            "_new_import": not receipt_reused,
         }
 
     def _rollback_score_import(self, receipt: dict[str, object]) -> None:
@@ -1055,11 +1159,30 @@ class GlobalScoreCache:
             raise ValueError("lease_seconds must be positive")
         unique, ordered = self._normalize_pairs(pairs)
         if not ordered:
+            if _stats is not None:
+                _stats.update(cache_hits=0, cache_misses=0, model_batches=0)
             return []
         scores = self._lookup_normalized(unique)
         if _stats is not None:
             _stats["cache_hits"] = len(scores)
         pending = {pair.key: pair for pair in unique if pair.key not in scores}
+        if _stats is not None:
+            _stats["cache_misses"] = len(pending)
+            _stats["model_batches"] = 0
+        if self.read_only:
+            if pending:
+                raise ScoreCacheMiss(
+                    context_sha256=self.context_sha256,
+                    missing=[
+                        ScoreCacheMissEntry(
+                            cache_key=pair.key.hex(),
+                            query_sha256=pair.query_sha256.hex(),
+                            text_sha256=pair.text_sha256.hex(),
+                        )
+                        for pair in pending.values()
+                    ],
+                )
+            return [scores[pair.key] for pair in ordered]
         owner = f"{self._owner_prefix}:{uuid4().hex}"
         token = secrets.token_bytes(_CLAIM_TOKEN_BYTES)
         stop = threading.Event()
@@ -1089,6 +1212,8 @@ class GlobalScoreCache:
                         heartbeat_thread.start()
                     self._heartbeat(owner, token, lease_seconds)
                     batch_claims = claims
+                    if _stats is not None:
+                        _stats["model_batches"] += 1
                     predicted = list(
                         compute_batch([claim.pair.raw for claim in batch_claims])
                     )
@@ -1161,6 +1286,152 @@ class GlobalScoreCache:
         return hashlib.sha256(
             bytes.fromhex(self.context_sha256) + b"".join(sorted(digests))
         ).hexdigest()
+
+    def _portable_score_rows(self, pairs: Iterable[Any] | None) -> list[_ScoredPair]:
+        if pairs is None:
+            result = []
+            for key, query_hash, text_hash, score in self.connection.execute(
+                "SELECT key_sha256, query_sha256, text_sha256, score "
+                "FROM scores ORDER BY key_sha256"
+            ):
+                pair = self._normalize_pair(
+                    {
+                        "cache_key": bytes(key),
+                        "query_sha256": bytes(query_hash),
+                        "text_sha256": bytes(text_hash),
+                    }
+                )
+                result.append(_ScoredPair(pair, _finite_score(score, source="stored score")))
+            return result
+
+        unique, _ordered = self._normalize_pairs(pairs)
+        found = self._lookup_normalized(unique)
+        missing = [
+            ScoreCacheMissEntry(
+                cache_key=pair.key.hex(),
+                query_sha256=pair.query_sha256.hex(),
+                text_sha256=pair.text_sha256.hex(),
+            )
+            for pair in unique
+            if pair.key not in found
+        ]
+        if missing:
+            raise ScoreCacheMiss(context_sha256=self.context_sha256, missing=missing)
+        return [
+            _ScoredPair(pair, found[pair.key])
+            for pair in sorted(unique, key=lambda item: item.key)
+        ]
+
+    def export_portable_jsonl(
+        self,
+        destination: Path,
+        pairs: Iterable[Any] | None = None,
+    ) -> dict[str, object]:
+        """Write deterministic, database-independent score rows and context metadata."""
+        destination = Path(destination)
+        rows = self._portable_score_rows(pairs)
+        records: list[dict[str, object]] = [
+            {
+                "context": self.context.context_payload,
+                "context_sha256": self.context_sha256,
+                "portable_schema_version": PORTABLE_SCORE_CACHE_SCHEMA_VERSION,
+                "type": "score-cache-metadata",
+            }
+        ]
+        records.extend(
+            {
+                "cache_key": row.pair.key.hex(),
+                "query_sha256": row.pair.query_sha256.hex(),
+                "score_hex": row.score.hex(),
+                "text_sha256": row.pair.text_sha256.hex(),
+                "type": "score",
+            }
+            for row in rows
+        )
+        raw = b"".join(_canonical_json(record) + b"\n" for record in records)
+        destination.write_bytes(raw)
+        return {
+            "context_sha256": self.context_sha256,
+            "logical_digest": self._score_rows_logical_digest(rows).hex(),
+            "portable_schema_version": PORTABLE_SCORE_CACHE_SCHEMA_VERSION,
+            "row_count": len(rows),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    def import_portable_jsonl(
+        self,
+        source: Path,
+        *,
+        conflict_policy: str = "strict",
+    ) -> dict[str, object]:
+        """Validate and transactionally import a canonical portable score artifact."""
+        if conflict_policy not in {"strict", "keep-existing"}:
+            raise ValueError("score conflict policy must be 'strict' or 'keep-existing'")
+        source = Path(source)
+        raw = source.read_bytes()
+        raw_lines = raw.splitlines()
+        if not raw_lines or raw != b"\n".join(raw_lines) + b"\n":
+            raise ValueError("portable score JSONL must be nonempty and newline terminated")
+        records: list[dict[str, Any]] = []
+        for line in raw_lines:
+            try:
+                record = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("portable score JSONL contains invalid JSON") from exc
+            if not isinstance(record, dict) or _canonical_json(record) != line:
+                raise ValueError("portable score JSONL records must be canonical JSON objects")
+            records.append(record)
+        expected_metadata = {
+            "context": self.context.context_payload,
+            "context_sha256": self.context_sha256,
+            "portable_schema_version": PORTABLE_SCORE_CACHE_SCHEMA_VERSION,
+            "type": "score-cache-metadata",
+        }
+        if records[0] != expected_metadata:
+            raise ValueError("portable score cache context metadata mismatch")
+        score_rows: list[dict[str, object]] = []
+        expected_fields = {
+            "cache_key",
+            "query_sha256",
+            "score_hex",
+            "text_sha256",
+            "type",
+        }
+        prior_key: str | None = None
+        for record in records[1:]:
+            if set(record) != expected_fields or record.get("type") != "score":
+                raise ValueError("portable score JSONL contains an invalid score record")
+            cache_key = record.get("cache_key")
+            if not isinstance(cache_key, str) or (prior_key is not None and cache_key <= prior_key):
+                raise ValueError("portable score JSONL rows must have unique sorted cache keys")
+            score_hex = record.get("score_hex")
+            if not isinstance(score_hex, str):
+                raise ValueError("portable score score_hex must be a string")
+            try:
+                score = float.fromhex(score_hex)
+            except ValueError as exc:
+                raise ValueError("portable score score_hex is invalid") from exc
+            score = _finite_score(score, source="portable score")
+            if score.hex() != score_hex:
+                raise ValueError("portable score score_hex is not canonical")
+            score_rows.append(
+                {
+                    "cache_key": cache_key,
+                    "query_sha256": record.get("query_sha256"),
+                    "text_sha256": record.get("text_sha256"),
+                    "score": score,
+                }
+            )
+            prior_key = cache_key
+        receipt = self.import_scores(
+            score_rows,
+            source_path=source,
+            source_sha256=hashlib.sha256(raw).digest(),
+            expected_row_count=len(score_rows),
+            conflict_policy=conflict_policy,
+        )
+        receipt["portable_schema_version"] = PORTABLE_SCORE_CACHE_SCHEMA_VERSION
+        return receipt
 
     def _legacy_import_row(
         self,

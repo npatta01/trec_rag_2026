@@ -1,0 +1,35 @@
+schema_version: facet_pilot_config_v2
+
+experiment:
+  id: facet-deepseek-rag25-dev-v1
+
+topics:
+  path: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+
+execution:
+  topic_workers: 2
+
+retrieval:
+  index: climbmix-400b
+  cache_dir: cache/retrieval/pyserini_remote
+  query_sources: [original, subnarrative]
+  documents_per_query: 1000
+  corpus_epoch: climbmix-400b-operator-archive-facet-2025-v2-sha256-2ccad901eb908ac14747bafd2069f7c8aa96ecaaa8cc30457ff47c73ce3bf81f
+
+passage:
+  model: mixedbread-ai/mxbai-rerank-base-v2
+  score_cache_dir: cache/reranker
+  # Pinned rather than `auto` so the sealed passage-search identity is the same
+  # string on every host. `auto` resolves per hardware, and a checkpoint scored
+  # where it resolved to `cpu` cannot be resumed or exported where it resolves
+  # to `cuda`. ROCm reports itself as `cuda`, so this covers the ROCm host and a
+  # rented NVIDIA box alike.
+  device: cuda
+  passages_per_query: 100
+  chunk_max_characters: 3500
+  chunk_overlap_characters: 350
+
+nuggets:
+  evidence_budget_per_subnarrative: 40
+  maximum_claims_per_subnarrative: 20
+  maximum_supporting_documents_per_claim: 3

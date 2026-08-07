@@ -4,6 +4,7 @@
 .pytest_cache/
 *.egg-info/
 .env
+.env.local
 tmp/
 outputs/
 cache/

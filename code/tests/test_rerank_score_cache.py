@@ -18,6 +18,7 @@ from trec_rag.pipeline_models import RetrievedCandidate
 from trec_rag.ranking import coverage_aware_long_doc_rank
 from trec_rag.rerank_score_cache import (
     GlobalScoreCache,
+    ScoreCacheMiss,
     ScoreCacheContext,
     _document_artifact_row,
     _score_document_rows,
@@ -699,6 +700,214 @@ def test_v2_lookup_preserves_order_and_deduplicates_keys(tmp_path):
     assert cache.lookup_many(
         [("q2", "t2"), ("q1", "t1"), ("q2", "t2"), ("missing", "text")]
     ) == [2.5, 1.25, 2.5, None]
+
+
+def test_v2_read_only_cache_requires_existing_database_without_side_effects(tmp_path):
+    context = _v2_context()
+    writable = GlobalScoreCache(tmp_path, context)
+    writable.add_many([("query", "passage", 1.25)])
+    database = writable.path
+    writable.close()
+    for suffix in ("-wal", "-shm"):
+        Path(f"{database}{suffix}").unlink(missing_ok=True)
+    before = sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+
+    read_only = GlobalScoreCache(tmp_path, context, read_only=True)
+
+    assert read_only.require_many([("query", "passage")]) == [1.25]
+    assert sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*")) == before
+    assert not Path(f"{database}-wal").exists()
+    assert not Path(f"{database}-shm").exists()
+
+    missing_root = tmp_path / "missing-root"
+    with pytest.raises(FileNotFoundError, match="score cache"):
+        GlobalScoreCache(missing_root, context, read_only=True)
+    assert not missing_root.exists()
+
+
+def test_v2_require_many_reports_all_unique_missing_entries_structurally(tmp_path):
+    context = _v2_context()
+    writable = GlobalScoreCache(tmp_path, context)
+    writable.add_many([("present query", "present passage", 2.5)])
+    writable.close()
+    read_only = GlobalScoreCache(tmp_path, context, read_only=True)
+
+    with pytest.raises(ScoreCacheMiss) as captured:
+        read_only.require_many(
+            [
+                ("present query", "present passage"),
+                ("missing query", "missing passage"),
+                ("missing query", "missing passage"),
+                ("other query", "other passage"),
+            ]
+        )
+    error = captured.value
+
+    assert error.context_sha256 == context.context_sha256
+    assert [entry.cache_key for entry in error.missing] == [
+        read_only.cache_key(query_text="missing query", text="missing passage"),
+        read_only.cache_key(query_text="other query", text="other passage"),
+    ]
+    assert error.missing[0].query_sha256 == hashlib.sha256(b"missing query").hexdigest()
+    assert error.missing[0].text_sha256 == hashlib.sha256(b"missing passage").hexdigest()
+    assert "2 required score-cache entries are missing" in str(error)
+
+
+def test_v2_portable_jsonl_is_canonical_deterministic_and_idempotent(tmp_path):
+    context = _v2_context()
+    first = GlobalScoreCache(tmp_path / "first", context)
+    second = GlobalScoreCache(tmp_path / "second", context)
+    rows = [("query-b", "passage-b", 0.5), ("query-a", "passage-a", 1.25)]
+    first.add_many(rows)
+    second.add_many(reversed(rows))
+    first_artifact = tmp_path / "first.jsonl"
+    second_artifact = tmp_path / "second.jsonl"
+
+    first_manifest = first.export_portable_jsonl(first_artifact)
+    second_manifest = second.export_portable_jsonl(second_artifact)
+
+    assert first_artifact.read_bytes() == second_artifact.read_bytes()
+    lines = first_artifact.read_text(encoding="utf-8").splitlines()
+    assert all(
+        line == json.dumps(json.loads(line), sort_keys=True, separators=(",", ":"))
+        for line in lines
+    )
+    assert json.loads(lines[0]) == {
+        "context": context.context_payload,
+        "context_sha256": context.context_sha256,
+        "portable_schema_version": "portable-score-cache-v1",
+        "type": "score-cache-metadata",
+    }
+    exported_rows = [json.loads(line) for line in lines[1:]]
+    assert [row["cache_key"] for row in exported_rows] == sorted(
+        row["cache_key"] for row in exported_rows
+    )
+    assert {row["score_hex"] for row in exported_rows} == {
+        "0x1.0000000000000p-1",
+        "0x1.4000000000000p+0",
+    }
+    assert first_manifest == second_manifest
+    assert first_manifest["row_count"] == 2
+    assert first_manifest["sha256"] == hashlib.sha256(first_artifact.read_bytes()).hexdigest()
+
+    imported = GlobalScoreCache(tmp_path / "imported", context)
+    first_receipt = imported.import_portable_jsonl(first_artifact)
+    second_receipt = imported.import_portable_jsonl(first_artifact)
+    assert first_receipt["inserted_count"] == 2
+    assert second_receipt["inserted_count"] == 0
+    assert second_receipt["receipt_reused"] is True
+    assert imported.require_many(rows) == [0.5, 1.25]
+
+
+def test_v2_portable_strict_conflict_rolls_back_the_whole_import(tmp_path):
+    context = _v2_context()
+    source = GlobalScoreCache(tmp_path / "source", context)
+    candidates = [(f"query-{index}", f"passage-{index}") for index in range(20)]
+    earlier, conflicting = sorted(
+        candidates,
+        key=lambda pair: source.cache_key(query_text=pair[0], text=pair[1]),
+    )[:2]
+    source.add_many([(*earlier, 1.0), (*conflicting, 2.0)])
+    artifact = tmp_path / "scores.jsonl"
+    source.export_portable_jsonl(artifact)
+    target = GlobalScoreCache(tmp_path / "target", context)
+    target.add_many([(*conflicting, 9.0)])
+
+    with pytest.raises(ValueError, match="conflicting score"):
+        target.import_portable_jsonl(artifact, conflict_policy="strict")
+
+    assert target.lookup_many([earlier, conflicting]) == [None, 9.0]
+    assert target.connection.execute("SELECT count(*) FROM imports").fetchone()[0] == 0
+
+
+def test_v2_portable_keep_existing_conflicts_are_audited_and_idempotent(tmp_path):
+    context = _v2_context()
+    source = GlobalScoreCache(tmp_path / "source", context)
+    source.add_many([("new query", "new passage", 1.0), ("same query", "same passage", 2.0)])
+    artifact = tmp_path / "scores.jsonl"
+    source.export_portable_jsonl(artifact)
+    target = GlobalScoreCache(tmp_path / "target", context)
+    target.add_many([("same query", "same passage", 9.0)])
+    expected_conflict = {
+        "cache_key": target.cache_key(query_text="same query", text="same passage"),
+        "existing_score_hex": 9.0.hex(),
+        "query_sha256": hashlib.sha256(b"same query").hexdigest(),
+        "source_score_hex": 2.0.hex(),
+        "text_sha256": hashlib.sha256(b"same passage").hexdigest(),
+    }
+
+    first = target.import_portable_jsonl(artifact, conflict_policy="keep-existing")
+    second = target.import_portable_jsonl(artifact, conflict_policy="keep-existing")
+
+    assert target.require_many(
+        [("new query", "new passage"), ("same query", "same passage")]
+    ) == [1.0, 9.0]
+    assert first["inserted_count"] == 1
+    assert first["already_identical_count"] == 0
+    assert first["conflict_count"] == 1
+    assert first["conflicts"] == [expected_conflict]
+    assert first["receipt_reused"] is False
+    assert second["inserted_count"] == 0
+    assert second["already_identical_count"] == 1
+    assert second["conflict_count"] == 1
+    assert second["conflicts"] == [expected_conflict]
+    assert second["receipt_reused"] is True
+
+
+def test_v2_portable_import_rejects_nonfinite_scores_without_publication(tmp_path):
+    context = _v2_context()
+    source = GlobalScoreCache(tmp_path / "source", context)
+    source.add_many([("query", "passage", 1.0)])
+    artifact = tmp_path / "scores.jsonl"
+    source.export_portable_jsonl(artifact)
+    records = [json.loads(line) for line in artifact.read_text(encoding="utf-8").splitlines()]
+    records[1]["score_hex"] = "inf"
+    artifact.write_text(
+        "".join(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+            for record in records
+        ),
+        encoding="utf-8",
+    )
+    target = GlobalScoreCache(tmp_path / "target", context)
+
+    with pytest.raises(ValueError, match="finite"):
+        target.import_portable_jsonl(artifact)
+
+    assert target.connection.execute("SELECT count(*) FROM scores").fetchone()[0] == 0
+    assert target.connection.execute("SELECT count(*) FROM imports").fetchone()[0] == 0
+
+
+def test_v2_portable_import_rejects_noncanonical_json_and_malformed_hashes(tmp_path):
+    context = _v2_context()
+    source = GlobalScoreCache(tmp_path / "source", context)
+    source.add_many([("query", "passage", 1.0)])
+    artifact = tmp_path / "scores.jsonl"
+    source.export_portable_jsonl(artifact)
+    canonical = artifact.read_bytes()
+    records = [json.loads(line) for line in canonical.splitlines()]
+    target = GlobalScoreCache(tmp_path / "target", context)
+
+    artifact.write_text(
+        "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="canonical"):
+        target.import_portable_jsonl(artifact)
+
+    records[1]["query_sha256"] = "not-a-sha256"
+    artifact.write_text(
+        "".join(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+            for record in records
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="hash|hexadecimal"):
+        target.import_portable_jsonl(artifact)
+
+    assert target.connection.execute("SELECT count(*) FROM scores").fetchone()[0] == 0
+    assert target.connection.execute("SELECT count(*) FROM imports").fetchone()[0] == 0
 
 
 def test_v2_overlapping_processes_compute_each_live_key_once(tmp_path):

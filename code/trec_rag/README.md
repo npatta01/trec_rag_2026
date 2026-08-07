@@ -234,69 +234,222 @@ planning, retrieval, evidence, and canonicalization; they belong only in
 post-seal evaluation. Outputs include source text and generated claims, so keep
 `outputs/` ignored and private.
 
-### Splitting one run across hosts
+### Sharding retrieval across dstack hosts
 
-Topic selection plus per-topic sealing make it practical to run part of a run on
-a rented GPU box and finish it locally. Partition the topics with
-`--topic-subset`, never overlap the two sets, and copy the remote work back
-before the final local run. Sealed topics revalidate and are skipped, the
-remaining topics run locally, and the export is regenerated over every selected
-topic, so the organizer TSV, full-text ZIP, and handoff never need manual
-merging.
+Do not copy live cache directories or SQLite databases between machines. Pack
+each completed topic with `trec_rag.competition_cache_bundle`, publish the two
+immutable bundle files, verify them after download, and merge through the bundle
+API. The archive carries the authenticated topic checkpoint, content-addressed
+retrieval/document/planning/canonical/similarity entries, and portable reranker
+JSONL. It excludes locks, WAL files, raw provider responses, qrels, gold data,
+RAG answers, and model weights. Before publishing `bundle-complete.json`, the
+packer extracts the proposed archive in isolation, reconstructs its portable
+score databases, and runs the topic through a fresh cache-only replay with
+network and model loading disabled. The standalone verifier repeats that proof;
+a structurally valid but incomplete cache shard is rejected.
 
-The downloadable artifact is **two directories**, not one:
+The checked-in dstack task template is
+`.dstack/rag26-retrieval-cache-shard.yaml`. Always invoke it through
+`code/tools/apply_retrieval_cache_shard.sh`; the template's deliberately
+nonexistent repo path makes a bare `dstack apply -f` fail locally. The launcher
+requires a clean source branch whose tracking commit is an ancestor, runs the
+credential-free topic preflight, clones only committed bytes into a private
+temporary directory, binds that clone to the exact tracking commit, and passes
+only that sanitized snapshot to dstack. Ignored `.env` files, ignored local
+configs, untracked assets, and tracked-but-uncommitted changes therefore cannot
+enter the transport patch. No branch push is required.
 
-| Path | Required | Why |
+The remote wrapper commits dstack's applied patch only in the disposable
+checkout, verifies a clean `HEAD`, and installs the locked CUDA environment
+against the image's existing Python once per machine. It accepts one or two
+unique repeated `--topic` selectors. Environment setup, bucket authentication,
+model prefetch, and the CUDA gate are shared; each topic receives a distinct
+one-worker config, cache root, output experiment, work root, bundle directory,
+and private prefix. Topic jobs run concurrently in independent subshells. A
+failed topic makes the overall task nonzero but does not interrupt or roll back
+a successful sibling's immutable publication. Both the local preflight and
+remote job use only the project-lock-installed `hf` executable; the `uvx hf`
+fallback is intentionally unsupported.
+
+The wrapper downloads and then resolves both public snapshots offline before
+retrieval:
+
+| Snapshot | Revision | Loaded by |
 | --- | --- | --- |
-| `outputs/<experiment.id>/<topic-id>/` | yes | sealed per-topic checkpoints, ledger, and receipts |
-| `cache/documents/v1/` | yes | content-addressed document text the export reads for every row |
-| `cache/retrieval/pyserini_remote/` | no | avoids re-querying the hosted index if a topic is rerun |
-| `cache/canonical/<prompt-version>/` | no | avoids re-paying for hosted canonical calls on a rerun |
-| `cache/reranker/` | **no — do not copy** | the score database path is derived from the scoring context, so both hosts write the same filename with different contents and a copy clobbers local scores |
+| `mixedbread-ai/mxbai-rerank-base-v2` | `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` | passage scoring |
+| `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | evidence selection |
 
-Skipping `cache/documents/v1/` is the quiet failure: the checkpoints validate
-and the export then fails on missing document text. Both required directories
-are content-addressed or topic-scoped, so they merge by copy.
+Model weights are temporary public assets and are not uploaded in the shard.
+Successful bundles go to this private Hugging Face Bucket layout, with the
+archive uploaded first and `bundle-complete.json` last:
 
-Both hosts must agree on the things the checkpoints seal, or resume fails
-closed:
+```text
+hf://buckets/Npatta01/trec_mlm_2026/
+  trec_rag_2026/experiments/<run-id>/<topic-id>/
+    bundle.tar.zst
+    bundle-complete.json
+```
 
-- **The same config bytes.** The YAML SHA-256 is sealed into every dispatch and
-  projection receipt, so `experiment.id` and every other field must be
-  byte-identical on both hosts.
-- **`passage.device` pinned, not `auto`.** The resolved device string is part of
-  the sealed passage-search identity, and the exporting host recomputes it.
-  `auto` resolving to `cpu` remotely and `cuda` locally rejects the download.
-  The checked-in config pins `cuda`, which both ROCm and NVIDIA report.
-- **The same `INDEX_URL`.** It is part of the retriever identity and is required
-  even for a resume-and-export pass that issues no queries.
-- **A clean tracked worktree containing real git metadata.** The runner rejects
-  a dirty tree and reads `HEAD` for the recorded commit, so ship a checkout
-  rather than a file tarball.
-- **No commit change inside a topic.** All phases of one topic must share a
-  commit; different topics may carry different commits.
-- **Both pinned model snapshots pre-cached.** The retrieval path loads two, each
-  at a pinned revision with `local_files_only=True`, and each must resolve from
-  the cache alone before a run starts:
+The wrapper refuses a non-private bucket or any non-empty selected topic prefix.
+Because the `hf` CLI performs a lexical prefix lookup after stripping a trailing
+slash, every gate lists the run-level parent and then validates and filters the
+exact `<topic-id>/` subtree. Safe sibling topics are ignored; malformed paths,
+paths outside that run parent, and non-directory lookalike roots fail closed.
+The wrapper does not delete or overwrite remote files. After both uploads for
+each topic it repeats that exact-subtree validation, downloads both files,
+compares their bytes, and runs the bundle verifier inside that topic's subshell.
+A dstack success without every selected topic's round trip is not a completed
+batch.
 
-  | Snapshot | Revision | Loaded by |
-  | --- | --- | --- |
-  | `mixedbread-ai/mxbai-rerank-base-v2` | `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` | passage scoring |
-  | `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | evidence selection |
+You may run the credential-free wrapper preflight by itself before looking at
+offers. `--config` accepts only a tracked, repository-relative path:
 
-  `code/tools/setup_cuda_env.sh` fetches both and re-resolves each with
-  `local_files_only=True`. Caching only the reranker is the trap: selection runs
-  *after* passage scoring, so the missing MiniLM surfaces as a late failure with
-  the expensive stage already paid for.
+```bash
+HF_CLI_MODE=direct bash code/tools/run_retrieval_cache_shard.sh \
+  --preflight \
+  --topic 14 \
+  --topic 37 \
+  --run-id nonagentic-rag25-dev-20260806 \
+  --config configs/rag25_competition_retrieval_v1.yaml
+```
 
-Set up a rented NVIDIA box with `code/tools/setup_env.sh`, which now detects
-CUDA as well as ROCm and syncs the `cuda` dependency group. That group pins the
-same `sentence-transformers`, `transformers`, and `numpy` versions the `rocm`
-group resolves to, so reranker score-cache entries stay interchangeable and the
-recorded backend version stays honest. The two groups are declared conflicting,
-so `uv.lock` carries separate CUDA and ROCm resolution forks. Regenerate it on a
-ROCm host whenever either group changes, because `repo.radeon.com` must be
-reachable while uv resolves both forks.
+The dstack task accepts only the named secrets `HF_TOKEN`, `INDEX_URL`,
+`PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY`. Configure them in the dstack
+project; never put their values in the YAML or command line. Preview each
+one- or two-topic shard without submitting it and retain the complete offers
+output. The launcher's `--preview` mode supplies the declining `n` itself:
+
+```bash
+bash code/tools/apply_retrieval_cache_shard.sh \
+  --preview \
+  --name rag25-cache-14-37 \
+  -- --topic 14 --topic 37 \
+  --run-id nonagentic-rag25-dev-20260806 \
+  --config configs/rag25_competition_retrieval_v1.yaml
+```
+
+The task requests one on-demand `A40`, `A6000`, or `L40S` with at least 48 GB
+VRAM, 32 GB RAM, and 100 GB disk. It has a `$1.00/hour` ceiling, a five-hour
+running limit, a 30-minute retry only for `no-capacity`, and zero idle retention.
+Previewing is read-only. After the compliant offers and expected hosted work
+have been explicitly approved, replace `--preview` with `--launch`; the launcher
+then supplies dstack's `-y -d` flags itself.
+
+Download each completed private prefix to a separate local directory and verify
+before touching the shared cache:
+
+```bash
+shard_root="$(pwd)/outputs/private-cache-shards/nonagentic-rag25-dev-20260806"
+mkdir -p "$shard_root/14" "$shard_root/37"
+
+.venv/bin/hf buckets sync \
+  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/14 \
+  "$shard_root/14"
+.venv/bin/hf buckets sync \
+  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/37 \
+  "$shard_root/37"
+
+.venv/bin/python -m trec_rag.competition_cache_bundle verify \
+  "$shard_root/14"
+.venv/bin/python -m trec_rag.competition_cache_bundle verify \
+  "$shard_root/37"
+```
+
+Merge only verified bundles. The merge stages every source, journals intent,
+installs immutable files create-only, imports portable scores transactionally,
+checkpoints SQLite WAL state for immutable readers, and publishes its completion
+last. Run merges while no retrieval or other score-cache writer is using the
+destination. Merges targeting the same cache root are process-serialized through
+the private `cache/.cache-bundle-merge.lock`. `keep-existing`
+permits only validated finite reranker/similarity values for the same identity;
+it records, but never averages, small cross-device numerical differences:
+
+```bash
+.venv/bin/python -m trec_rag.competition_cache_bundle merge \
+  --cache-root "$(pwd)/cache" \
+  --outputs-root "$(pwd)/outputs" \
+  --score-conflicts keep-existing \
+  "$shard_root/14" \
+  "$shard_root/37"
+```
+
+An incomplete merge journal makes competition retrieval fail closed. Re-run the
+same merge after fixing the reported filesystem problem; do not delete the
+journal by hand.
+
+For the local proof, copy the canonical retrieval config under ignored
+`configs/local/`, assign a new experiment ID such as
+`nonagentic-rag25-dev-local-replay-20260806`, and run the same two topics with
+offline cache-only mode. Keep the real `INDEX_URL` because it is part of the
+retrieval identity, but mask credentials so a regression cannot reach a hosted
+service:
+
+```bash
+OPENROUTER_API_KEY=offline-disabled \
+PYSERINI_API_TOKEN=offline-disabled \
+HF_TOKEN=offline-disabled \
+TREC_RAG_CACHE_ROOT="$(pwd)/cache" \
+.venv/bin/python-rocm -m trec_rag.competition_retrieval \
+  configs/local/nonagentic-rag25-dev-local-replay-20260806.yaml \
+  --offline-cache-only \
+  --topic 14 --topic 37
+```
+
+Success requires authenticated per-topic and root cache-operation receipts with
+zero misses, network/provider calls, and model batches. It should be fast because
+it performs validated cache reads and local projection only, but there is no
+wall-time guarantee. A missing or corrupt cache entry fails before publishing a
+success receipt.
+
+Evaluate a completed local RAG 2025 retrieval replay only after that cache-only
+proof succeeds. The qrels below are **projected development qrels** generated
+for diagnostics; they are not exhaustive official TREC ground truth. Keep the
+report in an ignored private output directory:
+
+```bash
+.venv/bin/python -m trec_rag.competition_retrieval_evaluation \
+  --run outputs/nonagentic-rag25-dev-local-replay-20260806/r_output_trec_rag_2026.tsv \
+  --qrels trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels \
+  --topic 14 --topic 37 \
+  --output outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/topics-14-37.json
+```
+
+Repeat `--topic ID` for the exact population represented by an aggregate run.
+Every selected ID must belong to the pinned 22-topic qrels population; unknown
+IDs are rejected before inputs are read. The evaluator fails closed on missing
+or extra run topics and on malformed TREC rows, non-`Q0` rows, invalid ranks or
+scores, duplicate ranks or document IDs, conflicting run tags, ranks that are
+not dense from 1 in per-topic file order, and increasing per-topic scores. The
+CLI accepts only the pinned RAG 2025 assessor variant
+`rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1`, whose required
+SHA-256 is
+`42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37`.
+It also requires that qrels file to contain exactly the 22 development topics,
+use `0` in column 2, contain only integer grades from 0 through 4, and contain
+no duplicate topic/document pair. A same-named or structurally plausible file
+with different bytes is rejected rather than labeled as the pinned assessor.
+
+Each input is read once into an immutable byte snapshot. Parsing, metrics, and
+SHA-256 provenance all consume that same snapshot, so replacing a file during
+evaluation cannot mix identities. The canonical JSON report names the pinned
+assessor variant and its fixed repository-relative path independently of how
+the caller spelled `--qrels`; `assessor.input_path` preserves that invocation
+path. It explicitly labels the evidence as projected development qrels and
+reports aggregate plus per-topic metrics.
+
+The output must be distinct from both inputs. Direct path reuse, normalized or
+symlink aliases, and hardlinks are rejected before writing. The default metric
+suite pairs judged counts and rates with relevance diagnostics at cutoffs 10,
+50, and 100. Repeated `--metric NAME@CUTOFF` values must be unique, use a
+supported metric, and have a positive cutoff; `--relevance-threshold` must be
+an integer from 1 through 4.
+
+The CUDA dependency group pins the same `sentence-transformers`, `transformers`,
+and `numpy` versions the ROCm group resolves to, so reranker cache identities
+remain interchangeable. The two groups are declared conflicting, so `uv.lock`
+carries separate CUDA and ROCm resolution forks. Regenerate it on a ROCm host
+whenever either group changes, because `repo.radeon.com` must be reachable while
+uv resolves both forks.
 
 `code/tools/verify_torch_groups.sh` proves three things without installing
 anything:

@@ -14,8 +14,9 @@ import tempfile
 from typing import Any
 
 
-_SCHEMA_VERSION = "topic-job-receipt-v2"
+_SCHEMA_VERSION = "topic-job-receipt-v3"
 _RECEIPT_FILENAME = "topic-job-receipt.json"
+_OFFLINE_RECEIPT_FILENAME = "topic-job-receipt.offline-cache-only.json"
 _PROJECTION_MANIFEST = Path("canonical/retrieval-projection-manifest.json")
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -47,6 +48,7 @@ class TopicJob:
     config_bytes: bytes
     config_sha256: str
     topic_root: Path
+    offline_cache_only: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.topic_id, str) or not _SAFE_ID.fullmatch(self.topic_id):
@@ -65,6 +67,8 @@ class TopicJob:
             or sha256(self.config_bytes).hexdigest() != self.config_sha256
         ):
             raise ValueError("config_sha256 must bind the exact config_bytes")
+        if not isinstance(self.offline_cache_only, bool):
+            raise TypeError("offline_cache_only must be Boolean")
 
 
 @dataclass(frozen=True)
@@ -226,6 +230,7 @@ def read_topic_receipt(
         "run_id",
         "topic_id",
         "config_sha256",
+        "mode",
         "projection_manifest_sha256",
         "status",
         "stopping_reason",
@@ -239,6 +244,8 @@ def read_topic_receipt(
         raise TopicDispatchIntegrityError("topic receipt topic identity changed")
     if value.get("config_sha256") != job.config_sha256:
         raise TopicDispatchIntegrityError("topic receipt config identity changed")
+    if value.get("mode") != _job_mode(job):
+        raise TopicDispatchIntegrityError("topic receipt execution mode changed")
     try:
         receipt = TopicJobReceipt(
             topic_id=value["topic_id"],
@@ -291,7 +298,12 @@ def _validate_projection_manifest(job: TopicJob, receipt: TopicJobReceipt) -> No
 
 
 def _receipt_path(job: TopicJob) -> Path:
-    return job.topic_root / _RECEIPT_FILENAME
+    filename = _OFFLINE_RECEIPT_FILENAME if job.offline_cache_only else _RECEIPT_FILENAME
+    return job.topic_root / filename
+
+
+def _job_mode(job: TopicJob) -> str:
+    return "offline-cache-only" if job.offline_cache_only else "online"
 
 
 def _receipt_bytes(job: TopicJob, receipt: TopicJobReceipt) -> bytes:
@@ -301,6 +313,7 @@ def _receipt_bytes(job: TopicJob, receipt: TopicJobReceipt) -> bytes:
             "run_id": job.run_id,
             "topic_id": receipt.topic_id,
             "config_sha256": job.config_sha256,
+            "mode": _job_mode(job),
             "projection_manifest_sha256": receipt.projection_manifest_sha256,
             "status": receipt.status,
             "stopping_reason": receipt.stopping_reason,

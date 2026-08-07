@@ -31,6 +31,12 @@ def shared_checkout_root(repo_root: Path) -> Path | None:
 
 def repo_cache_root(repo_root: Path) -> Path:
     """Return the repo-root cache directory shared by linked worktrees."""
+    override = os.environ.get("TREC_RAG_CACHE_ROOT")
+    if override is not None:
+        configured = Path(override)
+        if not configured.is_absolute():
+            raise ValueError("TREC_RAG_CACHE_ROOT must be absolute")
+        return configured.resolve()
     return (shared_checkout_root(repo_root) or repo_root) / "cache"
 
 

@@ -11,7 +11,7 @@ import trec_rag.canonical_nuggets as canonical_nuggets
 import trec_rag.facet_pilot_config as facet_pilot_config
 import trec_rag.nuggetizer_adapter as nuggetizer_adapter
 import trec_rag.competition_retrieval as competition_retrieval
-from trec_rag.facet_extraction import BackendReply
+from trec_rag.facet_extraction import BackendReply, planning_cache_identity
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
 from trec_rag.competition_retrieval import (
@@ -35,7 +35,9 @@ def _write_config(
     extra: str = "",
 ) -> Path:
     (root / "topics.tsv").write_text(
-        "".join(f"{topic_id}\tOfficial narrative for {topic_id}.\n" for topic_id in topics),
+        "".join(
+            f"{topic_id}\tOfficial narrative for {topic_id}.\n" for topic_id in topics
+        ),
         encoding="utf-8",
     )
     config = root / "official.yaml"
@@ -69,7 +71,9 @@ nuggets:
     return config
 
 
-def test_config_uses_conventional_identity_and_binds_topic_source(tmp_path: Path) -> None:
+def test_config_uses_conventional_identity_and_binds_topic_source(
+    tmp_path: Path,
+) -> None:
     config = load_facet_pilot_config(
         _write_config(tmp_path, experiment_id="facet-b40-v1")
     )
@@ -96,11 +100,11 @@ def test_cli_passes_repeated_topics_to_run_official_in_argument_order(
     capsys,
 ) -> None:
     """Catches CLI selector reordering or loss before the retrieval run starts."""
-    calls: list[tuple[Path, tuple[str, ...] | None, Path | None]] = []
+    calls: list[tuple[Path, tuple[str, ...] | None, Path | None, bool]] = []
     config_path = tmp_path / "competition.yaml"
 
-    def run(config, *, topic_ids, topic_subset):
-        calls.append((config, topic_ids, topic_subset))
+    def run(config, *, topic_ids, topic_subset, offline_cache_only):
+        calls.append((config, topic_ids, topic_subset, offline_cache_only))
         return SimpleNamespace(
             retrieval_export=SimpleNamespace(
                 manifest=tmp_path / "outputs" / "retrieval_export_manifest.json"
@@ -109,11 +113,14 @@ def test_cli_passes_repeated_topics_to_run_official_in_argument_order(
 
     monkeypatch.setattr(competition_retrieval, "run_official", run)
 
-    assert competition_retrieval.main(
-        [str(config_path), "--topic", "rag2026-1", "--topic", "rag2026-0"]
-    ) == 0
+    assert (
+        competition_retrieval.main(
+            [str(config_path), "--topic", "rag2026-1", "--topic", "rag2026-0"]
+        )
+        == 0
+    )
 
-    assert calls == [(config_path, ("rag2026-1", "rag2026-0"), None)]
+    assert calls == [(config_path, ("rag2026-1", "rag2026-0"), None, False)]
     assert capsys.readouterr().out == f"output={tmp_path / 'outputs'}\n"
 
 
@@ -254,7 +261,10 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         "hits": 1000,
     }
     retriever = SimpleNamespace(identity=retriever_identity)
-    canonical_factory = lambda: object()
+
+    def canonical_factory() -> object:
+        return object()
+
     local = competition_retrieval._RuntimeDependencies(
         code_commit="a" * 40,
         document_scorer=object(),
@@ -310,6 +320,24 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
             manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
         )
         projection_receipts[topic.id] = projection_receipt
+        competition_retrieval._publish_topic_cache_operation_receipt(
+            config=config,
+            topic=topic,
+            config_sha256=config_sha256,
+            projection_manifest_sha256=projection_receipt.manifest_sha256,
+            mode="online",
+            phases={
+                name: {"resumed": False}
+                for name in ("planning", "retrieval", "scoring", "canonical")
+            },
+            stages={
+                stage: {
+                    counter: 0
+                    for counter in competition_retrieval._CACHE_OPERATION_COUNTER_NAMES
+                }
+                for stage in competition_retrieval.CACHE_OPERATION_STAGE_NAMES
+            },
+        )
         return competition_retrieval._TopicTaskOutcome(
             topic.id,
             False,
@@ -343,6 +371,8 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         assert export_events == ["written"]
         assert [topic.id for topic in topics] == ["topic-2", "topic-1"]
         assert config.experiment.id == "official-interface-test"
+        validated_export.manifest.parent.mkdir(parents=True, exist_ok=True)
+        validated_export.manifest.write_bytes(b"{}\n")
         export_events.append("validated")
         return validated_export
 
@@ -386,7 +416,10 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
     assert receipt.selected_topic_ids == ("topic-2", "topic-1")
     assert receipt.resumed_topic_ids == ()
     assert receipt.retrieval_export.official_run.name == "r_output_trec_rag_2026.tsv"
-    assert receipt.retrieval_export.with_text_archive.name == "retrieval_with_text.jsonl.zip"
+    assert (
+        receipt.retrieval_export.with_text_archive.name
+        == "retrieval_with_text.jsonl.zip"
+    )
     assert receipt.retrieval_export.manifest.name == "retrieval_export_manifest.json"
     assert receipt.retrieval_export is validated_export
     assert export_events == ["written", "validated"]
@@ -437,9 +470,7 @@ def test_run_official_rejects_corrupt_unsealed_checkpoint_before_topic_work(
         dependency_calls.append(True)
         return local
 
-    monkeypatch.setattr(
-        competition_retrieval, "_production_dependencies", dependencies
-    )
+    monkeypatch.setattr(competition_retrieval, "_production_dependencies", dependencies)
     monkeypatch.setattr(
         competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
     )
@@ -482,9 +513,7 @@ def test_run_official_rejects_dirty_tree_before_corrupt_resumed_seal(
     def dependencies():
         raise AssertionError("dirty trees must fail before runtime dependencies")
 
-    monkeypatch.setattr(
-        competition_retrieval, "_production_dependencies", dependencies
-    )
+    monkeypatch.setattr(competition_retrieval, "_production_dependencies", dependencies)
 
     with pytest.raises(RuntimeError, match="tracked changes"):
         run_official(config_path, topic_ids=("topic-2",))
@@ -552,6 +581,14 @@ class _PlanningBackend:
         self.reject = reject
         self.calls: list[Topic] = []
 
+    @property
+    def transport_invocation_count(self) -> int:
+        return len(self.calls)
+
+    @staticmethod
+    def planning_request_identity(topic: Topic):
+        return planning_cache_identity(topic)
+
     def extract(self, topic: Topic) -> object:
         self.calls.append(topic)
         if self.reject:
@@ -598,8 +635,18 @@ class _Retriever:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.transport_calls = 0
+
+    def cache_summary(self) -> dict[str, int]:
+        return {
+            "hits": 0,
+            "misses": self.transport_calls,
+            "bypasses": 0,
+            "writes": self.transport_calls,
+        }
 
     def retrieve(self, query: QueryVariant) -> list[RetrievedCandidate]:
+        self.transport_calls += 1
         self.calls.append(query.variant_name)
         lane = query.variant_name.replace(":", "-")
         return [
@@ -629,21 +676,38 @@ class _DocumentScorer:
                 device="cpu",
             )["scorer"]
         )
+        self._cache_misses = 0
+        self._model_batches = 0
+
+    @property
+    def stats(self) -> dict[str, int]:
+        return {
+            "cache_hits": 0,
+            "cache_misses": self._cache_misses,
+            "model_batches": self._model_batches,
+        }
 
     @staticmethod
     def cache_key(query_text: str, passage_text: str) -> str:
         return hashlib.sha256(f"{query_text}\0{passage_text}".encode()).hexdigest()
 
-    @staticmethod
-    def rank(query_text: str, chunks: object) -> tuple[MixedbreadScoredPassage, ...]:
+    def rank(
+        self,
+        query_text: str,
+        chunks: object,
+    ) -> tuple[MixedbreadScoredPassage, ...]:
         del query_text
         rows = tuple(chunks)
+        self._cache_misses += len(rows)
+        self._model_batches += int(bool(rows))
         return tuple(
             MixedbreadScoredPassage(chunk, float(len(rows) - index))
             for index, chunk in enumerate(rows)
         )
 
-    def score_lane(self, _topic: Topic, lane: object, candidates: object) -> tuple[LaneDocumentScore, ...]:
+    def score_lane(
+        self, _topic: Topic, lane: object, candidates: object
+    ) -> tuple[LaneDocumentScore, ...]:
         return tuple(
             LaneDocumentScore(
                 topic_id=row.topic_id,
@@ -661,9 +725,7 @@ class _DocumentScorer:
                 long_document_raw_logit=4.0,
                 weighted_passage_raw_logit=3.0,
                 within_document_span_support=2,
-                winning_passages=(
-                    PassageScore(0, 0, len(row.text), 3.0, 1),
-                ),
+                winning_passages=(PassageScore(0, 0, len(row.text), 3.0, 1),),
             )
             for rank, row in enumerate(candidates, start=1)
         )
@@ -683,10 +745,22 @@ class _CandidateScorer:
 
     def __init__(self) -> None:
         self.calls: list[object] = []
+        self._cache_misses = 0
+        self._model_batches = 0
+
+    @property
+    def accounting(self) -> dict[str, int]:
+        return {
+            "cache_hits": 0,
+            "cache_misses": self._cache_misses,
+            "model_batches": self._model_batches,
+        }
 
     def score_pairs(self, pairs: object) -> tuple[float, ...]:
         rows = tuple(pairs)
         self.calls.append(rows)
+        self._cache_misses += len(rows)
+        self._model_batches += int(bool(rows))
         return tuple(float(len(rows) - index) for index, _row in enumerate(rows))
 
 
@@ -695,19 +769,34 @@ class _Similarity:
 
     def __init__(self) -> None:
         self.calls: list[object] = []
+        self._cache_misses = 0
+        self._model_batches = 0
+
+    @property
+    def accounting(self) -> dict[str, int]:
+        return {
+            "cache_hits": 0,
+            "cache_misses": self._cache_misses,
+            "model_batches": self._model_batches,
+        }
 
     def cosine_matrix(self, texts: object) -> tuple[tuple[float, ...], ...]:
         rows = tuple(texts)
         self.calls.append(rows)
+        self._cache_misses += len(rows)
+        self._model_batches += int(bool(rows))
         return tuple(
-            tuple(1.0 if left == right else 0.0 for right in rows)
-            for left in rows
+            tuple(1.0 if left == right else 0.0 for right in rows) for left in rows
         )
 
 
 class _CanonicalBackend:
     def __init__(self) -> None:
         self.requests: list[object] = []
+
+    @property
+    def transport_invocation_count(self) -> int:
+        return len(self.requests)
 
     def complete(self, request: object) -> BackendReply:
         self.requests.append(request)
@@ -731,7 +820,11 @@ class _CanonicalBackend:
                 "response_model": "deepseek/deepseek-v4-flash-20260423",
                 "provider": "fake-provider",
                 "finish_reason": "stop",
-                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 2,
+                    "total_tokens": 5,
+                },
             },
         )
 
@@ -810,16 +903,10 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
         build_events.append("before")
         receipt = real_build_topic_projection(*args, **kwargs)
         assert complete.is_file()
-        assert (
-            complete.parent / "retrieval-projection.json"
-        ).is_file()
-        assert (
-            complete.parent / "retrieval-projection-manifest.json"
-        ).is_file()
+        assert (complete.parent / "retrieval-projection.json").is_file()
+        assert (complete.parent / "retrieval-projection-manifest.json").is_file()
         expanded = json.loads(complete.read_bytes())
-        assert {
-            row["relative_path"] for row in expanded["artifacts"]
-        } == {
+        assert {row["relative_path"] for row in expanded["artifacts"]} == {
             "canonical/handoff/candidate-requests.jsonl",
             "canonical/handoff/selection-contexts.jsonl",
             "canonical/handoff/handoff-manifest.json",
@@ -828,12 +915,12 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
             "canonical/subnarrative-selections.jsonl",
             "canonical/selection-manifest.json",
             "canonical/canonical-nuggets.jsonl",
-                "canonical/canonical-nugget-manifest.json",
-                "canonical/retrieval-projection.json",
-                "canonical/retrieval-projection-manifest.json",
-                "canonical/generation-projection.json",
-                "canonical/generation-projection-manifest.json",
-            }
+            "canonical/canonical-nugget-manifest.json",
+            "canonical/retrieval-projection.json",
+            "canonical/retrieval-projection-manifest.json",
+            "canonical/generation-projection.json",
+            "canonical/generation-projection-manifest.json",
+        }
         build_events.append("after")
         return receipt
 
@@ -881,9 +968,9 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
     assert len(canonical.requests) == 2
     canonical_rows = [
         json.loads(line)
-        for line in (
-            output / "housing-1" / "canonical" / "canonical-nuggets.jsonl"
-        ).read_text(encoding="utf-8").splitlines()
+        for line in (output / "housing-1" / "canonical" / "canonical-nuggets.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert {row["subnarrative_id"] for row in canonical_rows} == {
         "subnarrative-1",
@@ -907,10 +994,7 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
         assert evidence[0]["docid"]
     assert (output / "housing-1" / "canonical" / "complete.json").is_file()
     assert (
-        tmp_path
-        / "cache"
-        / "canonical"
-        / canonical_nuggets.PROMPT_VERSION
+        tmp_path / "cache" / "canonical" / canonical_nuggets.PROMPT_VERSION
     ).is_dir()
     assert not (output / "housing-1" / "canonical" / "response-cache").exists()
     assert first.retrieval_export.official_run.read_text().startswith("housing-1 Q0 ")
@@ -1029,11 +1113,7 @@ def test_public_run_rejects_base_only_legacy_checkpoint_without_hosted_or_model_
     (canonical_root / "generation-projection.json").unlink()
     (canonical_root / "generation-projection-manifest.json").unlink()
     (
-        tmp_path
-        / "outputs"
-        / "public-e2e"
-        / "housing-1"
-        / "topic-job-receipt.json"
+        tmp_path / "outputs" / "public-e2e" / "housing-1" / "topic-job-receipt.json"
     ).unlink()
 
     class _FailingPlanning:

@@ -9,6 +9,7 @@ from hashlib import sha256
 import ipaddress
 import json
 import os
+from pathlib import Path
 import re
 import socket
 import threading
@@ -20,6 +21,13 @@ import urllib.parse
 import urllib.request
 
 from trec_rag.pipeline_models import QueryVariant
+from trec_rag.planning_cache import (
+    PlanningCache,
+    PlanningCacheIdentity,
+    PlanningCacheIntegrityError,
+    PlanningCacheMiss,
+    build_planning_cache_identity,
+)
 from trec_rag.topics import Topic
 
 
@@ -41,6 +49,7 @@ __all__ = [
     "extract_facets",
     "parse_generated_query_plan",
     "plan_facet_queries",
+    "planning_cache_identity",
     "render_facet_queries",
     "BackendReply",
 ]
@@ -346,16 +355,23 @@ class OpenRouterDeepSeekFacetBackend:
         self._api_key = api_key
         self._transport = transport if transport is not None else _UrllibFacetTransport()
         self._receipt_hook = receipt_hook
+        self._transport_invocation_count = 0
+
+    @property
+    def transport_invocation_count(self) -> int:
+        """Return exact calls made through the hosted transport boundary."""
+        return self._transport_invocation_count
+
+    def planning_request_identity(self, topic: Topic) -> PlanningCacheIdentity:
+        """Bind cache publication to this backend's exact fixed request."""
+        return planning_cache_identity(topic)
 
     def extract(self, topic: Topic) -> object:
         if not isinstance(topic, Topic):
             raise TypeError("topic must be a Topic")
-        payload = _openrouter_request_payload(topic)
         request = FacetRequest(
             url=_chat_completions_url(OPENROUTER_BASE_URL),
-            body=json.dumps(
-                payload, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8"),
+            body=_openrouter_request_body(topic),
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {self._api_key}",
@@ -420,6 +436,7 @@ class OpenRouterDeepSeekFacetBackend:
         send = getattr(self._transport, "send", None)
         if not callable(send):
             raise TypeError("transport must provide send(request)")
+        self._transport_invocation_count += 1
         response = send(request)
         if not isinstance(response, FacetResponse):
             raise TypeError("transport must return a FacetResponse")
@@ -524,16 +541,154 @@ def _credentialed_endpoint_is_safe(endpoint_url: str) -> bool:
         return False
 
 
-def extract_facets(topic: Topic, backend: StructuredFacetBackend) -> FacetPlanningResult:
-    """Return validated facets, or preserve exactly the original query on failure."""
+def planning_cache_identity(topic: Topic) -> PlanningCacheIdentity:
+    """Return the full deterministic identity of the fixed OpenRouter request."""
     if not isinstance(topic, Topic):
         raise TypeError("topic must be a Topic")
+    return build_planning_cache_identity(
+        request_body=_openrouter_request_body(topic),
+        endpoint=_chat_completions_url(OPENROUTER_BASE_URL),
+        model=OPENROUTER_DEEPSEEK_MODEL,
+        prompt_version=PROMPT_VERSION,
+        schema_version=SCHEMA_VERSION,
+        topic_id=topic.id,
+        narrative=topic.narrative,
+    )
+
+
+def extract_facets(
+    topic: Topic,
+    backend: StructuredFacetBackend | None = None,
+    *,
+    planning_cache_root: Path | None = None,
+    backend_factory: object | None = None,
+    cache_only: bool = False,
+    cache_stats: dict[str, int] | None = None,
+) -> FacetPlanningResult:
+    """Return validated facets, optionally through the immutable planning cache."""
+    if not isinstance(topic, Topic):
+        raise TypeError("topic must be a Topic")
+    if cache_stats is not None and not isinstance(cache_stats, dict):
+        raise TypeError("cache_stats must be a dict")
+    if backend_factory is not None and not callable(backend_factory):
+        raise TypeError("backend_factory must be callable")
+    if backend is not None and backend_factory is not None:
+        raise ValueError("backend and backend_factory are mutually exclusive")
+    stats = cache_stats
+    if stats is not None:
+        stats.update(cache_hits=0, cache_misses=0, backend_calls=0, provider_calls=0)
+    if planning_cache_root is None:
+        if cache_only:
+            raise ValueError("cache_only requires planning_cache_root")
+        if backend is None:
+            if backend_factory is None:
+                raise TypeError("backend or backend_factory is required")
+            backend = backend_factory()
+        return _invoke_facet_backend(topic, backend, stats)
+
+    cache = PlanningCache(planning_cache_root)
+    identity = planning_cache_identity(topic)
+    try:
+        payload = cache.load(identity)
+    except PlanningCacheMiss:
+        if stats is not None:
+            stats["cache_misses"] = 1
+        if cache_only:
+            raise
+    else:
+        result = plan_facet_queries(topic, payload)
+        if result.used_fallback or result.plan is None:
+            raise PlanningCacheIntegrityError(
+                "validated planning payload failed deterministic semantic validation"
+            )
+        if stats is not None:
+            stats["cache_hits"] = 1
+        return result
+
+    if backend is None:
+        if backend_factory is None:
+            backend = OpenRouterDeepSeekFacetBackend()
+        else:
+            backend = backend_factory()
+    _require_planning_request_identity(backend, topic, identity)
+    result = _invoke_facet_backend(topic, backend, stats)
+    if not result.used_fallback and result.plan is not None:
+        cache.store(identity, _planning_payload(result.plan))
+    return result
+
+
+def _invoke_facet_backend(
+    topic: Topic,
+    backend: StructuredFacetBackend,
+    stats: dict[str, int] | None,
+) -> FacetPlanningResult:
+    before = _provider_invocation_count(backend)
+    if stats is not None:
+        stats["backend_calls"] += 1
+    result = _extract_facets_uncached(topic, backend)
+    after = _provider_invocation_count(backend)
+    if (
+        stats is not None
+        and before is not None
+        and after is not None
+        and after >= before
+    ):
+        stats["provider_calls"] += after - before
+    return result
+
+
+def _require_planning_request_identity(
+    backend: object,
+    topic: Topic,
+    expected: PlanningCacheIdentity,
+) -> None:
+    try:
+        identity_for = getattr(backend, "planning_request_identity", None)
+    except Exception as exc:
+        raise TypeError(
+            "cache-enabled planning backend must expose planning request identity"
+        ) from exc
+    if not callable(identity_for):
+        raise TypeError(
+            "cache-enabled planning backend must expose planning_request_identity(topic)"
+        )
+    actual = identity_for(topic)
+    if not isinstance(actual, PlanningCacheIdentity) or actual != expected:
+        raise ValueError("planning request identity does not match the cache key")
+
+
+def _provider_invocation_count(backend: object) -> int | None:
+    try:
+        value = getattr(backend, "transport_invocation_count", None)
+    except Exception:
+        return None
+    return value if type(value) is int and value >= 0 else None
+
+
+def _extract_facets_uncached(
+    topic: Topic,
+    backend: StructuredFacetBackend,
+) -> FacetPlanningResult:
     try:
         payload = backend.extract(topic)
     except Exception as exc:
         message = str(exc)
         return _fallback(topic, message if message.strip() else type(exc).__name__)
     return plan_facet_queries(topic, payload)
+
+
+def _planning_payload(plan: GeneratedQueryPlan) -> dict[str, object]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "topic_id": plan.topic_id,
+        "subnarratives": [
+            {
+                "subnarrative": row.text,
+                "bm25_queries": list(row.bm25_queries),
+            }
+            for row in plan.subnarratives
+        ],
+    }
 
 
 def _fallback(topic: Topic, error: str) -> FacetPlanningResult:
@@ -1100,6 +1255,14 @@ def _openrouter_request_payload(topic: Topic) -> dict[str, object]:
         "max_tokens": MAX_COMPLETION_TOKENS,
         "stream": False,
     }
+
+
+def _openrouter_request_body(topic: Topic) -> bytes:
+    return json.dumps(
+        _openrouter_request_payload(topic),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 def _topic_user_message(topic: Topic) -> str:
