@@ -162,17 +162,29 @@ if ((${#topic_ids[@]} == 2)); then
 else
   duration_mode=one-topic
 fi
-"$project_python" - "$snapshot_template" "$task_config" "$snapshot" "$duration_mode" <<'PY'
+"$project_python" - "$snapshot_template" "$task_config" "$snapshot" "$duration_mode" "$private_dir" <<'PY'
 from __future__ import annotations
 import os, sys
 from pathlib import Path
 import yaml
 source, destination, snapshot = map(Path, sys.argv[1:4])
+duration_mode = sys.argv[4]
+private_dir = Path(sys.argv[5])
 value = yaml.safe_load(source.read_text(encoding="utf-8"))
 if not isinstance(value, dict) or not isinstance(value.get("repos"), list) or len(value["repos"]) != 1:
     raise SystemExit("task template transport contract is invalid")
 value["repos"][0]["local_path"] = str(snapshot)
-if len(sys.argv) > 4 and sys.argv[4] == "two-topic":
+value["files"] = [
+    {
+        "local_path": str(private_dir / "run-plan.json"),
+        "path": "/dstack/run/trec_rag_2026/.agentic-private/run-plan.json",
+    },
+    {
+        "local_path": str(private_dir / "agentic-config.yaml"),
+        "path": "/dstack/run/trec_rag_2026/.agentic-private/agentic-config.yaml",
+    },
+]
+if duration_mode == "two-topic":
     value["max_duration"] = "10h"
 target = Path(destination)
 target.write_text(yaml.safe_dump(value, sort_keys=False, allow_unicode=True), encoding="utf-8")

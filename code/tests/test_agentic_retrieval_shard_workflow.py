@@ -338,10 +338,21 @@ task_config=$3
 python3 - "$task_config" "$@" <<'PY'
 from pathlib import Path
 import sys
+import yaml
 config = Path(sys.argv[1]).resolve()
 cwd = Path.cwd().resolve()
 config.relative_to(cwd)
 assert config.parent == cwd
+value = yaml.safe_load(config.read_text(encoding="utf-8"))
+files = value["files"]
+assert {row["path"] for row in files} == {
+    "/dstack/run/trec_rag_2026/.agentic-private/run-plan.json",
+    "/dstack/run/trec_rag_2026/.agentic-private/agentic-config.yaml",
+}
+for row in files:
+    local = Path(row["local_path"])
+    assert local.is_file() and not local.is_symlink()
+    assert ".env" not in local.name
 argv = sys.argv[2:]
 marker = argv.index("--")
 run_args = argv[marker + 1:]
