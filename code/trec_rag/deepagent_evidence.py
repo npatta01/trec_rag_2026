@@ -8,7 +8,9 @@ from hashlib import sha256
 import json
 import re
 from threading import Lock
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal
+
+from typing_extensions import NotRequired, TypedDict
 
 from pydantic import ConfigDict
 
