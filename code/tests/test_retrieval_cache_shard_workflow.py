@@ -55,6 +55,7 @@ def test_dstack_dev_environment_is_interactive_bounded_and_48gb_only() -> None:
     assert value["max_price"] == 1.0
     assert value["max_duration"] == "5h"
     assert value["idle_duration"] == "30m"
+    assert "HF_TOKEN=${{ secrets.hf_token }}" in value["env"]
 
 
 def test_dstack_shard_task_has_a_bounded_ephemeral_resource_contract() -> None:
@@ -115,7 +116,7 @@ def test_dstack_shard_task_names_only_the_four_authorized_secrets() -> None:
     for entry in env:
         assert isinstance(entry, str)
         match = re.fullmatch(
-            r"([A-Z][A-Z0-9_]*)=\$\{\{ secrets\.([A-Z][A-Z0-9_]*) \}\}",
+            r"([A-Z][A-Z0-9_]*)=\$\{\{ secrets\.([A-Za-z][A-Za-z0-9_]*) \}\}",
             entry,
         )
         if match is not None:
@@ -128,7 +129,12 @@ def test_dstack_shard_task_names_only_the_four_authorized_secrets() -> None:
         "OPENROUTER_API_KEY",
     }
     assert set(secret_references) == expected
-    assert secret_references == {name: name for name in expected}
+    assert secret_references == {
+        "HF_TOKEN": "hf_token",
+        "INDEX_URL": "INDEX_URL",
+        "PYSERINI_API_TOKEN": "PYSERINI_API_TOKEN",
+        "OPENROUTER_API_KEY": "OPENROUTER_API_KEY",
+    }
     assert "HF_CLI_MODE=direct" in env
     assert not any("TOKEN=" in entry and "secrets." not in entry for entry in env)
 

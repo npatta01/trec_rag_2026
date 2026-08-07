@@ -16,7 +16,7 @@ repos:
     if_exists: error
 
 env:
-  - HF_TOKEN=${{ secrets.HF_TOKEN }}
+  - HF_TOKEN=${{ secrets.hf_token }}
   - INDEX_URL=${{ secrets.INDEX_URL }}
   - PYSERINI_API_TOKEN=${{ secrets.PYSERINI_API_TOKEN }}
   - OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
