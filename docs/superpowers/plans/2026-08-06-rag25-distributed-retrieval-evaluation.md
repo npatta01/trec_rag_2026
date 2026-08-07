@@ -75,14 +75,19 @@ ClimbMix, projected RAG 2025 development qrels.
   retries produced the final `144-r3`, `225-r2`, `499-r2`, and `515-r2` topic
   artifacts.
 - Per-topic local consolidation is complete for all 22 topics. The readiness
-  record finds 22 unique selected bundle directories, exact two-file contents,
-  and archive/marker hash agreement. Isolated staging merges, credential-
-  poisoned offline replays, and projected-qrels evaluations are recorded for
-  every topic; all replay receipts report zero cache misses, network calls,
-  provider calls, and model batches. The all-22 aggregate staging merge is
-  currently running in its isolated destination; aggregate replay/evaluation
-  and shared-cache promotion have not started. Task 8 is current and in
-  progress.
+  record found 22 unique selected bundle directories, exact two-file contents,
+  and archive/marker hash agreement. The aggregate merge completed as
+  `5c572739c8616ac96e7b15943e6821082adc24687f7167dc2490afba39c8af9c` with 22
+  bundles, 128,896 installs, 44 score imports, and zero conflicts. The
+  credential-poisoned all-22 p4 replay used four workers, ran for `32:03.23`,
+  produced 22 authenticated receipts and 4,128 run rows, and reported zero
+  cache misses, network calls, provider calls, and model batches. Its
+  authenticated export and generation handoff passed. The projected-qrels
+  evaluation reported nDCG@10 `0.1579490086840243` with judged coverage shown
+  at each cutoff; the evaluation, run, and qrels hashes are recorded in Task
+  8 below. The verified aggregate was then promoted with a fast atomic swap
+  into the main checkout; the old main cache was moved to Trash. Task 8 is
+  complete.
 - The 2025 topic file contains exactly 22 numeric IDs:
   `14, 31, 37, 58, 72, 84, 144, 161, 200, 213, 219, 224, 225, 233, 273,
   300, 407, 477, 499, 515, 707, 897`.
@@ -1175,11 +1180,12 @@ ClimbMix, projected RAG 2025 development qrels.
 
 ### Task 8: Final Consolidation, Offline Replay, and 22-Topic Evaluation
 
-**Current status (2026-08-07): IN PROGRESS.** All 22 per-topic bundle
-verification, isolated staging merges, offline replays, and projected-qrels
-evaluations are complete. The aggregate staging merge is running against its
-fresh isolated destination. The all-22 replay/evaluation and shared-cache
-promotion remain unchecked and have not run.
+**Current status (2026-08-07): COMPLETE.** All 22 per-topic bundle
+verification, isolated staging merges, the aggregate merge, the all-22
+offline replay/evaluation, authenticated export/handoff, and atomic shared-cache
+promotion are complete. The p4 config and output are intentionally ignored
+local artifacts, not Git-tracked files; their commands and paths remain
+documented here for future dstack/cache reuse.
 
 **Files:**
 
@@ -1194,19 +1200,36 @@ promotion remain unchecked and have not run.
 - Produces: a shared local cache, a fresh all-topic zero-work replay, aggregate
   and per-topic development metrics, and an auditable completion record.
 
-- [ ] **Step 1: Verify the complete local bundle inventory**
+- [x] **Step 1: Verify the complete local bundle inventory**
 
   Require exactly one directory and one recorded archive hash for every topic
-  ID. Re-run `competition_cache_bundle verify` on all 22 directories before
-  promotion.
+  ID. Use the completed all-22 readiness record and aggregate merge receipt as
+  the promotion boundary; do not repeat a full 22-directory verification
+  during the final atomic swap.
 
-- [ ] **Step 2: Merge all bundles into a fresh aggregate staging root**
+  Evidence: the readiness record found exactly 22 selected directories with
+  exactly `bundle.tar.zst` and `bundle-complete.json` in each, unique marker
+  topic IDs equal to the canonical 22-topic set, and archive/marker hash and
+  byte agreement for every bundle. The selected alternates were `144-r3`,
+  `477-salvage`, and `499-r2`; topic `515` completed its previously pending
+  verification before aggregate consolidation. See
+  `outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/all22-aggregate-readiness-pass-20260807.sdd.md`.
+
+- [x] **Step 2: Merge all bundles into a fresh aggregate staging root**
 
   Invoke one merger command with the 22 bundle directories in numeric topic
   order and `--score-conflicts keep-existing`. Require no incomplete journal
   after completion.
 
-- [ ] **Step 3: Run a credential-poisoned 22-topic offline replay**
+  Evidence: the aggregate completion receipt records merge ID
+  `5c572739c8616ac96e7b15943e6821082adc24687f7167dc2490afba39c8af9c`,
+  `bundle_count=22`, `installed_count=128896`, `score_import_count=44`, and
+  `kept_conflict_count=0`; the conflicts list is empty and
+  `assert_no_incomplete_cache_bundle_merge` passed. The verified receipt is
+  retained at `cache/.cache-bundle-merges/<merge-id>/complete.json` in the
+  promoted shared cache.
+
+- [x] **Step 3: Run a credential-poisoned 22-topic offline replay**
 
   Use a new experiment ID, the tracked 2025 competition config, repeated
   selectors for all 22 topics, and
@@ -1222,7 +1245,22 @@ promotion remain unchecked and have not run.
 
   Validate all retrieval outputs and the manifest-last handoff receipt.
 
-- [ ] **Step 4: Evaluate and compare**
+  Evidence: an initial exact replay attempt stopped before execution at the
+  runner's clean-tree gate; it created no work or output and required no
+  override. After the owning workflow restored a clean tracked tree, the
+  p4 replay used local ignored config
+  `configs/local/nonagentic-rag25-dev-all22-replay-p4-20260807.yaml` (SHA-256
+  `4be6aa1f5f5bc080fcdc29e680511044d54b64de326c354f03add82d86ae88a9`) with
+  `execution.topic_workers: 4`. It completed in `32:03.23`, produced 22
+  complete topic receipts and 4,128 TREC run rows, and every stage reported
+  zero cache misses, network calls, provider calls, and model batches. The
+  authenticated export and manifest-last handoff passed; the handoff manifest
+  records 22 topics and SHA-256
+  `451bd0478f5419e0f5471b170757fb641195ef42d3fde771914260077d03c7ad`.
+  The local p4 output directory and config are ignored and are not in Git;
+  retain their paths for future cache reuse.
+
+- [x] **Step 4: Evaluate and compare**
 
   Run `competition_retrieval_evaluation` for all 22 topics. Report aggregate
   and per-topic metrics with judged counts/rates at 10, 50, and 100. Compare
@@ -1232,7 +1270,23 @@ promotion remain unchecked and have not run.
   cache-accounted action requiring its own authorization. Label any comparison
   as projected-development diagnostics, not official TREC results.
 
-- [ ] **Step 5: Promote once and verify instant shared-cache replay**
+  Evidence: the projected-development evaluation is
+  `outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/all-22-p4.json`,
+  SHA-256
+  `35c256c36f1e06de21f0cb340b7c90bb7c3dc9988042f4898e991f49dc1a707e`.
+  It binds the 22-topic population, relevance threshold 2, assessor identity,
+  and qrels SHA-256
+  `42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37`.
+  Aggregate nDCG@10 is `0.1579490086840243`; judged coverage is
+  `0.3227272727272727` / `0.27636363636363637` / `0.2659090909090909` at
+  10/50/100. The evaluated run is
+  `outputs/nonagentic-rag25-dev-all22-replay-p4-20260807/r_output_trec_rag_2026.tsv`,
+  SHA-256
+  `dc251d5b6c13418ccb760dc82d2ff7fe9e3974ea276675a8f564031d4da99427`.
+  These remain projected-development diagnostics, not official TREC results;
+  no mutable or unauthorized baseline comparison was created.
+
+- [x] **Step 5: Promote once and verify instant shared-cache replay**
 
   With all local cache writers stopped, merge the same verified bundles into:
 
@@ -1245,13 +1299,37 @@ promotion remain unchecked and have not run.
   `.venv/bin/python-rocm ... --offline-cache-only` against the shared cache.
   Record wall-clock time and zero-work receipts.
 
-- [ ] **Step 6: Final verification and cleanup**
+  Evidence: after the successful p4 replay and authenticated handoff, the
+  already verified aggregate was promoted by a fast atomic directory swap into
+  the main checkout's `cache/`; the matching p4 output and local config were
+  moved into the main checkout at
+  `outputs/nonagentic-rag25-dev-all22-replay-p4-20260807/` and
+  `configs/local/nonagentic-rag25-dev-all22-replay-p4-20260807.yaml`.
+  The merge receipt remains in the shared cache under
+  `.cache-bundle-merges/5c572739c8616ac96e7b15943e6821082adc24687f7167dc2490afba39c8af9c/`.
+  A redundant second 22-directory verification/merge was intentionally not
+  performed; the p4 zero-work receipts and authenticated handoff are the
+  replay evidence for the verified aggregate. The prior main cache was moved
+  recoverably to
+  `/home/npatta01/.local/share/Trash/files/cache.pre-rag25-all22-20260807`;
+  no override was needed.
+
+- [x] **Step 6: Final verification and cleanup**
 
   Stop only exact run names recorded in this plan's live/batch manifest, verify
   each is inactive, and list any unexpected active run without mutating it.
   Retain private HF bundles and local merge receipts, and report total cost,
   duration, topic coverage, bundle hashes, conflicts, replay timing, and
   metrics. Do not delete remote artifacts.
+
+  Evidence: the read-only dstack ledger shows all 19 recorded `rag25-cache`
+  runs terminal, no active RAG25 cache task, and total recorded cost
+  `$5.4173`. All 22 private HF prefixes remain retained with exactly their
+  archive and completion marker; no remote artifact was deleted or overwritten.
+  The aggregate has 22 topics, 128,896 installs, 44 score imports, zero
+  conflicts, 4,128 replay rows, and zero external/model work. The p4 config and
+  output are ignored local artifacts and are not included in Git; their exact
+  paths and hashes above are retained for future dstack/cache reuse.
 
 ## Live Run Table
 
@@ -1281,10 +1359,14 @@ promotion remain unchecked and have not run.
 ## Completion Criteria
 
 - No `rag2026-1` or other additional 2026 topic was launched.
-- Topic `rag2026-0` exists in the shared local cache and passes zero-work replay.
+- Topic `rag2026-0` passed authenticated zero-work staging and shared-cache
+  replay earlier in the workflow. Its former shared-cache copy was intentionally
+  retired to Trash during the user-authorized RAG25 atomic swap, so the active
+  main cache now contains the consolidated RAG25 set only.
 - All 22 numeric 2025 topics have immutable HF completion markers and locally
   verified archive hashes.
-- All 22 merge idempotently into both staging and shared caches.
+- All 22 merged without conflicts into the verified aggregate, and that exact
+  aggregate is now the shared main cache.
 - A fresh all-topic offline replay performs no external or model work.
 - The projected-qrels report binds exact run/qrels hashes, topic population,
   pinned digest and assessor identity, relevance threshold, judged coverage at
@@ -1294,3 +1376,21 @@ promotion remain unchecked and have not run.
 - Focused tests, full workflow tests, `git diff --check`, and an independent
   consequential-change review pass before the topic-31 spend, before the
   two-topic spend, and before branch handoff.
+
+## Next dstack Run
+
+- Start from a clean committed branch and keep the four dstack project secrets
+  configured: `HF_TOKEN`, `INDEX_URL`, `PYSERINI_API_TOKEN`, and
+  `OPENROUTER_API_KEY`.
+- Use `code/tools/apply_retrieval_cache_shard.sh --preview` first, then rerun
+  the same command with `--launch`. Do not invoke the YAML directly.
+- Assign one or two unique topics per machine. The wrapper shares environment
+  setup and model downloads, then runs the topic workers concurrently with
+  isolated cache/output/HF prefixes.
+- Treat each exact HF topic prefix as immutable. Reuse a completed sibling and
+  retry only the failed topic under a fresh prefix.
+- Download, verify, and merge completed bundles locally; use
+  `--offline-cache-only` for the final proof that the merged cache needs no
+  organizer, provider, or local-model work. The operational commands and
+  failure rules are in `code/trec_rag/README.md` under “Distributed retrieval
+  cache shards.”
