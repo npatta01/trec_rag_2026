@@ -1,7 +1,7 @@
 # Distributed Agentic Retrieval for the 2026 Cohort
 
-Date: 2026-08-07  
-Status: Core distribution path implemented and offline-verified; live preview pending  
+Date: 2026-08-07
+Status: Core distribution path implemented and offline-verified; live preview pending
 Scope: retrieval only for the 119-topic 2026 test cohort
 
 ## Objective
