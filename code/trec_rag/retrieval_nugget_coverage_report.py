@@ -500,7 +500,7 @@ def _render_topic_detail(topic: CoverageReportTopic, *, index: int) -> str:
             facet_rows.append(
                 f'<details class="obligation"{open_attribute}>'
                 f"<summary>{_html_text(summary_text)}</summary>"
-                f'<div class="obligation-grid">'
+                f'<dl class="obligation-grid">'
                 f'<div><dt>Requirement</dt><dd>{_html_text(obligation.requirement)}</dd></div>'
                 f'<div><dt>Kind</dt><dd><code>{_html_text(obligation.kind)}</code></dd></div>'
                 f'<div><dt>Judgment</dt><dd>{_status_markup(label)}</dd></div>'
@@ -509,7 +509,7 @@ def _render_topic_detail(topic: CoverageReportTopic, *, index: int) -> str:
                 f'<div><dt>Missing elements</dt><dd>{missing_markup}</dd></div>'
                 f'<div class="supporting-nuggets"><dt>Supporting canonical nuggets</dt>'
                 f'<dd><ul class="nugget-list">{support_markup}</ul></dd></div>'
-                f"</div></details>"
+                f"</dl></details>"
             )
         obligations_markup.append(
             f'<section class="facet" aria-labelledby="{topic_key}-facet-{facet_index}">'
@@ -539,10 +539,10 @@ def _render_topic_detail(topic: CoverageReportTopic, *, index: int) -> str:
                 f"<li>{_html_text(query)}</li>" for query in subnarrative.bm25_queries
             )
             plan_rows.append(
-                f'<section class="subnarrative"><h4>Subnarrative {sub_index}: '
-                f'{_html_text(subnarrative.text)}</h4>'
+                f'<section class="subnarrative"><h3>Subnarrative {sub_index}: '
+                f'{_html_text(subnarrative.text)}</h3>'
                 f'<p class="subnarrative-id">{_html_text(subnarrative.subnarrative_id)}</p>'
-                f'<h5>BM25 queries</h5><ol class="compact-list">{queries or "<li>None</li>"}</ol></section>'
+                f'<h4>BM25 queries</h4><ol class="compact-list">{queries or "<li>None</li>"}</ol></section>'
             )
     artifact_rows = "".join(
         f'<div class="provenance-row"><dt>{_html_text(name)}</dt><dd><code>{_html_text(value)}</code></dd></div>'
@@ -566,13 +566,13 @@ def _render_topic_detail(topic: CoverageReportTopic, *, index: int) -> str:
         f'<article class="topic-detail" id="{topic_key}-detail" data-topic-id="{_html_text(topic_id)}" hidden>'
         f'<header class="detail-header"><p class="eyebrow">Topic detail</p>'
         f'<h2 id="{topic_key}-title">{_html_text(topic_id)}</h2>'
-        f'<div class="detail-metrics">'
+        f'<dl class="detail-metrics">'
         f'<div><dt>Required coverage</dt><dd>{_display_percentage(report.required_coverage)}</dd></div>'
         f'<div><dt>Strict-full rate</dt><dd>{_display_percentage(report.strict_full_rate)}</dd></div>'
         f'<div><dt>Full</dt><dd>{_html_text(report.label_counts.get("full", 0))}</dd></div>'
         f'<div><dt>Partial</dt><dd>{_html_text(report.label_counts.get("partial", 0))}</dd></div>'
         f'<div><dt>Unsupported</dt><dd>{_html_text(report.label_counts.get("unsupported", 0))}</dd></div>'
-        f'</div></header>'
+        f'</dl></header>'
         f'<details class="narrative-disclosure" id="{narrative_id}"><summary>Exact authenticated narrative</summary>'
         f'<p class="narrative">{_html_text(bound_input.narrative)}</p></details>'
         f'<details class="retrieval-plan" id="{plan_context_id}"><summary>Retrieval plan context — not coverage evidence</summary>'
@@ -652,6 +652,9 @@ def render_coverage_report_html(data: CoverageReportData) -> bytes:
         "Coverage evidence is limited to canonical nugget text cited by each judgment.",
         "Retrieval-plan subnarratives and BM25 queries are context, not coverage evidence.",
         "Canonical nuggets are claim hints; this report does not rejudge their factual faithfulness.",
+        "Required coverage is a facet-macro average over required obligations.",
+        "Strict-full rate is an obligation-micro share over required obligations.",
+        "Label counts include required and supplemental obligations.",
         "This derivative excludes passages, document IDs, scores, provider responses, and secrets.",
     )
     limitation_markup = "".join(f"<li>{_html_text(item)}</li>" for item in limitations)
@@ -792,14 +795,14 @@ details > :not(summary) {{ padding-left: 1rem; padding-right: 1rem; }}
 .narrative {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
 .notice {{ color: var(--color-text-muted); }}
 .subnarrative {{ border-top: 1px solid var(--color-border); padding: 0.5rem 0 0.75rem; }}
-.subnarrative h4 {{ margin-bottom: 0.2rem; }}
+.subnarrative h3 {{ margin-bottom: 0.2rem; }}
 .subnarrative-id, .facet-id {{ color: var(--color-text-muted); font-size: 0.85rem; }}
 .compact-list {{ margin-top: 0.3rem; padding-left: 1.25rem; }}
 .obligations > h3 {{ margin-top: 2rem; }}
 .facet {{ margin: 1.4rem 0; }}
 .facet h4 {{ margin-bottom: 0; }}
 .obligation {{ background: var(--color-surface-muted); }}
-.obligation-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: 0.8rem; padding-bottom: 1rem; }}
+.obligation-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: 0.8rem; margin: 0; padding-bottom: 1rem; }}
 .obligation-grid > div {{ min-width: 0; }}
 .obligation-grid dd {{ margin: 0.2rem 0 0; overflow-wrap: anywhere; }}
 .obligation-grid .supporting-nuggets {{ grid-column: 1 / -1; }}
@@ -943,7 +946,6 @@ code {{ color: var(--color-accent-strong); overflow-wrap: anywhere; }}
   topicButtons.forEach(function (button) {{ button.addEventListener("click", function () {{ showTopic(button.getAttribute("data-topic-id"), true); }}); }});
   backButton.addEventListener("click", function () {{ history.pushState(null, "", location.pathname + location.search); showOverview("", true); }});
   window.addEventListener("popstate", restoreLocation);
-  window.addEventListener("hashchange", restoreLocation);
 
   function reorderTopics() {{
     var mode = sortTopics.value;
@@ -1010,6 +1012,23 @@ def _coverage_report_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--topic", action="append", default=[], dest="topic_ids")
     return parser
+
+
+def _safe_cli_error(stage: str) -> dict[str, object]:
+    reason = {
+        "config": "report configuration is invalid",
+        "load": "coverage report inputs are invalid",
+        "render": "coverage report rendering failed",
+        "publish": "coverage report publication failed",
+    }.get(stage, "coverage report failed")
+    return {
+        "status": "error",
+        "error": {
+            "type": "retrieval_nugget_coverage_report_error",
+            "stage": stage,
+            "reason": reason,
+        },
+    }
 
 
 def _validate_report_output_path(path: Path) -> Path:
@@ -1096,6 +1115,7 @@ def publish_coverage_report(path: Path, body: bytes) -> Path:
 def main(argv: Sequence[str] | None = None) -> int:
     """Render and atomically publish one zero-hosted-call coverage report."""
     parser = _coverage_report_parser()
+    stage = "config"
     try:
         arguments = parser.parse_args(sys.argv[1:] if argv is None else argv)
         topic_ids = tuple(arguments.topic_ids)
@@ -1104,12 +1124,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if len(set(topic_ids)) != len(topic_ids):
             raise ValueError("duplicate topic selector")
         output_path = _validate_report_output_path(arguments.output)
+        stage = "load"
         data = load_coverage_report_data(
             handoff_manifest_path=arguments.handoff_manifest,
             coverage_root=arguments.coverage_root,
             topic_ids=topic_ids,
         )
+        stage = "render"
         body = render_coverage_report_html(data)
+        stage = "publish"
         output = publish_coverage_report(output_path, body)
         receipt = {
             "status": "ok",
@@ -1122,13 +1145,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except _ParserExit as exc:
         return exc.status
-    except Exception as exc:
+    except Exception:
         print(
-            json.dumps(
-                {"status": "error", "error": str(exc)},
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
+            json.dumps(_safe_cli_error(stage), separators=(",", ":"), sort_keys=True),
             file=sys.stderr,
         )
         return 2

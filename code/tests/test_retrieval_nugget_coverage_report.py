@@ -517,6 +517,27 @@ class _ReportHTMLParser(HTMLParser):
         self.text_chunks.append(data)
 
 
+class _ReportSemanticStructureParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.description_list_depth = 0
+        self.orphan_description_items: list[str] = []
+        self.heading_levels: list[int] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        if tag == "dl":
+            self.description_list_depth += 1
+        elif tag in {"dt", "dd"} and self.description_list_depth == 0:
+            self.orphan_description_items.append(tag)
+        if len(tag) == 2 and tag[0] == "h" and tag[1].isdigit():
+            self.heading_levels.append(int(tag[1]))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "dl":
+            self.description_list_depth -= 1
+
+
 def _html_fixture_data() -> tuple[CoverageReportData, dict[str, str]]:
     values = {
         "narrative": '<script>alert("narrative")</script> & "quotes" \u2028 \u2029',
@@ -668,12 +689,42 @@ def test_renderer_contract_has_theme_navigation_and_accessibility_landmarks() ->
     assert "@media print" in source
     assert "history.pushState" in source
     assert "popstate" in source
-    assert "hashchange" in source
+    assert "hashchange" not in source
     assert 'data-theme-choice="light"' in source
     assert 'data-theme-choice="system"' in source
     assert 'data-theme-choice="dark"' in source
     assert 'aria-pressed="false"' in source
     assert len(parser.ids) == len(set(parser.ids))
+
+
+def test_renderer_nests_description_items_in_description_lists() -> None:
+    data, _ = _html_fixture_data()
+    parser = _ReportSemanticStructureParser()
+    parser.feed(report_module.render_coverage_report_html(data).decode("utf-8"))
+
+    assert parser.orphan_description_items == []
+
+
+def test_renderer_heading_levels_do_not_skip_depth() -> None:
+    data, _ = _html_fixture_data()
+    parser = _ReportSemanticStructureParser()
+    parser.feed(report_module.render_coverage_report_html(data).decode("utf-8"))
+
+    assert all(
+        current <= previous + 1
+        for previous, current in zip(parser.heading_levels, parser.heading_levels[1:])
+    )
+
+
+def test_renderer_explains_metric_denominators_in_standalone_report() -> None:
+    data, _ = _html_fixture_data()
+    parser = _ReportHTMLParser()
+    parser.feed(report_module.render_coverage_report_html(data).decode("utf-8"))
+    visible_text = " ".join(" ".join(parser.text_chunks).split())
+
+    assert "Required coverage is a facet-macro average over required obligations." in visible_text
+    assert "Strict-full rate is an obligation-micro share over required obligations." in visible_text
+    assert "Label counts include required and supplemental obligations." in visible_text
 
 
 def test_renderer_focus_contract_moves_into_detail_and_restores_overview_target() -> None:
@@ -748,13 +799,13 @@ def test_cli_publishes_renderer_bytes_and_reports_zero_hosted_calls(
 
 
 @pytest.mark.parametrize(
-    ("argv", "message"),
+    ("argv", "message", "expected_stage", "expected_reason"),
     [
-        (("--topic", "missing"), "unknown"),
-        (("--topic", "topic-safe", "--topic", "topic-safe"), "duplicate"),
-        (("--topic", ""), "empty"),
-        (("--topic", "incomplete"), "incomplete"),
-        (("--topic", "contradictory"), "contradictory"),
+        (("--topic", "missing"), "unknown", "load", "coverage report inputs are invalid"),
+        (("--topic", "topic-safe", "--topic", "topic-safe"), "duplicate", "config", "report configuration is invalid"),
+        (("--topic", ""), "empty", "config", "report configuration is invalid"),
+        (("--topic", "incomplete"), "incomplete", "load", "coverage report inputs are invalid"),
+        (("--topic", "contradictory"), "contradictory", "load", "coverage report inputs are invalid"),
     ],
 )
 def test_cli_rejects_invalid_topic_state_with_structured_error(
@@ -763,9 +814,12 @@ def test_cli_rejects_invalid_topic_state_with_structured_error(
     capsys: pytest.CaptureFixture[str],
     argv: tuple[str, ...],
     message: str,
+    expected_stage: str,
+    expected_reason: str,
 ) -> None:
     def load(**kwargs: object) -> CoverageReportData:
-        raise ValueError(message)
+        del kwargs
+        raise ValueError(f"{message}: {tmp_path / 'private-checkpoint.json'}")
 
     monkeypatch.setattr(report_module, "load_coverage_report_data", load)
     output = tmp_path / "report.html"
@@ -787,8 +841,16 @@ def test_cli_rejects_invalid_topic_state_with_structured_error(
     stderr = capsys.readouterr().err
     assert "traceback" not in stderr.casefold()
     error = json.loads(stderr)
-    assert error["status"] == "error"
-    assert message in error["error"]
+    assert error == {
+        "status": "error",
+        "error": {
+            "type": "retrieval_nugget_coverage_report_error",
+            "stage": expected_stage,
+            "reason": expected_reason,
+        },
+    }
+    assert message not in stderr
+    assert str(tmp_path) not in stderr
 
 
 @pytest.mark.parametrize(
