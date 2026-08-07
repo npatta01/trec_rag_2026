@@ -157,13 +157,13 @@ and judge calls for the named topic, OpenRouter provider, and stated (or
 default) model identities; do not ask again. A request that only asks to
 inspect, explain, debug, or audit does not authorize hosted calls, so ask once
 when a stage is missing. Before egress in an authorized path, state the
-provider (OpenRouter), the planner and judge model identities
-(defaults are `openai/gpt-5.6-sol` for each, or the exact
-`--planner-model` and `--judge-model`
-overrides), and that the maximum of two hosted calls is one narrative-only
-planner call followed by one all-nugget judge call. The payload categories are
-the one narrative, the derived frozen plan, and canonical retrieval nugget
-text. Then rerun the identical command with the one opt-in flag:
+provider (OpenRouter), the planner and judge model identities (defaults are
+`openai/gpt-5.6-sol` for each, or the exact `--planner-model` and
+`--judge-model` overrides), and that the maximum of two hosted calls is one
+narrative-only planner call followed by one all-nugget judge call. The payload
+categories are the one narrative, the derived frozen plan, and canonical
+retrieval nugget text. Then rerun the identical command with the one opt-in
+flag:
 
 ```bash
 .venv/bin/python \

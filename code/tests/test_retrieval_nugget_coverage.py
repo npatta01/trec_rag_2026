@@ -104,7 +104,7 @@ def _nuggets() -> tuple[CoverageNugget, ...]:
 
 def _identity() -> EvaluatorIdentity:
     return EvaluatorIdentity(
-        schema_version="retrieval_nugget_coverage_v1",
+        schema_version="test-schema",
         planner_prompt_version="planner-v1",
         judge_prompt_version="judge-v1",
         planner_model="planner-model",
@@ -1525,6 +1525,33 @@ def test_resume_rejects_changed_authenticated_handoff_projection(
             planner=RecordingBackend([]),
             judge=RecordingBackend([]),
         )
+
+
+def test_resume_reports_stale_input_for_changed_evaluator_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "stale-input"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    monkeypatch.setattr(coverage_module, "EVALUATOR_SCHEMA_VERSION", "test-schema-v3")
+    with pytest.raises(NuggetCoverageError) as caught:
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=RecordingBackend([]),
+            judge=RecordingBackend([]),
+        )
+
+    assert caught.value.reason == (
+        "input artifact is stale for the current evaluator contract or "
+        "authenticated handoff projection"
+    )
+    assert NARRATIVE not in str(caught.value)
 
 
 def test_resume_rejects_changed_prompt_or_schema_identity(

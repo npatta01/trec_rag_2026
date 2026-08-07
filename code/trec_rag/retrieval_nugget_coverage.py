@@ -1114,7 +1114,10 @@ def _sha256_file(path: Path) -> str:
 def _validate_input_artifact(path: Path, bound: BoundCoverageInput) -> None:
     payload = _load_artifact(path)
     if payload != _input_payload(bound):
-        raise NuggetCoverageError("persistence", "input artifact identity does not match the authenticated handoff")
+        raise NuggetCoverageError(
+            "persistence",
+            "input artifact is stale for the current evaluator contract or authenticated handoff projection",
+        )
 
 
 def _load_plan_artifact(

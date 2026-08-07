@@ -1768,7 +1768,8 @@ The CLI exposes only these flags:
 - `--work-dir PATH` — optional private artifact directory; by default it is
   beneath the manifest's parent.
 - `--planner-model NAME` and `--judge-model NAME` — model identities sealed in
-  the evaluator manifest.
+  the evaluator manifest; both planner and judge defaults are
+  `openai/gpt-5.6-sol`.
 - `--mode create|resume` — create a new namespace or revalidate and reuse
   complete stages.
 - `--allow-hosted-calls` — explicitly opt in to missing planner/judge calls;
@@ -1821,13 +1822,12 @@ either stage is reused.
 Both structured OpenRouter requests require provider parameter support, deny
 provider data collection, disable reasoning, omit unsupported sampling
 temperature, use seed zero, and set `stream=false`; semantic retries are
-disabled. Planner and judge
-prompts/schemas state the exact-substring, span-kind, span-bound,
-obligation-count, required-obligation, and label/alias/`missing_elements`
-invariants. The planner prompt identity is v4 and the judge prompt identity
-remains v2. The 8192-token completion budget is bound into the request
-identities. In-memory
-and persisted provider metadata use the same secret-safe allowlist.
+disabled. Planner and judge prompts/schemas state the exact-substring,
+span-kind, span-bound, obligation-count, required-obligation, and
+label/alias/`missing_elements` invariants. The planner prompt identity is v4
+and the judge prompt identity remains v2. The 8192-token completion budget is
+bound into the request identities. In-memory and persisted provider metadata
+use the same secret-safe allowlist.
 
 Scoring maps `full`, `partial`, and `unsupported` to `1.0`, `0.5`, and `0.0`.
 For each facet containing required obligations, average its required labels;
@@ -1839,13 +1839,13 @@ supplemental-obligation average (or `null` when none exist), and
 plus per-obligation resolved nugget IDs and uncited-nugget diagnostics. Receipt
 scores are rounded for display; report artifacts retain full precision.
 
-Version 2 assumes canonical retrieval nuggets faithfully represent the
-selected passages from which they were derived; it never reopens passages.
-This is a planner-derived diagnostic, not ground truth. A low score cannot
-separate retrieval, selection, and canonicalization failures, and scores are
-not comparable across evaluator schemas, prompt versions, or model identities.
-The evaluator does not search, rerank, generate answers, shard oversized judge
-requests, or aggregate topics.
+The `retrieval_nugget_coverage_v2` evaluator assumes canonical retrieval
+nuggets faithfully represent the selected passages from which they were
+derived; it never reopens passages. This is a planner-derived diagnostic, not
+ground truth. A low score cannot separate retrieval, selection, and
+canonicalization failures, and scores are not comparable across evaluator
+schemas, prompt versions, or model identities. The evaluator does not search,
+rerank, generate answers, shard oversized judge requests, or aggregate topics.
 
 Run the targeted regression suite (all backends are injected fakes, so it makes
 no hosted calls):

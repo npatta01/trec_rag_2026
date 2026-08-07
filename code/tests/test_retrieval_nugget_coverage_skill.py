@@ -26,7 +26,7 @@ def _route_section() -> str:
 
 
 def test_retrieval_nugget_coverage_route_documents_the_cli_contract() -> None:
-    section = _route_section()
+    section = " ".join(_route_section().split())
     for required in (
         "Retrieval Nugget Coverage",
         "-m trec_rag.retrieval_nugget_coverage",
