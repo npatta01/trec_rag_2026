@@ -35,8 +35,10 @@ from .topics import Topic
 
 
 RUN_PLAN_FILENAME = "run_plan.json"
+RUN_PLAN_RECEIPT_FILENAME = "run_plan_receipt.json"
 TOPIC_SEAL_FILENAME = "topic_projection_manifest.json"
 RUN_PLAN_SCHEMA = "agentic_run_plan_v1"
+RUN_PLAN_RECEIPT_SCHEMA = "agentic_run_plan_receipt_v1"
 TOPIC_SEAL_SCHEMA = "agentic_topic_projection_manifest_v1"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -474,9 +476,11 @@ def create_run_plan(
     return expected
 
 
-def load_run_plan(work_dir: Path) -> AgenticRunPlan:
-    path = Path(work_dir) / RUN_PLAN_FILENAME
-    body = _read_regular(path, label="run plan")
+def deserialize_run_plan(body: bytes) -> AgenticRunPlan:
+    """Validate canonical run-plan bytes and return the authenticated plan."""
+
+    if not isinstance(body, bytes) or not body:
+        raise AgenticRunStateError("run plan bytes must be non-empty bytes")
     payload = _parse_json_line(body, label="run plan")
     row = _exact_mapping(
         payload,
@@ -602,6 +606,55 @@ def load_run_plan(work_dir: Path) -> AgenticRunPlan:
             "run plan canonical bytes changed"
         )
     return plan
+
+
+def load_run_plan(work_dir: Path) -> AgenticRunPlan:
+    path = Path(work_dir) / RUN_PLAN_FILENAME
+    body = _read_regular(path, label="run plan")
+    return deserialize_run_plan(body)
+
+
+def install_run_plan(*, work_dir: Path, body: bytes) -> AgenticRunPlan:
+    """Atomically install exact canonical plan bytes, or accept identical state."""
+
+    plan = deserialize_run_plan(body)
+    work = Path(work_dir)
+    _publish_identical(
+        work / RUN_PLAN_FILENAME,
+        body,
+        label="run plan",
+    )
+    return plan
+
+
+def serialize_run_plan_receipt(plan: AgenticRunPlan) -> bytes:
+    """Serialize the small canonical receipt proving an installed run plan."""
+
+    if not isinstance(plan, AgenticRunPlan):
+        raise AgenticRunStateError("plan must be AgenticRunPlan")
+    return _canonical_line(
+        {
+            "schema_version": RUN_PLAN_RECEIPT_SCHEMA,
+            "run_id": plan.run_id,
+            "plan_sha256": plan.plan_sha256,
+            "config_sha256": plan.config_sha256,
+            "topics_source_sha256": plan.topics_source_sha256,
+            "planned_topic_ids": list(plan.planned_topic_ids),
+        }
+    )
+
+
+def install_run_plan_receipt(*, work_dir: Path, plan: AgenticRunPlan) -> bytes:
+    """Publish the plan receipt idempotently after authenticating plan state."""
+
+    _validate_plan_argument(work_dir, plan)
+    body = serialize_run_plan_receipt(plan)
+    _publish_identical(
+        Path(work_dir) / RUN_PLAN_RECEIPT_FILENAME,
+        body,
+        label="run plan receipt",
+    )
+    return body
 
 
 def resume_run_plan(
@@ -1342,8 +1395,11 @@ def select_run_topics(
     work_dir: Path,
     plan: AgenticRunPlan,
     topic_ids: Sequence[str] | None = None,
+    validate_all: bool = True,
 ) -> RunTopicSelection:
     _validate_plan_argument(work_dir, plan)
+    if not isinstance(validate_all, bool):
+        raise TypeError("validate_all must be Boolean")
     if topic_ids is None:
         requested = plan.planned_topic_ids
     else:
@@ -1363,7 +1419,8 @@ def select_run_topics(
         for topic_id in requested:
             _planned_topic(plan, topic_id)
     completed: list[str] = []
-    for topic_id in plan.planned_topic_ids:
+    scan_ids = plan.planned_topic_ids if validate_all else requested
+    for topic_id in scan_ids:
         manifest = (
             _topic_dir(work_dir, topic_id)
             / TOPIC_SEAL_FILENAME
@@ -1404,6 +1461,7 @@ def load_sealed_topics(
 
 __all__ = [
     "RUN_PLAN_FILENAME",
+    "RUN_PLAN_RECEIPT_FILENAME",
     "TOPIC_SEAL_FILENAME",
     "AgenticRunPlan",
     "AgenticRunStateError",
@@ -1414,6 +1472,9 @@ __all__ = [
     "ValidatedTopicSeal",
     "allocate_topic_attempt",
     "create_run_plan",
+    "deserialize_run_plan",
+    "install_run_plan",
+    "install_run_plan_receipt",
     "load_run_plan",
     "load_sealed_topics",
     "load_topic_seal",
@@ -1421,5 +1482,6 @@ __all__ = [
     "seal_topic_success",
     "select_run_topics",
     "serialize_run_plan",
+    "serialize_run_plan_receipt",
     "topic_records_receipt_payload",
 ]

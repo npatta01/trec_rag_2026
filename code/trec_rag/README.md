@@ -236,6 +236,37 @@ post-seal evaluation. Outputs include source text and generated claims, so keep
 
 ### Sharding retrieval across dstack hosts
 
+#### Freeze once, execute assigned topics
+
+For distributed agentic retrieval, initialize the run plan on the coordinator
+before starting any worker. Initialization selects the cohort, authenticates the
+config/topic-source bytes and Git revisions, and performs no provider, Pyserini,
+reranker, cache, or runtime-secret calls:
+
+```bash
+.venv/bin/python -m trec_rag.competition_agentic_retrieval \
+  configs/rag26_competition_agentic_retrieval_v1.yaml \
+  --initialize-only
+```
+
+The resulting `outputs/<experiment-id>/work/run_plan.json` bytes are the only
+cohort authority. Copy those exact bytes to each worker and assign a disjoint
+subset of IDs; workers must not independently select a cohort. An assigned-only
+worker seals successful topics locally, preserves failed attempts and existing
+seals, and never performs run-level aggregate export:
+
+```bash
+.venv/bin/python -m trec_rag.competition_agentic_worker \
+  configs/rag26_competition_agentic_retrieval_v1.yaml \
+  --plan outputs/<experiment-id>/work/run_plan.json \
+  --topic rag2026-0 --topic rag2026-1
+```
+
+The worker prints a machine-readable receipt containing one outcome per assigned
+topic. A plan/config/source/revision mismatch or foreign/duplicate assignment
+fails closed before live dependencies are constructed. Aggregate export remains
+a coordinator-only action after every planned topic has a valid seal.
+
 Do not copy live cache directories or SQLite databases between machines. Pack
 each completed topic with `trec_rag.competition_cache_bundle`, publish the two
 immutable bundle files, verify them after download, and merge through the bundle
