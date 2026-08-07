@@ -828,6 +828,22 @@ def test_coverage_input_rejects_control_text_from_authenticated_handoff(
         coverage_input_from_handoff(path, "topic-coverage")
 
 
+@pytest.mark.parametrize("field", ["narrative", "claim"])
+def test_coverage_input_rejects_whitespace_only_sealed_text(
+    tmp_path: Path, field: str
+) -> None:
+    narrative = " \n\t" if field == "narrative" else NARRATIVE
+    claim_texts = (" \n\t", "second claim") if field == "claim" else None
+    path = tmp_path / field / "generation_handoff_manifest.json"
+    write_generation_handoff(
+        path,
+        _coverage_handoff(narrative=narrative, claim_texts=claim_texts),
+    )
+
+    with pytest.raises(NuggetCoverageError, match="non-empty"):
+        coverage_input_from_handoff(path, "topic-coverage")
+
+
 def test_run_accepts_whitespace_preserving_source_text_from_a_sealed_handoff(
     tmp_path: Path,
 ) -> None:

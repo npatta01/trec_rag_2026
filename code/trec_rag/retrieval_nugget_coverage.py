@@ -1885,7 +1885,7 @@ def _text(
 def _sealed_text(value: object, name: str, *, stage: str) -> str:
     """Validate authenticated source text without changing its sealed bytes."""
 
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value or not value.strip():
         _error(stage, f"{name} must be non-empty text")
     for character in value:
         category = unicodedata.category(character)
