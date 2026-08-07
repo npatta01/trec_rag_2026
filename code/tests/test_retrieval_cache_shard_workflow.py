@@ -10,6 +10,10 @@ import tomllib
 import pytest
 import yaml
 
+from trec_rag.facet_pilot_config import (
+    load_facet_pilot_config,
+    select_configured_topics,
+)
 from trec_rag.hf_bucket_listing import (
     HFListingError,
     parse_hf_bucket_listing,
@@ -23,6 +27,8 @@ CONFIG_PATH = REPO_ROOT / ".dstack" / "rag26-retrieval-cache-shard.yaml"
 DEV_CONFIG_PATH = REPO_ROOT / ".dstack" / "rag26-retrieval-cache-dev.yaml"
 WRAPPER_PATH = REPO_ROOT / "code" / "tools" / "run_retrieval_cache_shard.sh"
 LAUNCHER_PATH = REPO_ROOT / "code" / "tools" / "apply_retrieval_cache_shard.sh"
+RAG25_CONFIG_PATH = REPO_ROOT / "configs" / "rag25_competition_retrieval_v1.yaml"
+RAG26_CONFIG_PATH = REPO_ROOT / "configs" / "rag26_competition_retrieval_v2.yaml"
 
 TRANSPORT_SENTINEL = "/dev/null/trec-rag-dstack-transport-requires-launcher"
 PUBLIC_REMOTE_URL = "https://github.com/npatta01/trec_rag_2026.git"
@@ -33,6 +39,73 @@ IMAGE = (
 )
 MIXEDBREAD_REVISION = "3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 MINILM_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+
+
+def test_rag25_competition_config_selects_all_22_dev_topics() -> None:
+    loaded = load_facet_pilot_config(RAG25_CONFIG_PATH)
+    topics = select_configured_topics(loaded)
+
+    assert [topic.id for topic in topics] == [
+        "14",
+        "31",
+        "37",
+        "58",
+        "72",
+        "84",
+        "144",
+        "161",
+        "200",
+        "213",
+        "219",
+        "224",
+        "225",
+        "233",
+        "273",
+        "300",
+        "407",
+        "477",
+        "499",
+        "515",
+        "707",
+        "897",
+    ]
+
+
+def test_rag25_config_matches_rag26_algorithm_after_normalizing_bindings() -> None:
+    rag25 = yaml.safe_load(RAG25_CONFIG_PATH.read_text(encoding="utf-8"))
+    rag26 = yaml.safe_load(RAG26_CONFIG_PATH.read_text(encoding="utf-8"))
+    assert isinstance(rag25, dict)
+    assert isinstance(rag26, dict)
+
+    del rag25["experiment"]["id"]
+    del rag26["experiment"]["id"]
+    del rag25["topics"]["path"]
+    del rag26["topics"]["path"]
+
+    assert rag25 == rag26
+
+
+def test_wrapper_preflight_accepts_numeric_rag25_topic() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            str(WRAPPER_PATH),
+            "--preflight",
+            "--topic",
+            "31",
+            "--run-id",
+            "nonagentic-rag25-dev-20260806",
+            "--config",
+            "configs/rag25_competition_retrieval_v1.yaml",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "topic_id=31" in result.stdout
 
 
 def _configuration() -> dict[str, object]:
@@ -678,7 +751,7 @@ def test_wrapper_rejects_unsafe_identity_before_any_live_work() -> None:
     )
 
     assert result.returncode != 0
-    assert "safe topic ID" in result.stderr or "safe run ID" in result.stderr
+    assert "safe configured topic ID" in result.stderr or "safe run ID" in result.stderr
 
 
 def test_wrapper_encodes_model_upload_and_remote_verification_contract() -> None:

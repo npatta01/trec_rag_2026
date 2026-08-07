@@ -66,7 +66,8 @@ while (($#)); do
   esac
 done
 
-[[ $topic_id =~ ^rag2026-[0-9]+$ ]] || die "--topic must be a safe topic ID such as rag2026-0"
+[[ $topic_id =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ ]] \
+  || die "--topic must be a safe configured topic ID"
 [[ $run_id =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$ ]] || die "--run-id must be a safe run ID"
 
 case "$config_arg" in
