@@ -95,7 +95,7 @@ tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/
 tracking_commit=$(git rev-parse --verify "$tracking_ref^{commit}") || die "tracking branch does not resolve to a commit"
 source_head=$(git rev-parse --verify 'HEAD^{commit}') || die "HEAD does not resolve to a commit"
 git merge-base --is-ancestor "$tracking_commit" "$source_head" || die "tracking commit must be an ancestor of HEAD"
-git diff --check "$tracking_ref"
+git --no-pager diff --check "$tracking_ref"
 
 source_status=$(git status --porcelain=v1 --untracked-files=all)
 [[ -z $source_status ]] || die "source worktree must be clean; commit intended code and remove non-ignored untracked files"

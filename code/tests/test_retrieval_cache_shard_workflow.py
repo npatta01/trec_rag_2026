@@ -669,7 +669,8 @@ def test_wrapper_encodes_model_upload_and_remote_verification_contract() -> None
     assert "--locked" in script
     assert "--no-managed-python" in script
     assert "--no-python-downloads" in script
-    assert 'git diff --check "$tracking_ref"' in script
+    assert 'git --no-pager diff --check "$tracking_ref"' in script
+    assert 'git diff --check "$tracking_ref"' not in script
     assert "git add -A" in script
     assert "git commit" in script
     assert "git status --porcelain=v1 --untracked-files=all" in script

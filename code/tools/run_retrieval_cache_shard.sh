@@ -77,7 +77,7 @@ cd "$REPO_ROOT"
 repo_toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || die "the dstack repo transport did not provide a Git checkout"
 [[ $repo_toplevel == "$REPO_ROOT" ]] || die "wrapper must run from its transported repository"
 tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || die "current branch has no tracking branch"
-git diff --check "$tracking_ref"
+git --no-pager diff --check "$tracking_ref"
 
 # Dstack materializes files added since the tracking commit as untracked patch
 # bytes. Seal the complete sanitized patch before using Git's tracked-file
