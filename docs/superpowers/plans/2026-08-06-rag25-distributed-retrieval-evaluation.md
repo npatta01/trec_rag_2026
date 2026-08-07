@@ -31,15 +31,13 @@ ClimbMix, projected RAG 2025 development qrels.
 - Worktree:
   `/home/npatta01/data/competitions/trec_rag_2026/.worktrees/codex-distributed-retrieval-cache`
 - Branch: `codex/distributed-retrieval-cache`
-- Current live canary: `rag26-cache-dev-r4`, topic `rag2026-0`, run ID
-  `nonagentic-two-topic-20260806`.
-- The current canary completed retrieval on an A40 and passed repository
-  transport, Hugging Face authentication, private bucket access, model
-  revision, and CUDA gates. Its first package attempt correctly rejected open
-  SQLite sidecars; after safe checkpointing, its retry reached bundle
-  self-verification and failed closed on a canonical-checkpoint configuration
-  mismatch. Retrieval outputs and caches remain intact while that mismatch is
-  diagnosed; no bundle has been published.
+- Completed 2026 canary: `rag26-cache-dev-r4`, topic `rag2026-0`, run ID
+  `nonagentic-two-topic-20260806`. Its immutable private HF shard was published,
+  round-tripped, and locally verified as
+  `ea9d2799eaa58b8ca50c38cf4d796e58acb90b4d3923f943fc6a89a6243d9622`.
+  The exact A40 run is stopped. The isolated staging merge completed as
+  `fd8c9bb8cadf76db35fae62888e612020a9fc279566501461cc24a66c1f75459`;
+  offline replay and main-cache promotion are next.
 - The current canary is the final 2026 topic authorized for this sequence. Do
   not start `rag2026-1`.
 - The 2025 topic file contains exactly 22 numeric IDs:
@@ -137,7 +135,7 @@ ClimbMix, projected RAG 2025 development qrels.
 - Produces: one locally verified archive hash, one staging merge receipt, one
   zero-work offline receipt, and one promoted shared-cache merge receipt.
 
-- [ ] **Step 1: Monitor without interrupting the wrapper**
+- [x] **Step 1: Monitor without interrupting the wrapper**
 
   Every 30–60 seconds, check process state, GPU/CPU activity, score-cache row
   growth, bundle file count, and the log tail. Treat a quiet buffered log as
@@ -150,7 +148,7 @@ ClimbMix, projected RAG 2025 development qrels.
     'nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader'
   ```
 
-- [ ] **Step 2: Diagnose and repair the failed-closed package verification**
+- [x] **Step 2: Diagnose and repair the failed-closed package verification**
 
   Compare the source canonical manifest, the temporary extracted manifest, and
   the exact config identity accepted by `retrieval_export`. Add a regression
@@ -181,8 +179,11 @@ ClimbMix, projected RAG 2025 development qrels.
   config=/workflow/configs/local/nonagentic-two-topic-20260806-rag2026-0.yaml
   bundle_dir=/tmp/trec-rag-cache-shards/nonagentic-two-topic-20260806/rag2026-0/bundle
   remote_prefix=hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0
+  cache_root=/tmp/trec-rag-cache-shards/nonagentic-two-topic-20260806/rag2026-0/cache
   recovery_root=/tmp/trec-rag-cache-shards/nonagentic-two-topic-20260806/rag2026-0/recovery-v1
   log=/tmp/rag2026-0-recovery.log
+  export TREC_RAG_CACHE_ROOT="$cache_root"
+  export HF_HOME=/tmp/trec-rag-cache-shards/nonagentic-two-topic-20260806/rag2026-0/huggingface
   mkdir -m 700 "$recovery_root"
   exec > >(tee "$log") 2>&1
 
@@ -242,7 +243,13 @@ ClimbMix, projected RAG 2025 development qrels.
   receipt. A partial upload remains failed closed and requires diagnosis; never
   delete or overwrite an immutable remote object.
 
-- [ ] **Step 3: Require recovery publication success**
+  Evidence: commit `a14b80b` fixed full official-topic identity; independent
+  release review found no blocking issue; commits `928c0af` and its tests cover
+  legacy singleton compatibility and prevent source-identity merge leakage.
+  The synced production module SHA-256 was
+  `c7acea74066c8f00a1f8b4938713ebe7d6d4e423f6b9694fe4ed3f374ae3f0e3`.
+
+- [x] **Step 3: Require recovery publication success**
 
   The original wrapper remains failed and is not a success signal. Do not
   consolidate until the recovery-finalization shell exits zero and its recovery
@@ -258,7 +265,12 @@ ClimbMix, projected RAG 2025 development qrels.
   Independently list the prefix and require exactly the archive and completion
   marker.
 
-- [ ] **Step 4: Download and verify locally**
+  Evidence: recovery v2 exited zero after pack, local verify, immutable
+  upload-marker-last, byte round trips, exact listing validation, download, and
+  downloaded-bundle replay. Archive SHA-256:
+  `ea9d2799eaa58b8ca50c38cf4d796e58acb90b4d3923f943fc6a89a6243d9622`.
+
+- [x] **Step 4: Download and verify locally**
 
   ```bash
   cd /home/npatta01/data/competitions/trec_rag_2026/.worktrees/codex-distributed-retrieval-cache
@@ -273,7 +285,7 @@ ClimbMix, projected RAG 2025 development qrels.
 
   Record the verifier's `archive_sha256`.
 
-- [ ] **Step 5: Stop the exact paid GPU after local verification**
+- [x] **Step 5: Stop the exact paid GPU after local verification**
 
   As soon as the recovery-finalization shell exits zero and the locally
   downloaded bundle verifies, stop only `rag26-cache-dev-r4` and confirm it is
@@ -285,7 +297,7 @@ ClimbMix, projected RAG 2025 development qrels.
   dstack ps -v
   ```
 
-- [ ] **Step 6: Merge into a fresh staging root**
+- [x] **Step 6: Merge into a fresh staging root**
 
   ```bash
   stage_root="$PWD/outputs/private-cache-staging/nonagentic-two-topic-20260806"
@@ -295,6 +307,10 @@ ClimbMix, projected RAG 2025 development qrels.
     --score-conflicts keep-existing \
     "$shard_root/rag2026-0"
   ```
+
+  Evidence: merge ID
+  `fd8c9bb8cadf76db35fae62888e612020a9fc279566501461cc24a66c1f75459`;
+  the completion receipt is present under the isolated staging cache.
 
 - [ ] **Step 7: Prove zero-work staging replay**
 
@@ -988,7 +1004,7 @@ ClimbMix, projected RAG 2025 development qrels.
 
 | Phase | Run name | Topics | Status | HF verification | Local merge | Offline replay | Evaluation |
 |---|---|---:|---|---|---|---|---|
-| 2026 closure | `rag26-cache-dev-r4` | `rag2026-0` | retrieval complete; packaging failed closed; diagnosis active | pending | pending | pending | n/a |
+| 2026 closure | `rag26-cache-dev-r4` | `rag2026-0` | stopped | archive + marker round-trip verified | staging merge complete | pending | n/a |
 | 2025 canary | `rag25-cache-31` | `31` | gated | pending | pending | pending | pending |
 
 ## Completion Criteria
