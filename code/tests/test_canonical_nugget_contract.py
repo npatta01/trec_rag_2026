@@ -375,6 +375,192 @@ def test_validated_cache_is_revalidated_against_the_current_request(
     assert json.loads(recovered.manifest_path.read_bytes())["hosted_llm_calls"] == 0
 
 
+def test_canonical_cache_only_hit_replays_without_constructing_backend(
+    tmp_path: Path,
+) -> None:
+    """Catches a validated canonical hit constructing a hosted backend."""
+    selections, selection_manifest = _write_inputs(tmp_path)
+    seeded = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: _Backend(
+            b'{"claims":[{"claim":"Cached claim.","evidence_aliases":["e001"],'
+            b'"importance":"vital"}]}'
+        ),
+    )
+    expected = seeded.nuggets_path.read_bytes()
+    seeded.nuggets_path.unlink()
+    seeded.manifest_path.unlink()
+
+    replayed = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        cache_only=True,
+        backend_factory=lambda: pytest.fail("validated hit must not construct backend"),
+    )
+
+    assert replayed.nuggets_path.read_bytes() == expected
+    manifest = json.loads(replayed.manifest_path.read_bytes())
+    assert manifest["validated_cache_hits"] == 1
+    assert manifest["hosted_llm_calls"] == 0
+    assert manifest["raw_cache_writes"] == 0
+    assert manifest["validated_cache_writes"] == 0
+
+
+def test_canonical_cache_stats_describe_only_the_current_invocation(
+    tmp_path: Path,
+) -> None:
+    """Catches an offline receipt inheriting hosted calls from an old manifest."""
+    selections, selection_manifest = _write_inputs(tmp_path)
+    online_stats: dict[str, int] = {}
+    _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: _Backend(
+            b'{"claims":[{"claim":"Cached claim.","evidence_aliases":["e001"],'
+            b'"importance":"vital"}]}'
+        ),
+        cache_stats=online_stats,
+    )
+    offline_stats: dict[str, int] = {}
+
+    _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        cache_only=True,
+        backend_factory=lambda: pytest.fail("validated hit must not construct backend"),
+        cache_stats=offline_stats,
+    )
+
+    assert online_stats == {
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "provider_calls": 1,
+    }
+    assert offline_stats == {
+        "cache_hits": 1,
+        "cache_misses": 0,
+        "provider_calls": 0,
+    }
+
+
+def test_canonical_cache_only_miss_ignores_raw_and_has_no_side_effects(
+    tmp_path: Path,
+) -> None:
+    """Catches an offline canonical miss using raw provider data or mutating outputs."""
+    from trec_rag.canonical_nuggets import CanonicalValidatedCacheMiss
+
+    selections, selection_manifest = _write_inputs(tmp_path)
+    seeded = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: _Backend(
+            b'{"claims":[{"claim":"Cached claim.","evidence_aliases":["e001"],'
+            b'"importance":"vital"}]}'
+        ),
+    )
+    seeded.nuggets_path.unlink()
+    seeded.manifest_path.unlink()
+    validated = next((tmp_path / "response-cache" / "validated").glob("*.json"))
+    validated.unlink()
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(CanonicalValidatedCacheMiss, match="validated canonical cache miss"):
+        _stage(
+            tmp_path,
+            selections,
+            selection_manifest,
+            cache_only=True,
+            backend_factory=lambda: pytest.fail("offline miss must not construct backend"),
+        )
+
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert not seeded.nuggets_path.exists()
+    assert not seeded.manifest_path.exists()
+
+
+def test_canonical_cache_only_rejects_malformed_validated_entry_without_backend(
+    tmp_path: Path,
+) -> None:
+    """Catches a malformed validated entry falling through to raw or hosted work."""
+    from trec_rag.canonical_nuggets import CanonicalValidatedCacheIntegrityError
+
+    selections, selection_manifest = _write_inputs(tmp_path)
+    seeded = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: _Backend(
+            b'{"claims":[{"claim":"Cached claim.","evidence_aliases":["e001"],'
+            b'"importance":"vital"}]}'
+        ),
+    )
+    seeded.nuggets_path.unlink()
+    seeded.manifest_path.unlink()
+    validated = next((tmp_path / "response-cache" / "validated").glob("*.json"))
+    entry = json.loads(validated.read_bytes())
+    entry["request_sha256"] = "0" * 64
+    validated.write_bytes(_canonical(entry) + b"\n")
+
+    with pytest.raises(
+        CanonicalValidatedCacheIntegrityError,
+        match="validated canonical cache entry is invalid",
+    ):
+        _stage(
+            tmp_path,
+            selections,
+            selection_manifest,
+            cache_only=True,
+            backend_factory=lambda: pytest.fail("invalid cache must not construct backend"),
+        )
+
+    assert not seeded.nuggets_path.exists()
+    assert not seeded.manifest_path.exists()
+
+
+def test_canonical_cache_only_rejects_noncanonical_validated_json(tmp_path: Path) -> None:
+    """Catches portable validated cache bytes accepting alternate JSON encodings."""
+    from trec_rag.canonical_nuggets import CanonicalValidatedCacheIntegrityError
+
+    selections, selection_manifest = _write_inputs(tmp_path)
+    seeded = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: _Backend(
+            b'{"claims":[{"claim":"Cached claim.","evidence_aliases":["e001"],'
+            b'"importance":"vital"}]}'
+        ),
+    )
+    seeded.nuggets_path.unlink()
+    seeded.manifest_path.unlink()
+    validated = next((tmp_path / "response-cache" / "validated").glob("*.json"))
+    validated.write_bytes(b" " + validated.read_bytes())
+
+    with pytest.raises(CanonicalValidatedCacheIntegrityError):
+        _stage(
+            tmp_path,
+            selections,
+            selection_manifest,
+            cache_only=True,
+            backend_factory=lambda: pytest.fail("invalid cache must not construct backend"),
+        )
+
+
 def test_composite_backend_cache_retains_creator_and_scorer_provenance(
     tmp_path: Path,
 ) -> None:

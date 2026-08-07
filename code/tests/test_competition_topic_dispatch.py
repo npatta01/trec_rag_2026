@@ -223,6 +223,19 @@ def test_official_runner_dispatches_pending_topics_in_source_order_without_paren
         "read_retrieval_export_receipt",
         lambda *_args, **_kwargs: export_receipt,
     )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_read_topic_cache_operation_receipt",
+        lambda **kwargs: SimpleNamespace(
+            topic_id=kwargs["topic"].id,
+            projection_manifest_sha256=kwargs["projection_manifest_sha256"],
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_publish_cache_operation_manifest",
+        lambda **kwargs: captured.update(operation_manifest=kwargs),
+    )
 
     result = competition_retrieval._run_official(
         V2_CONFIG,
@@ -245,6 +258,7 @@ def test_official_runner_dispatches_pending_topics_in_source_order_without_paren
     assert result.selected_topic_ids == ("topic-b", "topic-a")
     assert result.resumed_topic_ids == ()
     assert result.retrieval_export is export_receipt
+    assert captured["operation_manifest"]["mode"] == "online"
 
 
 def test_dispatch_receipt_rejects_an_unsealed_topic_completion(
@@ -396,9 +410,238 @@ def test_real_production_worker_crosses_process_boundary_with_pinned_config(
     assert child_pids != {os.getpid()}
 
 
-def test_production_worker_promotes_a_projection_only_crash_without_rerunning_topic(
+@pytest.mark.parametrize("topic_raises", [False, True], ids=("success", "topic-error"))
+def test_production_worker_closes_both_score_caches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    topic_raises: bool,
+) -> None:
+    """Catches worker exit while either scorer still owns a SQLite connection."""
+    class TrackingCache:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    caches: list[TrackingCache] = []
+
+    class TrackingScorer:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.score_cache = TrackingCache()
+            caches.append(self.score_cache)
+
+    job = _patch_score_cache_lifecycle_worker(
+        tmp_path,
+        monkeypatch,
+        passage_scorer_factory=TrackingScorer,
+        candidate_scorer_factory=TrackingScorer,
+    )
+    projection = SimpleNamespace(topic_id=job.topic_id, manifest_sha256="a" * 64)
+
+    def run_topic(*_args, **_kwargs):
+        if topic_raises:
+            raise RuntimeError("topic run failed")
+        return SimpleNamespace(topic_id=job.topic_id, projection_receipt=projection)
+
+    monkeypatch.setattr(competition_retrieval, "_run_topic", run_topic)
+
+    if topic_raises:
+        with pytest.raises(RuntimeError, match="topic run failed"):
+            competition_retrieval._run_production_topic_job(job)
+    else:
+        receipt = competition_retrieval._run_production_topic_job(job)
+        assert receipt.projection_manifest_sha256 == projection.manifest_sha256
+
+    assert len(caches) == 2
+    assert [cache.close_calls for cache in caches] == [1, 1]
+
+
+def _patch_score_cache_lifecycle_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    passage_scorer_factory,
+    candidate_scorer_factory,
+) -> TopicJob:
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(
+        base,
+        root_dir=tmp_path,
+        experiment=replace(base.experiment, id="score-cache-failure-lifecycle"),
+        topics_path=tmp_path / "topics.tsv",
+    )
+    topic = Topic("topic-a", "", "narrative")
+    config_bytes = b"pinned score cache failure lifecycle config\n"
+    config_path = (tmp_path / "config.yaml").resolve()
+    config_path.write_bytes(config_bytes)
+
+    monkeypatch.setattr(
+        competition_retrieval,
+        "load_facet_pilot_config",
+        lambda _path, *, source_bytes=None: config,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "load_narrative_topics",
+        lambda _path: (topic,),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_production_dependencies",
+        lambda **_kwargs: competition_retrieval._RuntimeDependencies(
+            code_commit="c" * 40,
+            document_scorer=None,
+            candidate_scorer=None,
+            similarity=None,
+            cache_ignore_checker=None,
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "build_pyserini_retriever",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            identity={"name": "fake", "type": "test", "hits": 1000}
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_validated_existing_topic_job_receipt",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadPassageScorer",
+        passage_scorer_factory,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadSentencePairScorer",
+        candidate_scorer_factory,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "LocalMiniLMSimilarity",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_run_topic",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            topic_id=topic.id,
+            projection_receipt=SimpleNamespace(
+                topic_id=topic.id,
+                manifest_sha256="a" * 64,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_topic_completion_for_dispatch",
+        lambda *_args: ("complete", "coverage_sufficient"),
+    )
+    return TopicJob(
+        topic_id=topic.id,
+        run_id=config.run_id,
+        config_path=config_path,
+        config_bytes=config_bytes,
+        config_sha256=sha256(config_bytes).hexdigest(),
+        topic_root=(config.output_dir / topic.id).resolve(),
+    )
+
+
+@pytest.mark.parametrize("failing_cache", ["passage", "sentence"])
+def test_production_worker_attempts_both_score_cache_closes_when_one_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failing_cache: str,
+) -> None:
+    """Catches cleanup aborting after the first score-cache close failure."""
+    close_calls = {"passage": 0, "sentence": 0}
+    close_order: list[str] = []
+
+    class TrackingCache:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            close_calls[self.name] += 1
+            close_order.append(self.name)
+            if self.name == failing_cache:
+                raise RuntimeError(f"{self.name} score cache close failed")
+
+    def scorer_factory(name: str):
+        return lambda *_args, **_kwargs: SimpleNamespace(
+            score_cache=TrackingCache(name)
+        )
+
+    job = _patch_score_cache_lifecycle_worker(
+        tmp_path,
+        monkeypatch,
+        passage_scorer_factory=scorer_factory("passage"),
+        candidate_scorer_factory=scorer_factory("sentence"),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^{failing_cache} score cache close failed$",
+    ):
+        competition_retrieval._run_production_topic_job(job)
+
+    assert close_order == ["sentence", "passage"]
+    assert close_calls == {"passage": 1, "sentence": 1}
+
+
+def test_production_worker_closes_first_score_cache_when_second_scorer_init_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches delayed cleanup registration leaking the first scorer's cache."""
+
+    class TrackingCache:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    passage_cache = TrackingCache()
+    passage_init_calls = 0
+    sentence_init_calls = 0
+
+    def passage_scorer(*_args, **_kwargs):
+        nonlocal passage_init_calls
+        passage_init_calls += 1
+        return SimpleNamespace(score_cache=passage_cache)
+
+    def failing_sentence_scorer(*_args, **_kwargs):
+        nonlocal sentence_init_calls
+        sentence_init_calls += 1
+        raise RuntimeError("sentence scorer construction failed")
+
+    job = _patch_score_cache_lifecycle_worker(
+        tmp_path,
+        monkeypatch,
+        passage_scorer_factory=passage_scorer,
+        candidate_scorer_factory=failing_sentence_scorer,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"^sentence scorer construction failed$",
+    ):
+        competition_retrieval._run_production_topic_job(job)
+
+    assert passage_init_calls == 1
+    assert sentence_init_calls == 1
+    assert passage_cache.close_calls == 1
+
+
+@pytest.mark.parametrize("operation_exists", [True, False], ids=("sealed", "missing"))
+def test_production_worker_recovers_projection_only_after_operation_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_exists: bool,
 ) -> None:
     base = load_facet_pilot_config(V2_CONFIG)
     config = replace(
@@ -427,6 +670,28 @@ def test_production_worker_promotes_a_projection_only_crash_without_rerunning_to
             ("decomposition_producer_sha256", producer_sha256),
         ),
     )
+    if operation_exists:
+        competition_retrieval._publish_topic_cache_operation_receipt(
+            config=config,
+            topic=topic,
+            config_sha256=sha256(config_bytes).hexdigest(),
+            projection_manifest_sha256=projection.manifest_sha256,
+            mode="online",
+            phases={
+                phase: {"resumed": True}
+                for phase in ("planning", "retrieval", "scoring", "canonical")
+            },
+            stages={
+                stage: {
+                    "cache_hits": 0,
+                    "cache_misses": 0,
+                    "network_calls": 0,
+                    "provider_calls": 0,
+                    "model_batches": 0,
+                }
+                for stage in competition_retrieval.CACHE_OPERATION_STAGE_NAMES
+            },
+        )
 
     monkeypatch.setattr(
         competition_retrieval,
@@ -480,10 +745,57 @@ def test_production_worker_promotes_a_projection_only_crash_without_rerunning_to
         "_topic_completion_for_dispatch",
         lambda _config, _topic: ("complete", "coverage_sufficient"),
     )
+    runs: list[str] = []
+
+    def rerun_topic(*_args, **_kwargs):
+        runs.append(topic.id)
+        if not operation_exists:
+            competition_retrieval._publish_topic_cache_operation_receipt(
+                config=config,
+                topic=topic,
+                config_sha256=sha256(config_bytes).hexdigest(),
+                projection_manifest_sha256=projection.manifest_sha256,
+                mode="online",
+                phases={
+                    phase: {"resumed": True}
+                    for phase in ("planning", "retrieval", "scoring", "canonical")
+                },
+                stages={
+                    stage: {
+                        "cache_hits": 0,
+                        "cache_misses": 0,
+                        "network_calls": 0,
+                        "provider_calls": 0,
+                        "model_batches": 0,
+                    }
+                    for stage in competition_retrieval.CACHE_OPERATION_STAGE_NAMES
+                },
+            )
+        return SimpleNamespace(topic_id=topic.id, projection_receipt=projection)
+
     monkeypatch.setattr(
         competition_retrieval,
         "_run_topic",
-        lambda *_args, **_kwargs: pytest.fail("sealed projection was rerun"),
+        rerun_topic,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadPassageScorer",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            score_cache=SimpleNamespace(close=lambda: None)
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "MixedbreadSentencePairScorer",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            score_cache=SimpleNamespace(close=lambda: None)
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "LocalMiniLMSimilarity",
+        lambda *_args, **_kwargs: object(),
     )
     job = TopicJob(
         topic_id=topic.id,
@@ -502,6 +814,71 @@ def test_production_worker_promotes_a_projection_only_crash_without_rerunning_to
 
     assert receipt.projection_manifest_sha256 == projection.manifest_sha256
     assert read_topic_receipt(job) == receipt
+    assert runs == ([] if operation_exists else [topic.id])
+
+
+def test_parent_resume_refuses_dispatch_when_operation_receipt_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches the parent accepting a job seal that root aggregation cannot verify."""
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(base, root_dir=tmp_path)
+    topic = Topic("topic-a", "", "narrative")
+    config_sha256 = "a" * 64
+    producer_sha256 = "b" * 64
+    projection = SimpleNamespace(
+        topic_id=topic.id,
+        manifest_sha256="c" * 64,
+        source_seals=(
+            ("config_sha256", config_sha256),
+            ("decomposition_producer_sha256", producer_sha256),
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "read_topic_projection_receipt",
+        lambda *_args: projection,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_decomposition_producer_sha256",
+        lambda *_args, **_kwargs: producer_sha256,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "validate_retrieval_topic_checkpoints",
+        lambda *_args, **_kwargs: (projection,),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_topic_completion_for_dispatch",
+        lambda *_args: ("complete", "coverage_sufficient"),
+    )
+
+    with pytest.raises(ValueError, match="cache operation topic receipt is missing"):
+        competition_retrieval._validated_existing_topic_job_receipt(
+            config,
+            topic,
+            expected_config_sha256=config_sha256,
+            expected_retriever_identity={"type": "test"},
+            planning_backend=None,
+            operation_mode="online",
+            allow_missing_operation_receipt=False,
+        )
+
+    assert (
+        competition_retrieval._validated_existing_topic_job_receipt(
+            config,
+            topic,
+            expected_config_sha256=config_sha256,
+            expected_retriever_identity={"type": "test"},
+            planning_backend=None,
+            operation_mode="online",
+            allow_missing_operation_receipt=True,
+        )
+        is None
+    )
 
 
 def test_production_worker_refuses_projection_recovery_from_other_config_bytes(

@@ -533,6 +533,7 @@ def build_pyserini_retriever(
     corpus_epoch: str,
     client: Any | None = None,
     continuation_ticket: str | None = None,
+    cache_only: bool = False,
 ) -> PyseriniRemoteRetriever:
     """Build the real identity-bound ClimbMix BM25 adapter."""
     if not isinstance(index, str) or not index.strip():
@@ -553,6 +554,7 @@ def build_pyserini_retriever(
         client=client,
         corpus_epoch=corpus_epoch,
         continuation_ticket=continuation_ticket,
+        cache_only=cache_only,
     )
 
 

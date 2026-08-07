@@ -7,6 +7,7 @@ import pytest
 
 import trec_rag.evidence_local as evidence_local
 from trec_rag.evidence_local import (
+    LocalCacheAccounting,
     MINILM_MODEL,
     MINILM_REVISION,
     MIXEDBREAD_MODEL,
@@ -16,6 +17,7 @@ from trec_rag.evidence_local import (
     _load_local_cross_encoder,
 )
 from trec_rag.facet_evidence import SentencePair
+from trec_rag.rerank_score_cache import ScoreCacheMiss
 
 
 class _Parameter:
@@ -110,6 +112,40 @@ def test_mixedbread_real_cache_deduplicates_and_restores_pair_order(tmp_path) ->
     assert len(model.calls) == 1
 
 
+def test_mixedbread_read_only_miss_is_side_effect_free_and_model_lazy(tmp_path) -> None:
+    """Catches offline sentence scoring creating SQLite or loading the model."""
+    cache_root = tmp_path / "score-cache"
+    seed = MixedbreadSentencePairScorer(score_cache_root=cache_root, device="cpu")
+    seed.score_cache.close()
+    before = {
+        path.relative_to(cache_root): path.read_bytes()
+        for path in cache_root.rglob("*")
+        if path.is_file()
+    }
+    scorer = MixedbreadSentencePairScorer(
+        score_cache_root=cache_root,
+        device="cpu",
+        model_loader=lambda *_args, **_kwargs: pytest.fail(
+            "read-only miss must not load the model"
+        ),
+        read_only=True,
+    )
+    pair = SentencePair("224", "doc-a", "safety", "Safety", "Sentence.")
+
+    with pytest.raises(ScoreCacheMiss, match="required score-cache entries are missing"):
+        scorer.score_pairs((pair,))
+
+    after = {
+        path.relative_to(cache_root): path.read_bytes()
+        for path in cache_root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert scorer.accounting.cache_hits == 0
+    assert scorer.accounting.cache_misses == 1
+    assert scorer.accounting.model_batches == 0
+
+
 def test_mixedbread_rejects_boolean_cache_and_model_scores(tmp_path) -> None:
     cached = MixedbreadSentencePairScorer(
         score_cache_root=tmp_path / "cached",
@@ -186,3 +222,99 @@ def test_minilm_resolves_device_and_computes_pinned_offline_cosine(monkeypatch) 
     })]
     assert matrix[0] == pytest.approx((1.0, 0.8))
     assert matrix[1] == pytest.approx((0.8, 1.0))
+
+
+def test_minilm_similarity_cache_replays_without_loading_model(tmp_path) -> None:
+    """Catches a warm portable matrix cache loading the local embedding model."""
+    class Model:
+        def encode(self, texts, **_kwargs):
+            assert tuple(texts) == ("first", "second")
+            return ((1.0, 0.0), (0.0, 1.0))
+
+    online = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: Model(),
+        device="cpu",
+        batch_size=1,
+        cache_root=tmp_path / "cache",
+    )
+    first = online.cosine_matrix(("first", "second"))
+
+    offline = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: pytest.fail("cache hit must not load model"),
+        device="cpu",
+        batch_size=7,
+        cache_root=tmp_path / "cache",
+        cache_only=True,
+    )
+    second = offline.cosine_matrix(("first", "second"))
+
+    assert second == pytest.approx(first)
+    assert online.accounting == LocalCacheAccounting(
+        cache_hits=0, cache_misses=1, model_batches=2
+    )
+    assert offline.accounting == LocalCacheAccounting(
+        cache_hits=1, cache_misses=0, model_batches=0
+    )
+
+
+def test_minilm_cache_only_miss_is_side_effect_free_and_model_lazy(tmp_path) -> None:
+    """Catches a missing offline matrix creating cache state or loading a model."""
+    from trec_rag.similarity_cache import SimilarityCacheMiss
+
+    root = tmp_path / "absent"
+    similarity = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: pytest.fail("offline miss must not load model"),
+        device="cpu",
+        cache_root=root,
+        cache_only=True,
+    )
+
+    with pytest.raises(SimilarityCacheMiss, match="similarity cache miss"):
+        similarity.cosine_matrix(("first", "second"))
+
+    assert similarity.accounting == LocalCacheAccounting(
+        cache_hits=0, cache_misses=1, model_batches=0
+    )
+    assert not root.exists()
+
+
+def test_minilm_loader_failure_does_not_report_phantom_model_batches() -> None:
+    """Catches counting planned batches before a model exists."""
+    similarity = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("loader failed")
+        ),
+        device="cpu",
+        batch_size=1,
+    )
+
+    with pytest.raises(RuntimeError, match="loader failed"):
+        similarity.cosine_matrix(("first", "second"))
+
+    assert similarity.accounting == LocalCacheAccounting(
+        cache_hits=0,
+        cache_misses=1,
+        model_batches=0,
+    )
+
+
+def test_minilm_encode_failure_does_not_report_phantom_model_batches() -> None:
+    """Catches counting planned batches that never return from encode."""
+    class Model:
+        def encode(self, _texts, **_kwargs):
+            raise RuntimeError("encode failed")
+
+    similarity = LocalMiniLMSimilarity(
+        loader=lambda *_args, **_kwargs: Model(),
+        device="cpu",
+        batch_size=1,
+    )
+
+    with pytest.raises(RuntimeError, match="encode failed"):
+        similarity.cosine_matrix(("first", "second"))
+
+    assert similarity.accounting == LocalCacheAccounting(
+        cache_hits=0,
+        cache_misses=1,
+        model_batches=0,
+    )

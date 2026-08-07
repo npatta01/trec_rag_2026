@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,11 @@ from trec_rag.rerank_score_cache import (
     _predict,
     _validate_model_dtype,
 )
+from trec_rag.similarity_cache import (
+    SimilarityCache,
+    SimilarityCacheMiss,
+    build_similarity_cache_identity,
+)
 
 
 MIXEDBREAD_MODEL = "mixedbread-ai/mxbai-rerank-base-v2"
@@ -38,6 +44,7 @@ _INPUT_POLICY = SCORING_NORMALIZATION_VERSION
 __all__ = [
     "BACKEND_VERSION",
     "INFERENCE_DTYPE",
+    "LocalCacheAccounting",
     "LocalMiniLMSimilarity",
     "MINILM_MODEL",
     "MINILM_REVISION",
@@ -50,6 +57,15 @@ __all__ = [
     "minilm_similarity_identity",
     "mixedbread_sentence_scorer_identity",
 ]
+
+
+@dataclass(frozen=True)
+class LocalCacheAccounting:
+    """Cumulative exact cache and local-model work for one scorer instance."""
+
+    cache_hits: int = 0
+    cache_misses: int = 0
+    model_batches: int = 0
 
 
 def mixedbread_sentence_scorer_identity() -> dict[str, object]:
@@ -134,6 +150,7 @@ class MixedbreadSentencePairScorer:
         device: str = "auto",
         model_loader: Callable[..., Any] = _load_local_cross_encoder,
         batch_size: int = 32,
+        read_only: bool = False,
     ) -> None:
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
@@ -154,12 +171,24 @@ class MixedbreadSentencePairScorer:
         self.score_cache = GlobalScoreCache(
             score_cache_root,
             context,
+            read_only=read_only,
         )
         self._model = _LazyPinnedModel(device=device, loader=model_loader)
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._model_batches = 0
 
     @property
     def identity(self) -> dict[str, object]:
         return mixedbread_sentence_scorer_identity()
+
+    @property
+    def accounting(self) -> LocalCacheAccounting:
+        return LocalCacheAccounting(
+            cache_hits=self._cache_hits,
+            cache_misses=self._cache_misses,
+            model_batches=self._model_batches,
+        )
 
     def score_pairs(self, pairs: Sequence[SentencePair]) -> tuple[float, ...]:
         rows = tuple(pairs)
@@ -174,6 +203,7 @@ class MixedbreadSentencePairScorer:
         )
 
         def compute_batch(batch: Sequence[tuple[str, str]]) -> tuple[float, ...]:
+            self._model_batches += 1
             predicted = tuple(
                 self._finite_score(score)
                 for score in _predict(
@@ -187,11 +217,18 @@ class MixedbreadSentencePairScorer:
                 raise ValueError("model score count must match sentence pair count")
             return predicted
 
-        scores = self.score_cache.score_many(
-            normalized_pairs,
-            compute_batch,
-            batch_size=self.batch_size,
-        )
+        stats: dict[str, int] = {}
+        try:
+            scores = self.score_cache.score_many(
+                normalized_pairs,
+                compute_batch,
+                batch_size=self.batch_size,
+                _stats=stats,
+            )
+        finally:
+            hits = stats.get("cache_hits", 0)
+            self._cache_hits += hits
+            self._cache_misses += len(dict.fromkeys(normalized_pairs)) - hits
         return tuple(self._finite_score(score) for score in scores)
 
     @staticmethod
@@ -231,12 +268,23 @@ class LocalMiniLMSimilarity:
         device: str = "cpu",
         batch_size: int = 256,
         loader: Callable[..., Any] | None = None,
+        cache_root: Path | None = None,
+        cache_only: bool = False,
     ) -> None:
         minilm_similarity_identity(device=device, batch_size=batch_size)
+        if not isinstance(cache_only, bool):
+            raise TypeError("cache_only must be Boolean")
+        if cache_only and cache_root is None:
+            raise ValueError("cache_only requires cache_root")
         self._device = _choose_device(device)
         self._batch_size = batch_size
         self._loader = loader
         self._model: Any | None = None
+        self._cache = None if cache_root is None else SimilarityCache(cache_root)
+        self._cache_only = cache_only
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._model_batches = 0
 
     @property
     def model_identity(self) -> dict[str, object]:
@@ -255,6 +303,15 @@ class LocalMiniLMSimilarity:
         return minilm_similarity_identity(
             device=self._device,
             batch_size=self._batch_size,
+        )
+
+    @property
+    def accounting(self) -> LocalCacheAccounting:
+        """Report effective batches only after the aggregate encode call returns."""
+        return LocalCacheAccounting(
+            cache_hits=self._cache_hits,
+            cache_misses=self._cache_misses,
+            model_batches=self._model_batches,
         )
 
     def _load(self) -> Any:
@@ -280,6 +337,22 @@ class LocalMiniLMSimilarity:
             raise ValueError("embedding texts must be non-empty strings")
         if not rows:
             return np.empty((0, 0), dtype=np.float64)
+        cache_identity = build_similarity_cache_identity(
+            model_identity=self.model_identity,
+            texts=rows,
+        )
+        if self._cache is not None:
+            try:
+                cached = self._cache.load(cache_identity)
+            except SimilarityCacheMiss:
+                self._cache_misses += 1
+                if self._cache_only:
+                    raise
+            else:
+                self._cache_hits += 1
+                return np.asarray(cached, dtype=np.float64)
+        else:
+            self._cache_misses += 1
         encoded = self._load().encode(
             rows,
             batch_size=self._batch_size,
@@ -287,6 +360,7 @@ class LocalMiniLMSimilarity:
             normalize_embeddings=True,
             show_progress_bar=False,
         )
+        self._model_batches += math.ceil(len(rows) / self._batch_size)
         try:
             vectors = np.asarray(encoded, dtype=np.float64)
         except (TypeError, ValueError, OverflowError) as exc:
@@ -309,4 +383,7 @@ class LocalMiniLMSimilarity:
         cosine = np.matmul(normalized, normalized.T)
         if not np.isfinite(cosine).all():
             raise ValueError("cosine matrix must be finite")
-        return np.clip(cosine, -1.0, 1.0)
+        clipped = np.clip(cosine, -1.0, 1.0)
+        if self._cache is not None:
+            self._cache.store(cache_identity, clipped)
+        return clipped
