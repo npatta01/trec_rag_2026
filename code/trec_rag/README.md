@@ -390,6 +390,39 @@ it performs validated cache reads and local projection only, but there is no
 wall-time guarantee. A missing or corrupt cache entry fails before publishing a
 success receipt.
 
+Evaluate a completed local RAG 2025 retrieval replay only after that cache-only
+proof succeeds. The qrels below are **projected development qrels** generated
+for diagnostics; they are not exhaustive official TREC ground truth. Keep the
+report in an ignored private output directory:
+
+```bash
+.venv/bin/python -m trec_rag.competition_retrieval_evaluation \
+  --run outputs/nonagentic-rag25-dev-local-replay-20260806/r_output_trec_rag_2026.tsv \
+  --qrels trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels \
+  --topic 31 \
+  --output outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/topic-31.json
+```
+
+Repeat `--topic ID` for the exact population represented by an aggregate run.
+The evaluator fails closed on missing or extra topics and on malformed TREC
+rows, non-`Q0` rows, invalid ranks or scores, duplicate ranks or document IDs,
+conflicting run tags, ranks that are not dense from 1 in per-topic file order,
+and increasing per-topic scores. The CLI accepts only the pinned RAG 2025
+assessor variant
+`rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1`, whose required
+SHA-256 is
+`42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37`.
+It also requires that qrels file to contain exactly the 22 development topics,
+use `0` in column 2, contain only integer grades from 0 through 4, and contain
+no duplicate topic/document pair. A same-named or structurally plausible file
+with different bytes is rejected rather than labeled as the pinned assessor.
+
+The canonical JSON report records SHA-256 hashes of the exact run and qrels
+inputs, names the pinned assessor variant, explicitly labels the evidence as
+projected development qrels, and reports aggregate plus per-topic metrics. The
+default suite pairs judged counts and rates with relevance diagnostics at
+cutoffs 10, 50, and 100; repeat `--metric NAME@CUTOFF` to replace that suite.
+
 The CUDA dependency group pins the same `sentence-transformers`, `transformers`,
 and `numpy` versions the ROCm group resolves to, so reranker cache identities
 remain interchangeable. The two groups are declared conflicting, so `uv.lock`
