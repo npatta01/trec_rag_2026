@@ -182,9 +182,9 @@ PY
 run_args=(
   --task-name "$task_name"
   --run-id "$run_id"
-  --plan "$private_dir/run-plan.json"
+  --plan ".agentic-private/run-plan.json"
   --plan-sha256 "$plan_sha256"
-  --config "$private_dir/agentic-config.yaml"
+  --config ".agentic-private/agentic-config.yaml"
   --artifact-prefix "$artifact_prefix"
 )
 for topic_id in "${topic_ids[@]}"; do run_args+=(--topic "$topic_id"); done

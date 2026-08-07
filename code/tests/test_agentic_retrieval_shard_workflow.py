@@ -335,13 +335,19 @@ if [[ ${1:-} == --version ]]; then
 fi
 [[ ${1:-} == apply && ${2:-} == -f ]]
 task_config=$3
-python3 - "$task_config" <<'PY'
+python3 - "$task_config" "$@" <<'PY'
 from pathlib import Path
 import sys
 config = Path(sys.argv[1]).resolve()
 cwd = Path.cwd().resolve()
 config.relative_to(cwd)
 assert config.parent == cwd
+argv = sys.argv[2:]
+marker = argv.index("--")
+run_args = argv[marker + 1:]
+assert run_args[run_args.index("--plan") + 1] == ".agentic-private/run-plan.json"
+assert run_args[run_args.index("--config") + 1] == ".agentic-private/agentic-config.yaml"
+assert not any("trec-rag-agentic-transport" in value for value in run_args)
 PY
 printf 'fake-preview-ok\\n'
 """,
