@@ -498,6 +498,8 @@ def test_planner_and_judge_contracts_describe_all_local_invariants() -> None:
     assert "exact" in str(planner_schema).casefold()
     assert "40" in str(planner_schema)
     assert "supplemental" in str(planner_obligation).casefold()
+    assert "at least one required" in planner_text
+    assert "at least one required" in str(planner_schema).casefold()
 
     plan = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
     judge_request = render_judge_request(NARRATIVE, plan, _nuggets(), _identity().judge_model)
@@ -867,6 +869,34 @@ def test_run_accepts_whitespace_preserving_source_text_from_a_sealed_handoff(
     assert receipt.required_coverage == pytest.approx(1.0)
 
 
+def test_run_preserves_authenticated_unicode_zwj_source_text_end_to_end(
+    tmp_path: Path,
+) -> None:
+    family = "👨\u200d👩\u200d👧\u200d👦"
+    narrative = "\n  Explain the projected cost and assumptions " + family + ".\n"
+    claim_texts = ("\n Family evidence " + family + ".\n", "  second claim\n")
+    handoff_path = tmp_path / "generation_handoff_manifest.json"
+    write_generation_handoff(
+        handoff_path,
+        _coverage_handoff(narrative=narrative, claim_texts=claim_texts),
+    )
+    work_dir = tmp_path / "unicode-run"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    planner = RecordingBackend([_reply(VALID_PLAN)])
+    judge = RecordingBackend([_reply(_judge_payload(frozen))])
+
+    receipt = run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir), planner=planner, judge=judge
+    )
+
+    assert receipt.required_coverage == pytest.approx(1.0)
+    planner_payload = json.loads(planner.requests[0].messages[1]["content"])
+    judge_payload = json.loads(judge.requests[0].messages[1]["content"])
+    assert planner_payload["narrative"] == narrative
+    assert judge_payload["narrative"] == narrative
+    assert judge_payload["nuggets"][0] == "n001: " + claim_texts[0]
+
+
 def _coverage_config(
     handoff_path: Path,
     work_dir: Path | None,
@@ -1212,6 +1242,78 @@ def test_interrupted_then_resumed_stages_seal_deterministic_call_count(tmp_path:
     manifest = json.loads((work_dir / "manifest.json").read_text())
     assert manifest["completed_stages"] == 2
     assert "hosted_calls" not in manifest
+
+
+@pytest.mark.parametrize("request_digest", ["not-a-digest", "0" * 64])
+def test_interrupted_resume_rejects_tampered_or_malformed_planner_request_digest(
+    tmp_path: Path, request_digest: str
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "planner-request-digest"
+
+    class FailingJudge:
+        def complete(self, request: CoverageModelRequest) -> BackendReply:
+            raise RuntimeError("simulated interruption")
+
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir),
+            planner=RecordingBackend([_reply(VALID_PLAN)]),
+            judge=FailingJudge(),
+        )
+    plan_path = work_dir / "plan.json"
+    plan_payload = json.loads(plan_path.read_text())
+    plan_payload["request_sha256"] = request_digest
+    plan_path.write_bytes(json.dumps(plan_payload, sort_keys=True, separators=(",", ":")).encode())
+
+    resumed_planner = RecordingBackend([])
+    resumed_judge = RecordingBackend([])
+    with pytest.raises(NuggetCoverageError) as caught:
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=resumed_planner,
+            judge=resumed_judge,
+        )
+
+    assert caught.value.stage == "persistence"
+    assert resumed_planner.requests == []
+    assert resumed_judge.requests == []
+    assert not (work_dir / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("request_digest", ["not-a-digest", "0" * 64])
+def test_interrupted_resume_rejects_tampered_or_malformed_judge_request_digest(
+    tmp_path: Path, request_digest: str
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "judge-request-digest"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+    (work_dir / "manifest.json").unlink()
+    judgments_path = work_dir / "judgments.json"
+    judgments_payload = json.loads(judgments_path.read_text())
+    judgments_payload["request_sha256"] = request_digest
+    judgments_path.write_bytes(
+        json.dumps(judgments_payload, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+    resumed_planner = RecordingBackend([])
+    resumed_judge = RecordingBackend([])
+    with pytest.raises(NuggetCoverageError) as caught:
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=resumed_planner,
+            judge=resumed_judge,
+        )
+
+    assert caught.value.stage == "persistence"
+    assert resumed_planner.requests == []
+    assert resumed_judge.requests == []
+    assert not (work_dir / "manifest.json").exists()
 
 
 def test_resume_classifies_unknown_persisted_nugget_ids_as_persistence_errors(

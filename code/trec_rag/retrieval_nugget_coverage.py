@@ -46,7 +46,7 @@ MAX_OBLIGATIONS_PER_FACET = 8
 MAX_OBLIGATIONS = 40
 MAX_JUDGE_REQUEST_BYTES = 1_000_000
 MAX_COMPLETION_TOKENS = 8192
-PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v2"
+PLANNER_PROMPT_VERSION = "retrieval_nugget_planner_v3"
 JUDGE_PROMPT_VERSION = "retrieval_nugget_judge_v2"
 EVALUATOR_SCHEMA_VERSION = "retrieval_nugget_coverage_v1"
 INPUT_ARTIFACT_SCHEMA_VERSION = "retrieval_nugget_coverage_input_v1"
@@ -64,7 +64,8 @@ PLANNER_SYSTEM_PROMPT = (
     "verbatim from the narrative. For each supplemental_inferred obligation, "
     "narrative_spans must be an empty list. Every unmapped_narrative_spans entry "
     "must also be an exact narrative substring. Keep the total number of "
-    "obligations across all facets at 40 or fewer."
+    "obligations across all facets at 40 or fewer. Include at least one "
+    "required_explicit obligation; a plan with none is invalid and unscoreable."
 )
 JUDGE_SYSTEM_PROMPT = (
     "Judge each frozen obligation against the supplied retrieval nuggets. Use "
@@ -1023,6 +1024,19 @@ def _safe_provider_metadata(metadata: Mapping[str, object]) -> dict[str, object]
     return safe
 
 
+def _validate_request_digest(
+    value: object, expected: str, *, stage: Literal["planner", "judge"]
+) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise NuggetCoverageError("persistence", f"{stage} request identity is invalid")
+    if value != expected:
+        raise NuggetCoverageError("persistence", f"{stage} request identity does not match")
+
+
 def _publish_once(path: Path, payload: Mapping[str, object]) -> str:
     """Publish canonical bytes once, refusing contradictory state."""
 
@@ -1130,8 +1144,12 @@ def _load_plan_artifact(
     if payload.get("plan_sha256") != plan.plan_sha256:
         raise NuggetCoverageError("persistence", "planner artifact hash does not match")
     request_sha256 = payload.get("request_sha256")
-    if not isinstance(request_sha256, str):
-        raise NuggetCoverageError("persistence", "planner request identity is invalid")
+    expected_request_sha256 = sha256(
+        _serialized_provider_request(
+            render_planner_request(narrative, identity), stage="planner"
+        )
+    ).hexdigest()
+    _validate_request_digest(request_sha256, expected_request_sha256, stage="planner")
     metadata = payload.get("provider_metadata")
     return plan, request_sha256, _safe_provider_metadata(metadata if isinstance(metadata, Mapping) else {})
 
@@ -1200,8 +1218,16 @@ def _load_judgments_artifact(
     if rows != expected_rows:
         raise NuggetCoverageError("persistence", "judge artifact judgments are not canonical")
     request_sha256 = payload.get("request_sha256")
-    if not isinstance(request_sha256, str):
-        raise NuggetCoverageError("persistence", "judge request identity is invalid")
+    try:
+        expected_request_sha256 = sha256(
+            _serialized_provider_request(
+                render_judge_request(plan.narrative, plan, nuggets, identity),
+                stage="judge",
+            )
+        ).hexdigest()
+    except NuggetCoverageError:
+        raise NuggetCoverageError("persistence", "judge request identity is invalid") from None
+    _validate_request_digest(request_sha256, expected_request_sha256, stage="judge")
     metadata = payload.get("provider_metadata")
     return parsed, request_sha256, _safe_provider_metadata(metadata if isinstance(metadata, Mapping) else {})
 
@@ -1712,7 +1738,8 @@ def _planner_response_schema() -> dict[str, object]:
         "type": "object",
         "description": (
             "Every span must be an exact narrative substring, and the total "
-            "number of obligations across all facets must be at most 40."
+            "number of obligations across all facets must be at most 40. The "
+            "plan must contain at least one required_explicit obligation."
         ),
         "additionalProperties": False,
         "required": ["schema_version", "facets", "unmapped_narrative_spans"],
@@ -1889,7 +1916,7 @@ def _sealed_text(value: object, name: str, *, stage: str) -> str:
         _error(stage, f"{name} must be non-empty text")
     for character in value:
         category = unicodedata.category(character)
-        if (category == "Cc" and character not in "\n\r\t") or category == "Cf":
+        if category == "Cc" and character not in "\n\r\t":
             _error(stage, f"{name} contains unsafe control characters")
     return value
 
