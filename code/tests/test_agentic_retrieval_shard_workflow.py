@@ -76,6 +76,17 @@ def test_agentic_task_has_only_required_secret_bindings_and_private_transport() 
     assert ".env.local" not in serialized
 
 
+def test_agentic_worker_uses_exact_repo_python_version() -> None:
+    script = WRAPPER_PATH.read_text(encoding="utf-8")
+    required = (REPO_ROOT / ".python-version").read_text(encoding="utf-8").strip()
+
+    assert required == "3.12.13"
+    assert 'required_python=$(<"$REPO_ROOT/.python-version")' in script
+    assert '--python "$required_python"' in script
+    assert "--no-python-downloads" not in script
+    assert "python_runtime_verified=$required_python" in script
+
+
 @pytest.mark.parametrize("script", [WRAPPER_PATH, LAUNCHER_PATH])
 def test_tools_default_to_preview_safe_contract(script: Path) -> None:
     result = _run(script, "--help")
@@ -140,6 +151,7 @@ def _fake_agentic_checkout(tmp_path: Path, *, fail_topic: str = "") -> tuple[Pat
     (checkout / "code/tools").mkdir(parents=True)
     (checkout / "configs").mkdir()
     shutil.copy2(WRAPPER_PATH, checkout / "code/tools/run_agentic_retrieval_worker.sh")
+    shutil.copy2(REPO_ROOT / ".python-version", checkout / ".python-version")
     config = checkout / "configs/agentic.yaml"
     config.write_text(AGENTIC_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
     plan = checkout / "plan.json"
@@ -166,6 +178,9 @@ import sys
 
 runtime = pathlib.Path(os.environ["FAKE_RUNTIME"])
 args = sys.argv[1:]
+if args and args[0] == "-c":
+    print("3.12.13")
+    raise SystemExit(0)
 if args and args[0] == "-":
     model, revision = args[1:3]
     events = runtime / "events"
