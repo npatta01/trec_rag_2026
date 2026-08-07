@@ -890,6 +890,8 @@ code {{ color: var(--color-accent-strong); overflow-wrap: anywhere; }}
   var filterStatus = document.getElementById("filter-status");
   var liveRegion = document.getElementById("live-region");
   var themeButtons = Array.prototype.slice.call(document.querySelectorAll("[data-theme-choice]"));
+  var backButton = document.getElementById("back-to-overview");
+  var returnFocusButton = null;
 
   function setTheme(choice, persist) {{
     if (choice === "light" || choice === "dark") root.setAttribute("data-theme", choice);
@@ -901,35 +903,40 @@ code {{ color: var(--color-accent-strong); overflow-wrap: anywhere; }}
   try {{ var savedTheme = window.localStorage.getItem("retrieval-nugget-coverage-theme"); setTheme(savedTheme === "light" || savedTheme === "dark" ? savedTheme : "system", false); }} catch (error) {{ setTheme("system", false); }}
 
   function detailFor(topicId) {{ return topicDetails.find(function (detail) {{ return detail.getAttribute("data-topic-id") === topicId; }}); }}
-  function showOverview(message) {{
+  function showOverview(message, restoreFocus) {{
     overview.hidden = false;
     detailView.hidden = true;
     topicDetails.forEach(function (detail) {{ detail.hidden = true; }});
     topicButtons.forEach(function (button) {{ button.setAttribute("aria-pressed", "false"); }});
     if (message) liveRegion.textContent = message;
+    var focusTarget = restoreFocus ? returnFocusButton : null;
+    returnFocusButton = null;
+    if (focusTarget && document.contains(focusTarget) && !focusTarget.hidden) focusTarget.focus();
   }}
   function showTopic(topicId, push) {{
     var selected = detailFor(topicId);
     if (!selected) {{ showOverview("That topic was not found; showing the overview."); return; }}
+    returnFocusButton = topicButtons.find(function (button) {{ return button.getAttribute("data-topic-id") === topicId; }}) || null;
     overview.hidden = true;
     detailView.hidden = false;
     topicDetails.forEach(function (detail) {{ detail.hidden = detail !== selected; }});
     topicButtons.forEach(function (button) {{ button.setAttribute("aria-pressed", String(button.getAttribute("data-topic-id") === topicId)); }});
     if (push) history.pushState(null, "", "#topic=" + encodeURIComponent(topicId));
     liveRegion.textContent = "Showing topic " + topicId + ".";
+    backButton.focus();
     selected.scrollIntoView({{ block: "start" }});
   }}
   function restoreLocation() {{
-    if (!location.hash) {{ showOverview(""); return; }}
-    if (location.hash.indexOf("#topic=") !== 0) {{ showOverview("That link was not a valid topic; showing the overview."); return; }}
+    if (!location.hash) {{ showOverview("", true); return; }}
+    if (location.hash.indexOf("#topic=") !== 0) {{ showOverview("That link was not a valid topic; showing the overview.", true); return; }}
     var encoded = location.hash.slice(7);
     var topicId;
     try {{ topicId = decodeURIComponent(encoded); }} catch (error) {{ topicId = ""; }}
-    if (!topicId || !detailFor(topicId)) showOverview("That topic was not found; showing the overview.");
+    if (!topicId || !detailFor(topicId)) showOverview("That topic was not found; showing the overview.", true);
     else showTopic(topicId, false);
   }}
   topicButtons.forEach(function (button) {{ button.addEventListener("click", function () {{ showTopic(button.getAttribute("data-topic-id"), true); }}); }});
-  document.getElementById("back-to-overview").addEventListener("click", function () {{ history.pushState(null, "", location.pathname + location.search); showOverview(""); }});
+  backButton.addEventListener("click", function () {{ history.pushState(null, "", location.pathname + location.search); showOverview("", true); }});
   window.addEventListener("popstate", restoreLocation);
   window.addEventListener("hashchange", restoreLocation);
 

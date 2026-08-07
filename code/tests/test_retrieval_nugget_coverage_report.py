@@ -672,3 +672,19 @@ def test_renderer_contract_has_theme_navigation_and_accessibility_landmarks() ->
     assert 'data-theme-choice="dark"' in source
     assert 'aria-pressed="false"' in source
     assert len(parser.ids) == len(set(parser.ids))
+
+
+def test_renderer_focus_contract_moves_into_detail_and_restores_overview_target() -> None:
+    data, _ = _html_fixture_data()
+    source = report_module.render_coverage_report_html(data).decode("utf-8")
+
+    assert 'id="back-to-overview"' in source
+    assert 'id="topic-list"' in source
+    assert 'aria-controls="topic-1-topic-safe-' in source
+    assert "var returnFocusButton = null;" in source
+    assert "backButton.focus();" in source
+    assert "var focusTarget = restoreFocus ? returnFocusButton : null;" in source
+    assert "focusTarget.focus();" in source
+    assert 'showOverview("", true);' in source
+    assert 'showOverview("That link was not a valid topic; showing the overview.", true);' in source
+    assert 'showOverview("That topic was not found; showing the overview.", true);' in source
