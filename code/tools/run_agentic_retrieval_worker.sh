@@ -288,9 +288,9 @@ export TREC_RAG_CACHE_ROOT="$worker_root/cache/retrieval"
 mkdir -p "$HF_HOME" "$TREC_RAG_CACHE_ROOT"
 chmod 700 "$HF_HOME" "$TREC_RAG_CACHE_ROOT"
 
-failure_root="$REPO_ROOT/outputs/$run_id/work/failures"
+failure_root="$worker_root/failures"
 mkdir -p "$failure_root"
-chmod 700 "$REPO_ROOT/outputs/$run_id" "$REPO_ROOT/outputs/$run_id/work" "$failure_root"
+chmod 700 "$failure_root"
 
 write_failure_receipt() {
   local topic_id=$1

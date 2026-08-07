@@ -170,6 +170,9 @@ if args[:2] == ["-m", "trec_rag.competition_agentic_worker"]:
     topic = args[args.index("--topic") + 1]
     events = runtime / "events"
     events.mkdir(exist_ok=True)
+    if pathlib.Path("outputs/run-0/work").exists():
+        with (events / "worker.log").open("a") as stream:
+            stream.write("output-preexisting\\n")
     with (events / "worker.log").open("a") as stream:
         stream.write("worker|" + topic + "\\n")
     if topic == os.environ.get("FAKE_FAIL_TOPIC"):
@@ -291,11 +294,28 @@ def test_wrapper_failure_preserves_prior_topic_and_writes_safe_receipt(tmp_path:
     assert result.returncode != 0
     assert (tmp_path / "runtime/remote/rag2026-0/bundle-complete.json").exists()
     assert not (tmp_path / "runtime/remote/rag2026-1/bundle-complete.json").exists()
-    receipts = list((checkout / "outputs").rglob("failure-receipt.json"))
+    receipts = list((tmp_path / "runtime/workers").rglob("failure-receipt.json"))
     assert receipts
     payload = json.loads(receipts[0].read_text())
     assert payload["status"] == "failed"
     assert "secret" not in receipts[0].read_text()
+
+
+def test_wrapper_keeps_output_namespace_empty_until_worker_installs_plan(tmp_path: Path) -> None:
+    checkout, plan, env = _fake_agentic_checkout(tmp_path, fail_topic="rag2026-0")
+    result = _run(
+        checkout / "code/tools/run_agentic_retrieval_worker.sh",
+        "--task-name", "task-0", "--run-id", "run-0", "--plan", str(plan),
+        "--plan-sha256", "a" * 64, "--config", "configs/agentic.yaml",
+        "--artifact-prefix", "hf://buckets/private/trec_rag_2026/experiments/run-0",
+        "--topic", "rag2026-0", cwd=checkout, env=env,
+    )
+    assert result.returncode != 0
+    events = (tmp_path / "runtime/events/worker.log").read_text(encoding="utf-8").splitlines()
+    assert "output-preexisting" not in events
+    receipt = tmp_path / "runtime/workers/run-0/task-0/failures/rag2026-0/task-0/failure-receipt.json"
+    assert receipt.is_file()
+    assert (tmp_path / "runtime/remote/task-0/failure-receipt.json").is_file()
 
 
 def test_launcher_runs_dstack_from_transport_directory_for_preview(tmp_path: Path) -> None:
