@@ -64,9 +64,25 @@ ClimbMix, projected RAG 2025 development qrels.
   private HF prefixes contain only the immutable archive and completion marker;
   local verification, isolated staging merge, two-worker zero-work replay,
   projected-qrels evaluation, main-cache promotion, and a second zero-work
-  replay all passed. The remaining 19 prefixes are exactly empty. Ten
-  remaining-task previews were declined without submission; a new explicit
-  bulk authorization is the next live-compute gate.
+  replay all passed.
+- The final remote ledger records 19 paid `rag25-cache` runs, all terminal
+  (`done`, `failed`, or `terminated`), with no active RAG25 cache task and total
+  recorded dstack cost `$5.4173`. Every expected topic has an exact private HF
+  prefix containing only `bundle-complete.json` and `bundle.tar.zst`; the
+  corresponding archive hashes are recorded in the ledger. The initial
+  startup failures produced no artifacts; four later partial paired failures
+  preserved their successful sibling publications. The required singleton
+  retries produced the final `144-r3`, `225-r2`, `499-r2`, and `515-r2` topic
+  artifacts.
+- Per-topic local consolidation is complete for all 22 topics. The readiness
+  record finds 22 unique selected bundle directories, exact two-file contents,
+  and archive/marker hash agreement. Isolated staging merges, credential-
+  poisoned offline replays, and projected-qrels evaluations are recorded for
+  every topic; all replay receipts report zero cache misses, network calls,
+  provider calls, and model batches. The all-22 aggregate staging merge is
+  currently running in its isolated destination; aggregate replay/evaluation
+  and shared-cache promotion have not started. Task 8 is current and in
+  progress.
 - The 2025 topic file contains exactly 22 numeric IDs:
   `14, 31, 37, 58, 72, 84, 144, 161, 200, 213, 219, 224, 225, 233, 273,
   300, 407, 477, 499, 515, 707, 897`.
@@ -1079,7 +1095,7 @@ ClimbMix, projected RAG 2025 development qrels.
   workers stay inside the organizer guidance; each worker has burst one and a
   six-second per-host request-start interval.
 
-- [ ] **Step 7: Launch the remaining manifest with a bounded rolling queue**
+- [x] **Step 7: Launch the remaining manifest with a bounded rolling queue**
 
   Start at most three tasks concurrently. A machine processes at most two
   topics in parallel. Submit each task exactly once and let dstack handle only
@@ -1089,70 +1105,81 @@ ClimbMix, projected RAG 2025 development qrels.
   do not wait for the other active tasks to finish. Never exceed three active
   tasks or six organizer-facing topic workers.
 
-  Current evidence: the first wave was submitted exactly once at
-  `2026-08-07T09:16:31Z`. `rag25-cache-58-72`
-  (`01349a93-04b4-4b42-80ab-774c74bb2387`) selected a RunPod EU-SE-1 A40 at
-  $0.44/hour; `rag25-cache-84-144`
-  (`7a072337-2886-41b9-9688-7deb4231946d`) selected a RunPod EU-SE-1 A6000 at
-  $0.53/hour; and `rag25-cache-161-200`
-  (`357044c4-a6d9-46e2-9416-a288f25a63a6`) selected a RunPod US-KS-2 A6000 at
-  $0.53/hour. All three entered provisioning.
+  Evidence: the final read-only ledger records 19 paid `rag25-cache` runs and
+  total cost `$5.4173`. The rolling queue completed the exact 22-topic manifest;
+  every dstack run is terminal and no RAG25 cache task remains active. The
+  three first-wave submissions were made once at
+  `2026-08-07T09:16:31Z`; the later launches and exact retries are recorded in
+  the live-run table below. Submission/finish interval inspection shows a
+  maximum of three concurrent paid cache tasks. The exact HF-prefix audit finds
+  two files for each of the 22 topics, with no extra files. Primary evidence is
+  `outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/final-remote-ledger-20260807.md`.
 
-  Startup incident: the first two tasks exited 2 before any topic worker,
-  hosted request, or artifact receipt with ordinary-log error `current branch
-  has no tracking branch`. The third was still provisioning and was stopped
-  by exact name once the deterministic wrapper fault was known. Their costs
-  were $0.0335, $0.0304, and $0.0828 respectively ($0.1467 total). A fresh
-  component-aware HF listing confirmed all six topic prefixes remained empty.
-
-- [ ] **Step 8: Consolidate each completed task while the queue continues**
+- [x] **Step 8: Consolidate each completed task while the queue continues**
 
   For every completed task's topic prefixes: list, download, verify, record
-  archive hashes, merge into the fresh aggregate staging cache, and run an
-  offline replay for the newly added topics. Start the next remote task as soon
-  as the slot is free; perform this local consolidation concurrently with the
-  still-running remote queue. Do not promote to the shared main cache until
-  final consolidation. This bounds failure recovery without idling available
-  remote capacity.
+  archive hashes, merge into an isolated per-topic or per-pair staging cache,
+  and run an offline replay for the newly added topics. The all-22 aggregate
+  staging merge remains deferred to Task 8; no bulk shared-cache promotion was
+  performed here.
 
-  Evidence: while the first retry cohort was running, the user explicitly
-  requested slot-by-slot replenishment instead of waiting for all three
-  machines. The concurrency ceiling and per-machine topic limit remain
-  unchanged.
+  Evidence: `outputs/private-cache-evaluation/nonagentic-rag25-dev-20260806/all22-aggregate-readiness-pass-20260807.sdd.md`
+  records exact structural and semantic verification for all 22 selected
+  bundles. The following isolated staging
+  merges, replay outputs, and projected-qrels reports are present (row counts
+  are the replay TREC output line counts); every replay receipt exited 0 with
+  zero cache misses, network/provider calls, and model batches:
 
-- [ ] **Step 9: Handle failures without corrupting successful work**
+  | Topics | Isolated staging merge | Offline replay | Evaluation |
+  |---|---|---|---|
+  | `14,37` | `7f282dc6…6d62` | concurrency replay, 482 rows (shared replay also passed) | `topics-14-37.json` |
+  | `31` | `fed38def…d1bc` | local/shared replay, 186 rows each | `topic-31.json` |
+  | `58,72` | `c676a2fc…9374` | pair replay, 477 rows | `pair-58-72.json` |
+  | `84` | `6861a571…cb87` | topic replay, 257 rows | `topic-84.json` |
+  | `144` | `86b34c6c…6795` | `144-r3` replay, 93 rows | `topic-144-r3.json` |
+  | `161,200` | `65244161…4483` | pair replay, 378 rows | `pair-161-200.json` |
+  | `213,219` | `85a86749…0dc3` | pair replay, 356 rows | `pair-213-219.json` |
+  | `224` | `33793513…ecb3` | topic replay, 191 rows | `topic-224.json` |
+  | `225` | `239fc982…57b7` | `225-r2` replay, 205 rows | `topic-225-r2.json` |
+  | `233,273` | `34a08ebf…4722` | pair replay, 333 rows | `pair-233-273.json` |
+  | `300,407` | `10708ab7…e18a` | pair replay, 246 rows | `pair-300-407.json` |
+  | `477` | `18a6974f…dd8a` | salvage replay, 197 rows | `topic-477-salvage.json` |
+  | `499` | `baf43a27…1d5d` | `499-r2` replay, 223 rows | `topic-499-r2.json` |
+  | `515` | `e84c32ef…e164` | ROCm replay, 193 rows | `topic-515-replay-rocm-20260807.json` |
+  | `707` | `c529f054…b3c7` | ROCm replay, 149 rows | `topic-707-replay-rocm-20260807.json` |
+  | `897` | `ef241ac2…6779` | topic replay, 162 rows | `topic-897.json` |
+
+- [x] **Step 9: Handle failures without corrupting successful work**
 
   A failed task gets root-cause diagnosis before any retry. Reuse already
   completed immutable topic prefixes; retry only topics whose prefixes remain
   empty. Never overwrite or delete a completion marker.
 
-  Current evidence: a real-wrapper no-upstream checkout fixture reproduced the
-  exact exit-2 error. Dstack preserves the committed checkout bytes but may
-  omit local branch-upstream metadata. The launcher already authenticates the
-  real upstream, clean source, approved public remote, and exact committed-only
-  snapshot. The minimal remote-wrapper repair retains the stronger upstream
-  diff when available, falls back to `HEAD` when that local metadata is absent,
-  and validates the fully staged diff before the ephemeral seal commit. The
-  new regression changed red to green; the complete shard workflow suite
-  passes 45 tests. No failed task will be retried under its old name or old
-  source hash.
+  Evidence: the real-wrapper no-upstream fixture reproduced the initial exit-2
+  `current branch has no tracking branch` error; the wrapper repair was
+  committed as `8e230386746a69ad0c784fa67a3379c06d905b5d`, and the complete
+  shard workflow suite passed 45 tests. The three exact retries were submitted
+  once at `2026-08-07T09:28:59Z`; `rag25-cache-58-72-r2` and
+  `rag25-cache-161-200-r2` completed, while `rag25-cache-84-144-r2` published
+  its successful topic-84 sibling before failing.
 
-  Retry evidence: commit
-  `8e230386746a69ad0c784fa67a3379c06d905b5d` changed only the wrapper,
-  regression, and incident record. Wrapper SHA-256 became
-  `94c62657e5d4df93abe88a94cded5aed40761c30285a7ea7781cb05a764d2a9d`;
-  the launcher, task template, and RAG25 config hashes remained unchanged.
-  Fresh `-r2` exact-name and six-prefix guards, real wrapper preflights, and
-  declined previews all passed. The three exact retries were submitted once
-  at `2026-08-07T09:28:59Z`: `rag25-cache-58-72-r2`
-  (`086de3e4-194f-4a49-b446-3e62a1d060f5`) on a RunPod EU-SE-1 A40 at
-  $0.44/hour, `rag25-cache-84-144-r2`
-  (`6fadb2da-0e42-4d8c-bf39-a089f163e374`) on a RunPod EU-SE-1 A6000 at
-  $0.53/hour, and `rag25-cache-161-200-r2`
-  (`e12ccb2f-ea22-4b9c-bbf6-8db8635ed651`) on a RunPod EU-SE-1 A40 at
-  $0.44/hour.
+  The final ledger records four later partial paired failures:
+  `84-144-r2`, `224-225`, `477-499`, and `515-707`. Their successful siblings
+  remained immutable and were reused (`84`, `224`, `477`, and `707`); the empty
+  failed-topic gaps were completed exactly once under `rag25-cache-144-r3`,
+  `rag25-cache-225-r2`, `rag25-cache-499-r2`, and `rag25-cache-515-r2`.
+  The exact HF parent listing now has exactly two files for every topic and no
+  ambiguous failed-topic publication. All 19 recorded runs are terminal, no
+  active RAG25 cache task remains, and no completion marker was overwritten or
+  deleted.
 
 ### Task 8: Final Consolidation, Offline Replay, and 22-Topic Evaluation
+
+**Current status (2026-08-07): IN PROGRESS.** All 22 per-topic bundle
+verification, isolated staging merges, offline replays, and projected-qrels
+evaluations are complete. The aggregate staging merge is running against its
+fresh isolated destination. The all-22 replay/evaluation and shared-cache
+promotion remain unchecked and have not run.
 
 **Files:**
 
@@ -1231,14 +1258,25 @@ ClimbMix, projected RAG 2025 development qrels.
 | Phase | Run name | Topics | Status | HF verification | Local merge | Offline replay | Evaluation |
 |---|---|---:|---|---|---|---|---|
 | 2026 closure | `rag26-cache-dev-r4` | `rag2026-0` | stopped | `ea9d2799…9622` | staging + main complete | staging + main zero-work | n/a |
-| 2025 singleton canary | `rag25-cache-31` | `31` | done, exit 0, $0.2182 | `0d9b77f4…8fe98fe` | staging + main complete | 186 rows, staging + main zero-work | projected-qrels complete |
-| 2025 concurrency canary | `rag25-cache-14-37` | `14,37` | done, exit 0, $0.3687 | `6331cf4b…ad01`; `bc36bb96…dc3f` | `7f282dc6…6d62`; `33b9d200…fc88` | 482 rows, staging + main zero-work | nDCG@10 0.0; judged rate@100 0.065 |
+| 2025 singleton canary | `rag25-cache-31` | `31` | done, exit 0, $0.2182 | `0d9b77f4…8fe98fe` | `fed38def…d1bc`; main complete | 186 rows, staging + shared zero-work | `topic-31.json` pass |
+| 2025 concurrency canary | `rag25-cache-14-37` | `14,37` | done, exit 0, $0.3687 | `6331cf4b…ad01`; `bc36bb96…dc3f` | `7f282dc6…6d62`; main `33b9d200…fc88` | 482 rows, staging + shared zero-work | `topics-14-37.json` pass |
 | 2025 bulk wave 1 startup | `rag25-cache-58-72` | `58,72` | failed before workers, exit 2, $0.0335 | exact prefixes empty | n/a | n/a | n/a |
 | 2025 bulk wave 1 startup | `rag25-cache-84-144` | `84,144` | failed before workers, exit 2, $0.0304 | exact prefixes empty | n/a | n/a | n/a |
 | 2025 bulk wave 1 startup | `rag25-cache-161-200` | `161,200` | stopped while provisioning, $0.0828 | exact prefixes empty | n/a | n/a | n/a |
-| 2025 bulk wave 1 retry | `rag25-cache-58-72-r2` | `58,72` | provisioning; RunPod EU-SE-1 A40, $0.44/hr | pending | pending | pending | pending |
-| 2025 bulk wave 1 retry | `rag25-cache-84-144-r2` | `84,144` | provisioning; RunPod EU-SE-1 A6000, $0.53/hr | pending | pending | pending | pending |
-| 2025 bulk wave 1 retry | `rag25-cache-161-200-r2` | `161,200` | provisioning; RunPod EU-SE-1 A40, $0.44/hr | pending | pending | pending | pending |
+| 2025 bulk retry | `rag25-cache-58-72-r2` | `58,72` | done, exit 0, $0.3278 | `8b1c8cac…d517`; `fc9140bb…82ce` | `c676a2fc…9374` | 477 rows, zero-work | `pair-58-72.json` pass |
+| 2025 bulk retry | `rag25-cache-84-144-r2` | `84,144` | failed, exit 2, $0.5052; topic 84 sibling complete | `afa60267…e814`; topic 144 later `88156177…a647` | `6861a571…cb87` (84); 144 later `86b34c6c…6795` | 257 rows (84); 93 rows (144 later), zero-work | `topic-84.json`; `topic-144-r3.json` pass |
+| 2025 bulk retry | `rag25-cache-161-200-r2` | `161,200` | done, exit 0, $0.3917 | `f0af24dc…9769`; `d8cfa97d…8c8b` | `65244161…4483` | 378 rows, zero-work | `pair-161-200.json` pass |
+| 2025 bulk wave 2 | `rag25-cache-213-219` | `213,219` | done, exit 0, $0.4196 | `fcf10a5b…cb4b`; `cf9826c0…99dc` | `85a86749…0dc3` | 356 rows, zero-work | `pair-213-219.json` pass |
+| 2025 bulk wave 2 | `rag25-cache-224-225` | `224,225` | failed, exit 2, $0.3136; topic 224 sibling complete | `9711160b…d298`; topic 225 later `e8f78f90…a038` | `33793513…ecb3` (224); 225 later `239fc982…57b7` | 191 rows (224); 205 rows (225 later), zero-work | `topic-224.json`; `topic-225-r2.json` pass |
+| 2025 bulk wave 2 | `rag25-cache-233-273` | `233,273` | done, exit 0, $0.4750 | `c6eddfd1…8d00`; `edde2f24…3298` | `34a08ebf…4722` | 333 rows, zero-work | `pair-233-273.json` pass |
+| 2025 singleton retry | `rag25-cache-144-r3` | `144` | done, exit 0, $0.2056 | `88156177…a647` | `86b34c6c…6795` | 93 rows, zero-work | `topic-144-r3.json` pass |
+| 2025 bulk wave 3 | `rag25-cache-300-407` | `300,407` | done, exit 0, $0.3658 | `a288bab0…9b7a`; `8d8b83be…7220` | `10708ab7…e18a` | 246 rows, zero-work | `pair-300-407.json` pass |
+| 2025 bulk wave 3 | `rag25-cache-477-499` | `477,499` | failed, exit 2, $0.4295; topic 477 sibling complete | `e517ba2c…0de1`; topic 499 later `8004b5e8…2d1` | `18a6974f…dd8a` (477); 499 later `baf43a27…1d5d` | 197 rows (477); 223 rows (499 later), zero-work | `topic-477-salvage.json`; `topic-499-r2.json` pass |
+| 2025 singleton retry | `rag25-cache-225-r2` | `225` | done, exit 0, $0.1960 | `e8f78f90…a038` | `239fc982…57b7` | 205 rows, zero-work | `topic-225-r2.json` pass |
+| 2025 bulk wave 3 | `rag25-cache-515-707` | `515,707` | failed, exit 2, $0.2898; topic 707 sibling complete | `8ad11cc7…012c`; topic 515 later `ec6f63bf…05e8` | `c529f054…b3c7` (707); 515 later `e84c32ef…e164` | 149 rows (707); 193 rows (515 later), zero-work | `topic-707-replay-rocm-20260807.json`; `topic-515-replay-rocm-20260807.json` pass |
+| 2025 singleton | `rag25-cache-897` | `897` | done, exit 0, $0.2388 | `4a27a965…d8d9` | `ef241ac2…6779` | 162 rows, zero-work | `topic-897.json` pass |
+| 2025 singleton retry | `rag25-cache-499-r2` | `499` | done, exit 0, $0.2605 | `8004b5e8…2d1` | `baf43a27…1d5d` | 223 rows, zero-work | `topic-499-r2.json` pass |
+| 2025 singleton retry | `rag25-cache-515-r2` | `515` | done, exit 0, $0.2648 | `ec6f63bf…05e8` | `e84c32ef…e164` | 193 rows, zero-work | `topic-515-replay-rocm-20260807.json` pass |
 
 ## Completion Criteria
 

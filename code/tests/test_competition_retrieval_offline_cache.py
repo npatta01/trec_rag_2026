@@ -218,9 +218,15 @@ def test_offline_production_worker_constructs_only_read_only_dependencies(
         build_retriever,
     )
 
-    passage = SimpleNamespace(identity={"passage": "identity"}, stats={})
+    passage = SimpleNamespace(
+        identity={"passage": "identity"},
+        stats={},
+        score_cache=SimpleNamespace(close=lambda: None),
+    )
     sentence = SimpleNamespace(
-        identity={"sentence": "identity"}, accounting=SimpleNamespace()
+        identity={"sentence": "identity"},
+        accounting=SimpleNamespace(),
+        score_cache=SimpleNamespace(close=lambda: None),
     )
     similarity = SimpleNamespace(
         identity={"similarity": "identity"}, accounting=SimpleNamespace()
