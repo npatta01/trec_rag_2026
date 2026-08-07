@@ -354,8 +354,9 @@ The private work directory holds canonical JSON artifacts, written in this order
 3. `judgments.json` — validated judgments, judge identity, and request SHA-256.
 4. `report.json` — scores, per-obligation rows, and diagnostics.
 5. `manifest.json` — written last, binding every artifact SHA-256, the evaluator
-   schema and prompt versions, model identities, hosted-call and reuse counts,
-   and safe provider metadata only.
+   schema and prompt versions, model identities, the truthful
+   `completed_stages` count, and safe provider metadata only. The receipt keeps
+   separate current-run `hosted_calls` and `reused_stages` values.
 
 Manifest-last ordering matches the retrieval runner's receipt convention, so a
 present manifest means every earlier artifact is complete.
@@ -367,14 +368,39 @@ version invalidates the matching request identity and fails rather than mixing
 states. There is no `overwrite` mode in version 1; deleting the directory is an
 explicit user action.
 
+The authenticated narrative and canonical nugget text are retained byte-for-byte,
+including multiline and surrounding whitespace, and their SHA-256 values are
+computed over those exact strings. Empty text and unsafe control characters are
+rejected at the handoff boundary. Model-output text remains strict: it must be
+trimmed, non-empty, and free of controls where the planner or judge contract
+requires it. Topic IDs are rejected before any work-directory path is resolved
+or created when they contain path separators, absolute-path syntax, or `.`/`..`.
+
+Resume performs an artifact-order preflight before loading a stage or invoking a
+backend. A later artifact cannot exist while an earlier required artifact is
+missing, and persisted nugget IDs are checked against the authenticated handoff
+before judge validation; either condition is a persistence error.
+
 Without `--allow-hosted-calls` the run is cache-only: if a required stage is
 missing it fails and names which stages would need a hosted call, without making
 one.
 
 The CLI prints one small JSON receipt with status, topic ID, artifact directory,
-artifact hashes, hosted-call and reuse counts, obligation and nugget counts, and
-the aggregate scores. It never prints narrative text, nugget text, requirement
-text, narrative spans, or credentials.
+artifact hashes, actual hosted-call and current-run reuse counts, obligation and
+nugget counts, and the aggregate scores. It never prints narrative text, nugget
+text, requirement text, narrative spans, or credentials. The manifest uses the
+truthful `completed_stages` count for the sealed planner/judge stages; the
+receipt's `hosted_calls` counts only calls made by the current invocation and
+`reused_stages` lists only stages reused by that invocation. Cache-only CLI
+errors safely identify exactly the missing planner stage, judge stage, or both.
+
+Both structured OpenRouter requests set `provider.require_parameters=true`,
+`provider.data_collection="deny"`, `reasoning.enabled=false`,
+`temperature=0`, `seed=0`, and `stream=false`; planner and judge prompt
+identities are bumped whenever these request or prompt contracts change. The
+completion budget is 8192 tokens to cover the bounded planner output. The
+provider metadata stored in memory and persistence is filtered through the same
+allowlist, and semantic retries remain zero.
 
 ## Failure Handling
 

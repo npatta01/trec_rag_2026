@@ -1641,8 +1641,26 @@ The private work directory contains, in order, `input.json` (hashes and alias
 identities only), `plan.json`, `judgments.json`, `report.json`, and the
 manifest-last `manifest.json`. The latter binds the handoff, narrative,
 ordered nugget hashes, schema and prompt versions, model identities, artifact
-hashes, call counts, and safe provider metadata. Keep this bundle and any
-provider responses outside git.
+hashes, and the truthful `completed_stages` count (the number of sealed planner
+and judge stages), plus safe provider metadata. The receipt's `hosted_calls`
+counts only actual calls made by the current invocation, while
+`reused_stages` lists only stages reused during that invocation. Keep this
+bundle and any provider responses outside git.
+
+Authenticated narrative and claim-hint text are preserved byte-for-byte,
+including multiline and surrounding whitespace, and hashed without
+normalization; empty text and unsafe controls are rejected. Model-output text
+remains strict and trimmed. Resume rejects impossible artifact order and
+unknown persisted nugget IDs before any backend call, and topic IDs unsafe for
+work-directory derivation are rejected before path resolution.
+
+Both structured OpenRouter requests require provider parameter support, deny
+provider data collection, disable reasoning, use temperature and seed zero,
+and set `stream=false`; semantic retries are disabled. Planner and judge
+prompts/schemas state the exact-substring, span-kind, obligation-count, and
+label/alias/`missing_elements` invariants. The 8192-token completion budget is
+bound into the request identities. In-memory and persisted provider metadata
+use the same secret-safe allowlist.
 
 Scoring maps `full`, `partial`, and `unsupported` to `1.0`, `0.5`, and `0.0`.
 For each facet containing required obligations, average its required labels;
