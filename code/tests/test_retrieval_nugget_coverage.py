@@ -1027,12 +1027,23 @@ def test_load_completed_coverage_evaluation_is_read_only(tmp_path: Path, monkeyp
     handoff_path = _write_coverage_handoff(tmp_path)
     work_dir = tmp_path / "completed-loader"
     frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    judge_payload = _judge_payload(frozen)
+    judge_payload["judgments"][0]["label"] = "partial"
+    judge_payload["judgments"][0]["missing_elements"] = "The assumptions are missing."
+    planner = RecordingBackend([_reply(VALID_PLAN)])
+    judge = RecordingBackend([_reply(judge_payload)])
     run_coverage_evaluation(
         _coverage_config(handoff_path, work_dir),
-        planner=RecordingBackend([_reply(VALID_PLAN)]),
-        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+        planner=planner,
+        judge=judge,
     )
     before = _snapshot_tree(work_dir)
+
+    def fail_if_called(*_args, **_kwargs) -> BackendReply:
+        raise AssertionError("loader must not call a fixture backend")
+
+    monkeypatch.setattr(planner, "complete", fail_if_called)
+    monkeypatch.setattr(judge, "complete", fail_if_called)
 
     class ExplodingBackend:
         def __init__(self, *args, **kwargs) -> None:
@@ -1048,11 +1059,12 @@ def test_load_completed_coverage_evaluation_is_read_only(tmp_path: Path, monkeyp
 
     assert loaded.bound_input.topic_id == "topic-coverage"
     assert loaded.plan.obligations == frozen.obligations
-    assert loaded.judgments == validate_judgments(
+    expected_judgments = validate_judgments(
         frozen, coverage_input_from_handoff(handoff_path, "topic-coverage").nuggets,
-        _judge_payload(frozen),
+        judge_payload,
     )
-    assert loaded.report.required_coverage == pytest.approx(1.0)
+    assert loaded.judgments == expected_judgments
+    assert loaded.report.required_coverage == 0.5
     assert loaded.artifact_hashes.keys() == {
         "input.json", "plan.json", "judgments.json", "report.json"
     }
