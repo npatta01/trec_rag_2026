@@ -37,6 +37,7 @@ def test_retrieval_nugget_coverage_route_documents_the_cli_contract() -> None:
         "one narrative",
         "canonical retrieval nugget text",
         "maximum of two hosted calls",
+        "defaults are `openai/gpt-5.6-sol` for each",
     ):
         assert required in section
 

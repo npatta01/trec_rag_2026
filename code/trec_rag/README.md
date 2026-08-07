@@ -1819,8 +1819,9 @@ resolution. Persisted planner and judge request digests must be lowercase
 either stage is reused.
 
 Both structured OpenRouter requests require provider parameter support, deny
-provider data collection, disable reasoning, use temperature and seed zero,
-and set `stream=false`; semantic retries are disabled. Planner and judge
+provider data collection, disable reasoning, omit unsupported sampling
+temperature, use seed zero, and set `stream=false`; semantic retries are
+disabled. Planner and judge
 prompts/schemas state the exact-substring, span-kind, span-bound,
 obligation-count, required-obligation, and label/alias/`missing_elements`
 invariants. The planner prompt identity is v4 and the judge prompt identity
@@ -1838,7 +1839,7 @@ supplemental-obligation average (or `null` when none exist), and
 plus per-obligation resolved nugget IDs and uncited-nugget diagnostics. Receipt
 scores are rounded for display; report artifacts retain full precision.
 
-Version 1 assumes canonical retrieval nuggets faithfully represent the
+Version 2 assumes canonical retrieval nuggets faithfully represent the
 selected passages from which they were derived; it never reopens passages.
 This is a planner-derived diagnostic, not ground truth. A low score cannot
 separate retrieval, selection, and canonicalization failures, and scores are
