@@ -1079,12 +1079,15 @@ ClimbMix, projected RAG 2025 development qrels.
   workers stay inside the organizer guidance; each worker has burst one and a
   six-second per-host request-start interval.
 
-- [ ] **Step 7: Launch the remaining manifest in bounded waves**
+- [ ] **Step 7: Launch the remaining manifest with a bounded rolling queue**
 
   Start at most three tasks concurrently. A machine processes at most two
   topics in parallel. Submit each task exactly once and let dstack handle only
   configured native capacity behavior. Record run name, backend, GPU, price,
-  topic IDs, submission time, and status.
+  topic IDs, submission time, and status. After a task reaches terminal
+  success, immediately fill that one slot with the next deterministic batch;
+  do not wait for the other active tasks to finish. Never exceed three active
+  tasks or six organizer-facing topic workers.
 
   Current evidence: the first wave was submitted exactly once at
   `2026-08-07T09:16:31Z`. `rag25-cache-58-72`
@@ -1102,12 +1105,20 @@ ClimbMix, projected RAG 2025 development qrels.
   were $0.0335, $0.0304, and $0.0828 respectively ($0.1467 total). A fresh
   component-aware HF listing confirmed all six topic prefixes remained empty.
 
-- [ ] **Step 8: Consolidate each completed wave**
+- [ ] **Step 8: Consolidate each completed task while the queue continues**
 
-  For every topic prefix: list, download, verify, record archive hash, merge
-  into the fresh aggregate staging cache, and run offline replay for the newly
-  added topics before starting the next wave. This bounds failure recovery and
-  prevents discovering a bad shard after all GPU spend has completed.
+  For every completed task's topic prefixes: list, download, verify, record
+  archive hashes, merge into the fresh aggregate staging cache, and run an
+  offline replay for the newly added topics. Start the next remote task as soon
+  as the slot is free; perform this local consolidation concurrently with the
+  still-running remote queue. Do not promote to the shared main cache until
+  final consolidation. This bounds failure recovery without idling available
+  remote capacity.
+
+  Evidence: while the first retry cohort was running, the user explicitly
+  requested slot-by-slot replenishment instead of waiting for all three
+  machines. The concurrency ceiling and per-machine topic limit remain
+  unchanged.
 
 - [ ] **Step 9: Handle failures without corrupting successful work**
 
@@ -1125,6 +1136,21 @@ ClimbMix, projected RAG 2025 development qrels.
   new regression changed red to green; the complete shard workflow suite
   passes 45 tests. No failed task will be retried under its old name or old
   source hash.
+
+  Retry evidence: commit
+  `8e230386746a69ad0c784fa67a3379c06d905b5d` changed only the wrapper,
+  regression, and incident record. Wrapper SHA-256 became
+  `94c62657e5d4df93abe88a94cded5aed40761c30285a7ea7781cb05a764d2a9d`;
+  the launcher, task template, and RAG25 config hashes remained unchanged.
+  Fresh `-r2` exact-name and six-prefix guards, real wrapper preflights, and
+  declined previews all passed. The three exact retries were submitted once
+  at `2026-08-07T09:28:59Z`: `rag25-cache-58-72-r2`
+  (`086de3e4-194f-4a49-b446-3e62a1d060f5`) on a RunPod EU-SE-1 A40 at
+  $0.44/hour, `rag25-cache-84-144-r2`
+  (`6fadb2da-0e42-4d8c-bf39-a089f163e374`) on a RunPod EU-SE-1 A6000 at
+  $0.53/hour, and `rag25-cache-161-200-r2`
+  (`e12ccb2f-ea22-4b9c-bbf6-8db8635ed651`) on a RunPod EU-SE-1 A40 at
+  $0.44/hour.
 
 ### Task 8: Final Consolidation, Offline Replay, and 22-Topic Evaluation
 
@@ -1210,6 +1236,9 @@ ClimbMix, projected RAG 2025 development qrels.
 | 2025 bulk wave 1 startup | `rag25-cache-58-72` | `58,72` | failed before workers, exit 2, $0.0335 | exact prefixes empty | n/a | n/a | n/a |
 | 2025 bulk wave 1 startup | `rag25-cache-84-144` | `84,144` | failed before workers, exit 2, $0.0304 | exact prefixes empty | n/a | n/a | n/a |
 | 2025 bulk wave 1 startup | `rag25-cache-161-200` | `161,200` | stopped while provisioning, $0.0828 | exact prefixes empty | n/a | n/a | n/a |
+| 2025 bulk wave 1 retry | `rag25-cache-58-72-r2` | `58,72` | provisioning; RunPod EU-SE-1 A40, $0.44/hr | pending | pending | pending | pending |
+| 2025 bulk wave 1 retry | `rag25-cache-84-144-r2` | `84,144` | provisioning; RunPod EU-SE-1 A6000, $0.53/hr | pending | pending | pending | pending |
+| 2025 bulk wave 1 retry | `rag25-cache-161-200-r2` | `161,200` | provisioning; RunPod EU-SE-1 A40, $0.44/hr | pending | pending | pending | pending |
 
 ## Completion Criteria
 
