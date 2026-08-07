@@ -114,6 +114,32 @@ def _configuration() -> dict[str, object]:
     return value
 
 
+@pytest.mark.parametrize(
+    "script_path",
+    [WRAPPER_PATH, LAUNCHER_PATH],
+    ids=["remote-wrapper", "local-launcher"],
+)
+def test_shard_tool_help_describes_shared_safe_configured_topic_ids(
+    script_path: Path,
+) -> None:
+    result = subprocess.run(
+        ["bash", str(script_path), "--help"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert "--topic SAFE_ID" in result.stdout
+    assert "rag2026-N" not in result.stdout
+    assert "RAG25 topic 31" in result.stdout
+    assert "RAG26 topic rag2026-0" in result.stdout
+    assert "safe topic ID" in result.stdout
+    assert "present in the configured topics" in result.stdout
+
+
 def test_dstack_dev_environment_is_interactive_bounded_and_48gb_only() -> None:
     value = yaml.safe_load(DEV_CONFIG_PATH.read_text(encoding="utf-8"))
     assert value["type"] == "dev-environment"

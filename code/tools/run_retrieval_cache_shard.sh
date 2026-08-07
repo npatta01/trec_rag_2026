@@ -22,7 +22,10 @@ config_arg="$DEFAULT_CONFIG"
 usage() {
   cat <<'EOF'
 Usage:
-  run_retrieval_cache_shard.sh [--preflight] --topic rag2026-N --run-id SAFE_ID [--config PATH]
+  run_retrieval_cache_shard.sh [--preflight] --topic SAFE_ID --run-id SAFE_ID [--config PATH]
+
+--topic accepts a safe topic ID that must be present in the configured topics.
+Examples: numeric RAG25 topic 31; RAG26 topic rag2026-0.
 
 --preflight validates the real wrapper's tools and nested argv without needing
 credentials, installing dependencies, downloading models, running retrieval,
