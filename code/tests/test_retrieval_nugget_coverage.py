@@ -4,6 +4,8 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+import ssl
+from urllib.error import URLError
 
 import pytest
 
@@ -1108,5 +1110,89 @@ def test_cli_redacts_obligation_span_and_credential_text_on_safe_error(
         "Describe the projected cost and its assumptions.",
         "cost and assumptions",
         "actual-fake-credential",
+    ):
+        assert sensitive not in output
+
+
+def test_resume_rejects_changed_evaluator_schema_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "schema-identity"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    monkeypatch.setattr(coverage_module, "EVALUATOR_SCHEMA_VERSION", "changed-schema")
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=RecordingBackend([]), judge=RecordingBackend([]),
+        )
+
+
+@pytest.mark.parametrize("reason", [TimeoutError("temporary"), ConnectionError("temporary")])
+def test_openrouter_retries_transient_url_errors(reason: Exception) -> None:
+    transport = FakeOpenRouterTransport([
+        URLError(reason),
+        _openrouter_response(VALID_PLAN),
+    ])
+    backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "key"}, transport=transport, transport_max_attempts=2
+    )
+
+    backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+
+    assert len(transport.requests) == 2
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [ValueError("permanent configuration failure"), ssl.SSLError("certificate verify failed")],
+)
+def test_openrouter_does_not_retry_permanent_or_certificate_url_errors(reason: Exception) -> None:
+    transport = FakeOpenRouterTransport([URLError(reason)])
+    backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "key"}, transport=transport, transport_max_attempts=3
+    )
+
+    with pytest.raises(RuntimeError, match="transport failed"):
+        backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+    assert len(transport.requests) == 1
+
+
+def test_cli_redacts_runtime_obligation_span_and_credential_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    sensitive_plan = json.loads(json.dumps(VALID_PLAN))
+    sensitive_plan["facets"][0]["obligations"][0]["requirement"] = "obligation-secret"
+    sensitive_plan["facets"][0]["obligations"][0]["support_test"] = "span-secret"
+    credential = "actual-fake-credential"
+
+    class FailingAfterPlanBackend:
+        def complete(self, request: CoverageModelRequest) -> BackendReply:
+            if request.stage == "planner":
+                return _reply(sensitive_plan)
+            raise RuntimeError(f"{credential}: obligation-secret cost and assumptions")
+
+    monkeypatch.setattr(coverage_module, "OpenRouterCoverageBackend", FailingAfterPlanBackend)
+    code = main([
+        "--handoff-manifest", str(handoff_path), "--topic", "topic-coverage",
+        "--work-dir", str(tmp_path / "runtime-safe"), "--allow-hosted-calls",
+    ])
+    output = capsys.readouterr().out
+
+    assert code != 0
+    for sensitive in (
+        credential,
+        "obligation-secret",
+        "span-secret",
+        "cost and assumptions",
     ):
         assert sensitive not in output

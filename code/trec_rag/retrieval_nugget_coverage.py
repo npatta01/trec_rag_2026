@@ -14,10 +14,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import socket
 import tempfile
 from types import MappingProxyType
 from typing import Literal, Protocol
 import unicodedata
+from urllib.error import URLError
 
 from trec_rag.facet_extraction import (
     BackendReply,
@@ -448,11 +450,9 @@ class OpenRouterCoverageBackend:
                     raise TypeError("transport must provide send(request)")
                 self._transport_invocation_count += 1
                 response = send(sent)
-            except (TimeoutError, ConnectionError):
-                if attempt < self._transport_max_attempts:
+            except Exception as exc:
+                if _is_transient_transport_error(exc) and attempt < self._transport_max_attempts:
                     continue
-                raise RuntimeError("OpenRouter transport failed") from None
-            except Exception:
                 raise RuntimeError("OpenRouter transport failed") from None
             if not isinstance(response, FacetResponse):
                 raise RuntimeError("OpenRouter transport returned an invalid response")
@@ -1227,6 +1227,13 @@ def _contains_credential(value: object, credential: str) -> bool:
     if isinstance(value, (list, tuple)):
         return any(_contains_credential(item, credential) for item in value)
     return False
+
+
+def _is_transient_transport_error(error: BaseException) -> bool:
+    """Classify only known transient network causes for bounded retries."""
+
+    reason = error.reason if isinstance(error, URLError) else error
+    return isinstance(reason, (TimeoutError, ConnectionError, socket.gaierror))
 
 
 def validate_and_freeze_plan(narrative: str, payload: object) -> FrozenPlan:
