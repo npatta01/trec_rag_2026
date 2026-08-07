@@ -809,6 +809,31 @@ def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     assert "docid=climbmix-b" in topic_one_prompt
 
 
+def test_generation_trims_an_over_limit_completion_before_validation(
+    tmp_path: Path,
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generator = FakeGenerator(
+        {
+            "rag2026-1": {
+                "references": ["climbmix-a", "climbmix-b"],
+                "answer": [
+                    {"text": "supported " * 900, "citations": ["climbmix-a"]},
+                    {"text": "trailing " * 200, "citations": ["climbmix-b"]},
+                ],
+            }
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    record = json.loads(config.output_path.read_text(encoding="utf-8"))
+    assert len(generator.calls) == 1
+    assert record["references"] == ["climbmix-a"]
+    assert len(record["answer"]) == 1
+    assert sum(len(item["text"].split()) for item in record["answer"]) == 900
+
+
 def test_generation_uses_topic_owned_text_for_shared_docid(tmp_path: Path) -> None:
     _write_handoff(
         tmp_path,
@@ -2071,6 +2096,17 @@ def _provider_success() -> FakeHttpResponse:
     )
 
 
+def test_retry_delay_honors_an_http_date_retry_after() -> None:
+    assert (
+        competition_rag._retry_delay(
+            "Wed, 21 Oct 2099 07:28:00 GMT",
+            attempt=3,
+            max_delay=900.0,
+        )
+        == 900.0
+    )
+
+
 def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2271,6 +2307,58 @@ def test_transient_retries_repeat_the_identical_request(monkeypatch: pytest.Monk
 
     assert len(bodies) == 2
     assert bodies[0] == bodies[1]
+
+
+def test_openrouter_honors_retry_after_longer_than_thirty_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [FakeHttpResponse(429, {"error": "slow down"}), _provider_success()]
+    responses[0].headers = {"Retry-After": "60"}
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        competition_rag.requests,
+        "post",
+        lambda *args, **kwargs: responses.pop(0),
+    )
+    monkeypatch.setattr(competition_rag.time, "sleep", sleeps.append)
+    generator = _openrouter_generator()
+    generator.timeout_seconds = 900.0
+
+    generator.complete_json(
+        topic_id="rag2026-1",
+        system_prompt="system",
+        user_prompt="user",
+        response_schema={"type": "object"},
+    )
+
+    assert sleeps == [60.0]
+
+
+@pytest.mark.parametrize("retry_after", ["nan", "NaN", "inf", "-inf", "1e400"])
+def test_openrouter_falls_back_for_nonfinite_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after: str,
+) -> None:
+    responses = [FakeHttpResponse(429, {"error": "slow down"}), _provider_success()]
+    responses[0].headers = {"Retry-After": retry_after}
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        competition_rag.requests,
+        "post",
+        lambda *args, **kwargs: responses.pop(0),
+    )
+    monkeypatch.setattr(competition_rag.time, "sleep", sleeps.append)
+
+    _openrouter_generator().complete_json(
+        topic_id="rag2026-1",
+        system_prompt="system",
+        user_prompt="user",
+        response_schema={"type": "object"},
+    )
+
+    assert sleeps == [1.0]
 
 
 @pytest.mark.parametrize("status_code", [400, 429, 503])

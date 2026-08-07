@@ -13,6 +13,8 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
@@ -541,7 +543,13 @@ class OpenRouterJsonGenerator:
                         f"OpenRouter HTTP {response.status_code}; no repair call was made",
                         safe_response,
                     )
-                time.sleep(_retry_delay(response.headers.get("Retry-After"), attempt))
+                time.sleep(
+                    _retry_delay(
+                        response.headers.get("Retry-After"),
+                        attempt,
+                        max_delay=self.timeout_seconds,
+                    )
+                )
                 continue
             if response.status_code >= 400:
                 raise SemanticCompletionError(
@@ -625,12 +633,23 @@ def _safe_http_response(
     return True, envelope, safe_envelope
 
 
-def _retry_delay(retry_after: str | None, attempt: int) -> float:
+def _retry_delay(
+    retry_after: str | None,
+    attempt: int,
+    *,
+    max_delay: float,
+) -> float:
     if retry_after:
         try:
-            return min(max(float(retry_after), 0.0), 30.0)
+            seconds = float(retry_after)
         except ValueError:
-            pass
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
+            except (TypeError, ValueError):
+                seconds = None
+        if seconds is not None and math.isfinite(seconds):
+            return min(max(seconds, 0.0), max_delay)
     return float(min(2 ** (attempt - 1), 8))
 
 
@@ -1221,13 +1240,15 @@ async def _generate_topic(
             _write_json(raw_path, _redact(raw_response, secrets))
             raw_written = True
             record = normalize_generated_record(
-                build_submission_record(
-                    generated,
-                    topic_id=topic_id,
-                    narrative=topic.narrative,
-                    team_id=config.team_id,
-                    run_id=config.run_id,
-                    run_desc=config.run_desc,
+                trim_to_word_limit(
+                    build_submission_record(
+                        generated,
+                        topic_id=topic_id,
+                        narrative=topic.narrative,
+                        team_id=config.team_id,
+                        run_id=config.run_id,
+                        run_desc=config.run_desc,
+                    )
                 ),
                 allowed_docids=list(topic.citation_docids),
             )
