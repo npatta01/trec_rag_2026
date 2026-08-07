@@ -2,19 +2,40 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
+from trec_rag.facet_extraction import FacetResponse
+from trec_rag.generation_handoff import (
+    ClaimHint,
+    EvidenceGroup,
+    EvidencePassage,
+    EvidenceSourceSpan,
+    GenerationHandoff,
+    GenerationTopic,
+    HandoffProducer,
+    SelectedCluster,
+    TopicSourceReceipts,
+    write_generation_handoff,
+)
 from trec_rag.retrieval_nugget_coverage import (
     BackendReply,
     CoverageNugget,
     CoverageModelRequest,
+    CoverageRunConfig,
+    CoverageRunReceipt,
     EvaluatorIdentity,
     FrozenPlan,
     NuggetCoverageError,
+    OpenRouterCoverageBackend,
+    BoundCoverageInput,
+    coverage_input_from_handoff,
     evaluate_nugget_coverage,
+    main,
     render_judge_request,
     render_planner_request,
+    run_coverage_evaluation,
     score_coverage,
     validate_and_freeze_plan,
     validate_judgments,
@@ -567,3 +588,314 @@ def test_empty_nuggets_are_rejected_before_either_backend_call() -> None:
 
     assert planner.requests == []
     assert judge.requests == []
+
+
+def _coverage_handoff(*, empty_claim_hints: bool = False) -> GenerationHandoff:
+    evidence_text = "A selected passage supporting the first canonical claim."
+    evidence = EvidencePassage(
+        evidence_id="ev-1",
+        group_id="group-1",
+        cluster_id="cluster-1",
+        cluster_ordinal=1,
+        support_ordinal=1,
+        candidate_kind="passage",
+        docid="DOC-1",
+        document_rank=1,
+        text=evidence_text,
+        document_sha256="a" * 64,
+        source_span=EvidenceSourceSpan(
+            start_char=0,
+            end_char=len(evidence_text),
+            start_byte=0,
+            end_byte=len(evidence_text.encode("utf-8")),
+        ),
+    )
+    group = EvidenceGroup(
+        group_id="group-1",
+        kind="generated_subnarrative",
+        text="A retrieval subnarrative.",
+        selected_clusters=(
+            SelectedCluster(
+                cluster_id="cluster-1",
+                ordinal=1,
+                representative_evidence_id="ev-1",
+                evidence_ids=("ev-1",),
+            ),
+        ),
+    )
+    claims = () if empty_claim_hints else (
+        ClaimHint(
+            claim_id="claim-z",
+            group_id="group-1",
+            kind="canonical",
+            text="The first canonical retrieval claim.",
+            evidence_ids=("ev-1",),
+        ),
+        ClaimHint(
+            claim_id="claim-a",
+            group_id="group-1",
+            kind="canonical",
+            text="The second canonical retrieval claim.",
+            evidence_ids=("ev-1",),
+        ),
+    )
+    topic = GenerationTopic(
+        topic_id="topic-coverage",
+        narrative=NARRATIVE,
+        groups=(group,),
+        evidence=(evidence,),
+        claim_hints=claims,
+        source_receipts=TopicSourceReceipts(
+            official_topics_sha256="b" * 64,
+            retrieval_topic_sha256="c" * 64,
+        ),
+    )
+    return GenerationHandoff(
+        producer=HandoffProducer(
+            source_contract="topic_records_v4",
+            retrieval_run_id="retrieval-run",
+            producer_revision="revision-1",
+        ),
+        topics=(topic,),
+    )
+
+
+def _write_coverage_handoff(tmp_path: Path, *, empty_claim_hints: bool = False) -> Path:
+    path = tmp_path / "generation_handoff_manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_generation_handoff(path, _coverage_handoff(empty_claim_hints=empty_claim_hints))
+    return path
+
+
+def test_coverage_input_from_handoff_authenticates_and_assigns_ordered_aliases(tmp_path: Path) -> None:
+    path = _write_coverage_handoff(tmp_path)
+
+    bound = coverage_input_from_handoff(path, "topic-coverage")
+
+    assert isinstance(bound, BoundCoverageInput)
+    assert bound.topic_id == "topic-coverage"
+    assert bound.manifest_sha256 == _coverage_handoff().manifest_sha256
+    assert bound.narrative_sha256 == hashlib.sha256(NARRATIVE.encode()).hexdigest()
+    assert [nugget.nugget_id for nugget in bound.nuggets] == ["claim-z", "claim-a"]
+    assert [hashlib.sha256(nugget.text.encode()).hexdigest() for nugget in bound.nuggets] == list(bound.nugget_text_sha256s)
+
+
+def test_coverage_input_rejects_unknown_topic_and_empty_claim_hints(tmp_path: Path) -> None:
+    path = _write_coverage_handoff(tmp_path)
+    with pytest.raises(ValueError):
+        coverage_input_from_handoff(path, "unknown-topic")
+
+    empty = _write_coverage_handoff(tmp_path / "empty", empty_claim_hints=True)
+    with pytest.raises(NuggetCoverageError, match="canonical retrieval nugget"):
+        coverage_input_from_handoff(empty, "topic-coverage")
+
+
+def test_coverage_input_rejects_altered_manifest_bytes(tmp_path: Path) -> None:
+    path = _write_coverage_handoff(tmp_path)
+    path.write_bytes(path.read_bytes().replace(b"topic-coverage", b"topic-corrupt", 1))
+
+    with pytest.raises(ValueError):
+        coverage_input_from_handoff(path, "topic-coverage")
+
+
+def _coverage_config(
+    handoff_path: Path,
+    work_dir: Path | None,
+    *,
+    mode: str = "create",
+    allow_hosted_calls: bool = True,
+) -> CoverageRunConfig:
+    return CoverageRunConfig(
+        handoff_manifest_path=handoff_path,
+        topic_id="topic-coverage",
+        work_dir=work_dir,
+        planner_model="planner-model",
+        judge_model="judge-model",
+        mode=mode,
+        allow_hosted_calls=allow_hosted_calls,
+    )
+
+
+def test_create_persists_private_canonical_artifacts_and_safe_receipt(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "coverage-work"
+    planner = RecordingBackend([_reply(VALID_PLAN, metadata={"provider": "planner"})])
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    judge = RecordingBackend([_reply(_judge_payload(frozen), metadata={"provider": "judge"})])
+
+    receipt = run_coverage_evaluation(_coverage_config(handoff_path, work_dir), planner=planner, judge=judge)
+
+    assert isinstance(receipt, CoverageRunReceipt)
+    assert set(path.name for path in work_dir.iterdir()) == {
+        "input.json", "plan.json", "judgments.json", "report.json", "manifest.json"
+    }
+    input_payload = json.loads((work_dir / "input.json").read_text())
+    assert "narrative" not in input_payload
+    assert all("text" not in nugget for nugget in input_payload["nuggets"])
+    assert NARRATIVE not in json.dumps(input_payload)
+    assert receipt.topic_id == "topic-coverage"
+    assert receipt.hosted_calls == 2
+    assert receipt.required_coverage == pytest.approx(1.0)
+
+
+def test_create_refuses_nonempty_work_dir_and_cache_only_names_missing_stages(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "nonempty"
+    work_dir.mkdir()
+    (work_dir / "unrelated.txt").write_text("private")
+
+    with pytest.raises(NuggetCoverageError, match="non-empty"):
+        run_coverage_evaluation(_coverage_config(handoff_path, work_dir))
+
+    missing = tmp_path / "missing"
+    with pytest.raises(NuggetCoverageError, match="planner and judge") as caught:
+        cache_planner = RecordingBackend([_reply(VALID_PLAN)])
+        cache_judge = RecordingBackend([])
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, missing, allow_hosted_calls=False),
+            planner=cache_planner,
+            judge=cache_judge,
+        )
+    assert caught.value.stage == "cache"
+    assert cache_planner.requests == []
+    assert cache_judge.requests == []
+
+
+def test_resume_reuses_valid_stages_without_backend_calls_and_reproduces_hashes(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "resume"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    first = run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    resumed_planner = RecordingBackend([])
+    resumed_judge = RecordingBackend([])
+    second = run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir, mode="resume"),
+        planner=resumed_planner,
+        judge=resumed_judge,
+    )
+
+    assert resumed_planner.requests == []
+    assert resumed_judge.requests == []
+    assert first.artifact_hashes == second.artifact_hashes
+    assert second.reused_stages == ("planner", "judge")
+
+
+def test_resume_rejects_changed_model_or_artifact_bytes(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    work_dir = tmp_path / "resume"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(handoff_path, work_dir),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+
+    changed = _coverage_config(handoff_path, work_dir, mode="resume")
+    object.__setattr__(changed, "planner_model", "changed-model")
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(changed, planner=RecordingBackend([]), judge=RecordingBackend([]))
+
+    report = work_dir / "report.json"
+    report.write_bytes(report.read_bytes() + b"\n")
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(
+            _coverage_config(handoff_path, work_dir, mode="resume"),
+            planner=RecordingBackend([]), judge=RecordingBackend([]),
+        )
+
+
+class FakeOpenRouterTransport:
+    def __init__(self, responses: list[FacetResponse | Exception]) -> None:
+        self.responses = list(responses)
+        self.requests = []
+
+    def send(self, request):
+        self.requests.append(request)
+        result = self.responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def _openrouter_response(content: object, *, finish_reason: str = "stop") -> FacetResponse:
+    envelope = {
+        "id": "completion-1", "object": "chat.completion", "created": 1,
+        "model": "provider-model", "provider": "provider-name",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": json.dumps(content)},
+            "finish_reason": finish_reason,
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    return FacetResponse(status=200, body=json.dumps(envelope).encode())
+
+
+def test_openrouter_backend_uses_strict_schema_and_redacts_credentials() -> None:
+    transport = FakeOpenRouterTransport([_openrouter_response(VALID_PLAN)])
+    backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "fake-secret"}, transport=transport
+    )
+    request = render_planner_request(NARRATIVE, "planner-model")
+
+    reply = backend.complete(request)
+
+    sent = transport.requests[0]
+    assert sent.url == "https://openrouter.ai/api/v1/chat/completions"
+    assert sent.headers["Authorization"] == "Bearer fake-secret"
+    body = json.loads(sent.body)
+    assert body["response_format"]["type"] == "json_schema"
+    assert body["response_format"]["json_schema"]["strict"] is True
+    assert body["response_format"]["json_schema"]["name"] == request.response_schema_name
+    assert reply.metadata["provider"] == "provider-name"
+    assert b"fake-secret" not in reply.response_body
+
+
+def test_openrouter_backend_retries_only_transient_transport_and_not_semantics() -> None:
+    transport = FakeOpenRouterTransport([TimeoutError("temporary"), _openrouter_response(VALID_PLAN)])
+    backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "key"}, transport=transport, transport_max_attempts=2
+    )
+    backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+    assert len(transport.requests) == 2
+
+    semantic = FakeOpenRouterTransport([
+        _openrouter_response(VALID_PLAN, finish_reason="error"), _openrouter_response(VALID_PLAN)
+    ])
+    semantic_backend = OpenRouterCoverageBackend(
+        environ={"OPENROUTER_API_KEY": "key"}, transport=semantic, transport_max_attempts=3
+    )
+    with pytest.raises(Exception):
+        semantic_backend.complete(render_planner_request(NARRATIVE, "planner-model"))
+    assert len(semantic.requests) == 1
+
+
+def test_default_work_dir_is_under_handoff_parent(tmp_path: Path) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+    with pytest.raises(NuggetCoverageError):
+        run_coverage_evaluation(_coverage_config(handoff_path, None, allow_hosted_calls=False))
+    assert (tmp_path / "retrieval_nugget_coverage" / "topic-coverage").parent == tmp_path / "retrieval_nugget_coverage"
+
+
+def test_cli_cache_only_emits_one_safe_json_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    handoff_path = _write_coverage_handoff(tmp_path)
+
+    code = main([
+        "--handoff-manifest", str(handoff_path),
+        "--topic", "topic-coverage",
+        "--work-dir", str(tmp_path / "cli-work"),
+    ])
+
+    captured = capsys.readouterr()
+    assert code != 0
+    assert len(captured.out.splitlines()) == 1
+    assert NARRATIVE not in captured.out
+    assert "canonical retrieval claim" not in captured.out
+    assert "OPENROUTER_API_KEY" not in captured.out
+    payload = json.loads(captured.out)
+    assert payload["error"]["stage"] == "cache"
