@@ -12,6 +12,11 @@ dependencies = [
     "requests==2.32.5",
     "requests-ratelimiter==0.7.0",
     "semantic-text-splitter",
+    # Sentence segmentation for extractive candidates. The model is pinned by wheel
+    # URL, not fetched with `spacy download`, so the segmenter identity recorded in
+    # SENTENCE_SPLITTER_VERSION is reproducible from the lockfile alone.
+    "spacy==3.8.15",
+    "en-core-web-sm",
     "zstandard==0.25.0",
     "nuggetizer==0.0.5",
     "openai==2.50.0",
@@ -25,6 +30,9 @@ dependencies = [
 # workflow, not something callers should have to put on PYTHONPATH. Editable so the
 # commit the superproject has checked out is the one that runs.
 ragdoll = { path = "ragdoll", editable = true }
+# spaCy models are not published to PyPI. Pinning the release wheel keeps the
+# segmenter model version inside `uv.lock` instead of a side-channel download.
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

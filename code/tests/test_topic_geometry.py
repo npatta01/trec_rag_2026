@@ -42,9 +42,10 @@ def test_geometry_preserves_unicode_offsets_and_scoring_boundaries() -> None:
     assert geometry.scoring_boundaries[12] == source.index("Second")
     assert geometry.scoring_boundaries[-1] == len(source)
 
+    # A paragraph ends at a blank line, not at every line break, so a sentence
+    # wrapped across two lines stays whole. Trailing whitespace is trimmed.
     assert tuple(span.text for span in geometry.paragraphs) == (
-        "Café\tΩmega.",
-        "Second line?  ",
+        "Café\tΩmega.\r\nSecond line?",
         "第三段.\t終わり!",
     )
     assert all(
@@ -56,7 +57,7 @@ def test_geometry_preserves_unicode_offsets_and_scoring_boundaries() -> None:
 
 
 def test_geometry_provides_constant_time_membership_and_adjacency_lookups() -> None:
-    source = "First sentence. Second sentence.\nThird sentence!\nFourth."
+    source = "First sentence. Second sentence.\n\nThird sentence!\n\nFourth."
     geometry = DocumentGeometryIndex().admit(_digest(source), source)
 
     first, second, third = geometry.paragraphs
@@ -116,8 +117,8 @@ def test_geometry_provides_constant_time_membership_and_adjacency_lookups() -> N
 
 
 def test_index_derives_two_documents_once_each_and_reuses_exact_sources() -> None:
-    first_source = "Alpha.\nBeta."
-    second_source = "Gamma.\nDelta."
+    first_source = "Alpha.\n\nBeta."
+    second_source = "Gamma.\n\nDelta."
     index = DocumentGeometryIndex()
 
     first = index.admit(_digest(first_source), first_source)
@@ -169,7 +170,7 @@ def test_index_invokes_canonical_derivation_helpers_once_per_document(
     monkeypatch.setattr(facet_evidence, "_source_spans", paragraphs)
     monkeypatch.setattr(topic_geometry, "_sentences_in_paragraph", sentences)
 
-    sources = ("Alpha.\nBeta.", "Gamma.\nDelta.")
+    sources = ("Alpha.\n\nBeta.", "Gamma.\n\nDelta.")
     index = DocumentGeometryIndex()
     for source in sources:
         digest = _digest(source)

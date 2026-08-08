@@ -17,21 +17,20 @@ from numbers import Real
 import re
 from typing import Protocol
 
+from trec_rag.chunking import Sentence, sentence_segmenter
+
 
 SCHEMA_VERSION = "extractive_candidate_nugget_v1"
-SENTENCE_SPLITTER_VERSION = "exact_rules_v1"
+SENTENCE_SPLITTER_VERSION = "spacy_en_core_web_sm_3.8.0_v1"
 SCORING_NORMALIZATION_VERSION = "trec_rag_whitespace_v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TOKENS = re.compile(r"\S+")
 _WHITESPACE_RUN = re.compile(r"\s+")
 _CLOSERS = "\"'”’)]}"
-_ABBREVIATIONS = frozenset({
-    "adj", "apr", "aug", "ave", "blvd", "capt", "cf", "co", "dec", "dr",
-    "e.g", "ed", "etc", "feb", "fig", "fri", "gen", "i.e", "inc", "jan",
-    "jr", "jul", "jun", "lt", "mar", "mr", "mrs", "ms", "mt", "no", "nov",
-    "oct", "prof", "rd", "sep", "sept", "sr", "st", "thu", "tues", "vs",
-    "wed",
-})
+_BLANK_LINE = re.compile(r"\n[^\S\n]*\n")
+# Matches the passage chunker's ceiling, so one paragraph is at most one
+# passage's worth of text even in source that carries no blank line at all.
+MAX_PARAGRAPH_CHARACTERS = 3_500
 _DEPENDENCY_CUES = (
     "this", "that", "these", "those", "it", "they", "such", "the former",
     "the latter", "therefore", "thus", "consequently", "as a result",
@@ -460,19 +459,45 @@ def _byte_offsets(source: str) -> tuple[int, ...]:
     return tuple(offsets)
 
 
-def _source_spans(source: str, byte_offsets: tuple[int, ...]) -> tuple[SourceSpan, ...]:
-    result: list[SourceSpan] = []
-    cursor = 0
-    for line in source.splitlines(keepends=True):
-        line_end = cursor + len(line.rstrip("\r\n"))
-        if source[cursor:line_end].strip():
-            result.append(_make_span(source, byte_offsets, cursor, line_end))
-        cursor += len(line)
-    if cursor < len(source) and source[cursor:].strip():
-        result.append(_make_span(source, byte_offsets, cursor, len(source)))
-    if not source and cursor == 0:
+@lru_cache(maxsize=1)
+def _segmented_source(source: str) -> tuple[tuple[tuple[int, int], tuple[Sentence, ...]], ...]:
+    """Segment one document into paragraphs, each holding its own sentences.
+
+    Sentence boundaries come from the injected segmenter; paragraph boundaries
+    are derived from them, so a sentence can never straddle two paragraphs and
+    the geometry invariants hold by construction rather than by check.
+
+    A blank line ends a paragraph. Source text with none - a wall of markup-free
+    prose - is bounded by ``MAX_PARAGRAPH_CHARACTERS`` so one pathological
+    document cannot become a single paragraph.
+    """
+    sentences = sentence_segmenter().segment(source)
+    if not sentences:
         return ()
-    return tuple(result)
+    grouped: list[tuple[tuple[int, int], tuple[Sentence, ...]]] = []
+    block: list[Sentence] = [sentences[0]]
+    for previous, current in zip(sentences, sentences[1:]):
+        separator = source[previous.end_char : current.start_char]
+        too_long = current.end_char - block[0].start_char > MAX_PARAGRAPH_CHARACTERS
+        # A blank line ends a paragraph only after a sentence that stands on its
+        # own. A heading is followed by a blank line far more often than not, and
+        # breaking there would strand it in a paragraph of one, with no
+        # neighbour to join and nothing to do but drop it.
+        ends_paragraph = _BLANK_LINE.search(separator) and previous.is_complete
+        if ends_paragraph or too_long:
+            grouped.append(((block[0].start_char, block[-1].end_char), tuple(block)))
+            block = [current]
+            continue
+        block.append(current)
+    grouped.append(((block[0].start_char, block[-1].end_char), tuple(block)))
+    return tuple(grouped)
+
+
+def _source_spans(source: str, byte_offsets: tuple[int, ...]) -> tuple[SourceSpan, ...]:
+    return tuple(
+        _make_span(source, byte_offsets, start, end)
+        for (start, end), _ in _segmented_source(source)
+    )
 
 
 def _source_validation_cache(source: str) -> _SourceValidationCache:
@@ -495,70 +520,66 @@ def _make_span(source: str, byte_offsets: tuple[int, ...], start: int, end: int)
     return SourceSpan(text, start, end, byte_offsets[start], byte_offsets[end], _hash(text))
 
 
-def _word_before(text: str, index: int) -> str:
-    reversed_word: list[str] = []
-    cursor = index
-    while cursor > 0:
-        char = text[cursor - 1]
-        if char != "." and not ("A" <= char <= "Z" or "a" <= char <= "z"):
-            break
-        reversed_word.append(char)
-        cursor -= 1
-    return "".join(reversed(reversed_word)).casefold()
-
-
-def _is_terminal(text: str, index: int) -> bool:
-    char = text[index]
-    cursor = index + 1
-    while cursor < len(text) and text[cursor] in _CLOSERS:
-        cursor += 1
-    at_paragraph_end = cursor == len(text)
-    if char == ".":
-        if index > 0 and index + 1 < len(text) and text[index - 1].isdigit() and text[index + 1].isdigit():
-            return False
-        word = _word_before(text, index)
-        if not at_paragraph_end and (
-            word in _ABBREVIATIONS or (len(word) == 1 and word.isalpha())
-        ):
-            return False
-    return at_paragraph_end or text[cursor].isspace()
-
-
 def _sentences_in_paragraph(source: str, paragraph: SourceSpan, byte_offsets: tuple[int, ...]) -> tuple[SourceSpan, ...]:
-    text = paragraph.text
-    result: list[SourceSpan] = []
-    start = 0
-    for index, char in enumerate(text):
-        if char not in ".?!" or not _is_terminal(text, index):
-            continue
-        end = index + 1
-        while end < len(text) and text[end] in _CLOSERS:
-            end += 1
-        left = start
-        while left < end and text[left].isspace():
-            left += 1
-        right = end
-        while right > left and text[right - 1].isspace():
-            right -= 1
-        if left < right:
-            result.append(_make_span(source, byte_offsets, paragraph.start_char + left, paragraph.start_char + right))
-        start = end
-    left = start
-    right = len(text)
-    while left < right and text[left].isspace():
-        left += 1
-    while right > left and text[right - 1].isspace():
-        right -= 1
-    if left < right:
-        result.append(
-            _make_span(
-                source,
-                byte_offsets,
-                paragraph.start_char + left,
-                paragraph.start_char + right,
+    key = (paragraph.start_char, paragraph.end_char)
+    for bounds, sentences in _segmented_source(source):
+        if bounds == key:
+            return tuple(
+                _make_span(source, byte_offsets, row.start_char, row.end_char)
+                for row in sentences
             )
-        )
-    return tuple(result)
+    return ()
+
+
+def pair_is_admissible(
+    source: str,
+    paragraph: SourceSpan,
+    first: SourceSpan,
+    second: SourceSpan,
+) -> bool:
+    """Whether two adjacent sentences may be admitted as one pair candidate.
+
+    One rule, shared by the builder and by both validators, because a pair the
+    builder emits and a validator rejects aborts the whole candidate stage.
+
+    A pair is the smallest complete thought when the second sentence leans on
+    the first through a cue, or when either sentence does not stand alone - a
+    heading and the sentence it introduces, or a sentence and the caption that
+    trails it.
+    """
+    return (
+        _dependency_cue(second.text)
+        or not _is_standalone(source, paragraph, first)
+        or not _is_standalone(source, paragraph, second)
+    )
+
+
+def _merge_provenance(
+    first: tuple[PassageProvenance, ...],
+    second: tuple[PassageProvenance, ...],
+) -> tuple[PassageProvenance, ...]:
+    """Union two sentences' passages, preserving order and dropping repeats."""
+    merged: list[PassageProvenance] = []
+    for row in (*first, *second):
+        if row not in merged:
+            merged.append(row)
+    return tuple(merged)
+
+
+def _is_standalone(source: str, paragraph: SourceSpan, sentence: SourceSpan) -> bool:
+    """Whether one sentence is admissible as evidence on its own.
+
+    A run of words with no finite verb and no terminal punctuation - a heading, a
+    nav label, a list caption - carries no claim, so it is not standalone.
+    """
+    key = (paragraph.start_char, paragraph.end_char)
+    for bounds, sentences in _segmented_source(source):
+        if bounds != key:
+            continue
+        for row in sentences:
+            if row.start_char == sentence.start_char and row.end_char == sentence.end_char:
+                return row.is_complete
+    return True
 
 
 def _dependency_cue(sentence: str) -> bool:
@@ -803,7 +824,9 @@ def validate_extractive_candidate_source(
             )
             for sentence in (first, second)
         ]
-        if indices[1] != indices[0] + 1 or not _dependency_cue(second.text):
+        if indices[1] != indices[0] + 1 or not pair_is_admissible(
+            source, candidate.matched_paragraph, first, second
+        ):
             raise ValueError("candidate sentence pair is not an admitted adjacent pair")
     expected_text = source[
         candidate.evidence_sentences[0].start_char
@@ -892,14 +915,31 @@ def extract_document_candidates(request: ExtractiveCandidateRequest, scorer: Sen
         for index, paragraph in enumerate(paragraphs)
         if _passage_provenance(translated, request.source, byte_offsets, paragraph)
     )
+    # Provenance is resolved against the sentence, not its paragraph. Paragraphs
+    # now span whole blocks, so a paragraph-level answer would let a sentence
+    # claim a passage it never appeared in, and that claim becomes a citation.
+    #
+    # Every sentence stays in the row, carrying an empty provenance when no
+    # passage covers it. Dropping them here instead would leave neighbours
+    # adjacent in the list but not in the source, and a pair built across that
+    # gap quotes text no passage supports.
     sentence_rows = tuple(
-        (index, paragraph, provenance, _sentences_in_paragraph(request.source, paragraph, byte_offsets))
+        (
+            index,
+            paragraph,
+            provenance,
+            tuple(
+                (sentence, _passage_provenance(translated, request.source, byte_offsets, sentence))
+                for sentence in _sentences_in_paragraph(request.source, paragraph, byte_offsets)
+            ),
+        )
         for index, paragraph, provenance in matched
     )
     located_sentences = tuple(
-        (paragraph_index, paragraph, provenance, sentence)
-        for paragraph_index, paragraph, provenance, sentences in sentence_rows
-        for sentence in sentences
+        (paragraph_index, paragraph, sentence_provenance, sentence)
+        for paragraph_index, paragraph, _, sentences in sentence_rows
+        for sentence, sentence_provenance in sentences
+        if sentence_provenance
     )
     pairs = tuple(
         SentencePair(request.topic_id, request.document_id, sub.subnarrative_id, sub.text, sentence.text)
@@ -923,6 +963,13 @@ def extract_document_candidates(request: ExtractiveCandidateRequest, scorer: Sen
     for sub in request.subnarratives:
         singleton_rows: list[tuple[SourceSpan, SourceSpan, int, tuple[PassageProvenance, ...], float]] = []
         for paragraph_index, paragraph, provenance, sentence in located_sentences:
+            # A heading or list caption is not evidence by itself. It is admitted
+            # below, joined to a neighbour, so its wording still reaches
+            # selection without occupying a slot on its own. A heading alone in
+            # its paragraph has no neighbour to join and is dropped: a pair may
+            # not cross a paragraph boundary without breaking span containment.
+            if not _is_standalone(request.source, paragraph, sentence):
+                continue
             score = score_lookup[(sub.subnarrative_id, sentence.start_char, sentence.end_char)]
             singleton_rows.append((sentence, paragraph, paragraph_index, provenance, score))
         singleton_rows.sort(key=lambda row: (-row[4], row[0].start_char, row[0].end_char))
@@ -930,15 +977,23 @@ def extract_document_candidates(request: ExtractiveCandidateRequest, scorer: Sen
             evidence = SentenceEvidence(**asdict(sentence), cross_encoder_score=score)
             candidates.append(_build_candidate(request, sub, "exact_sentence", (evidence,), paragraph, paragraphs, paragraph_index, provenance, score, rank))
         pair_rows: list[tuple[tuple[SentenceEvidence, SentenceEvidence], SourceSpan, int, tuple[PassageProvenance, ...], float]] = []
-        for paragraph_index, paragraph, provenance, sentences in sentence_rows:
-            for first, second in zip(sentences, sentences[1:]):
-                if not _dependency_cue(second.text):
+        for paragraph_index, paragraph, _, sentences in sentence_rows:
+            for (first, first_provenance), (second, second_provenance) in zip(sentences, sentences[1:]):
+                # Both members must be covered by a passage: a pair's text runs
+                # from the first span's start to the second's end, so admitting
+                # an uncovered member would quote unsupported source.
+                if not first_provenance or not second_provenance:
+                    continue
+                if not pair_is_admissible(request.source, paragraph, first, second):
                     continue
                 first_score = score_lookup[(sub.subnarrative_id, first.start_char, first.end_char)]
                 second_score = score_lookup[(sub.subnarrative_id, second.start_char, second.end_char)]
                 pair_rows.append((
                     (SentenceEvidence(**asdict(first), cross_encoder_score=first_score), SentenceEvidence(**asdict(second), cross_encoder_score=second_score)),
-                    paragraph, paragraph_index, provenance, min(first_score, second_score),
+                    paragraph,
+                    paragraph_index,
+                    _merge_provenance(first_provenance, second_provenance),
+                    min(first_score, second_score),
                 ))
         for rank, (evidence, paragraph, paragraph_index, provenance, score) in enumerate(sorted(pair_rows, key=lambda row: (-row[4], row[0][0].start_char)), start=1):
             candidates.append(_build_candidate(request, sub, "exact_sentence_pair", evidence, paragraph, paragraphs, paragraph_index, provenance, score, rank))

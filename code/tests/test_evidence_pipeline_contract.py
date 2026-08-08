@@ -12,6 +12,7 @@ import pytest
 import trec_rag.evidence_store as evidence_store_module
 from trec_rag.document_store import DocumentStore
 from trec_rag.facet_evidence import (
+    SENTENCE_SPLITTER_VERSION,
     CandidateSubnarrative,
     ExtractiveCandidateRequest,
     ScoredPassage,
@@ -20,7 +21,6 @@ from trec_rag.facet_evidence import (
     SubnarrativeContext,
     _byte_offsets,
     _scoring_text_and_boundaries,
-    _word_before,
     extract_document_candidates,
     select_subnarrative_candidates,
 )
@@ -113,7 +113,7 @@ def _candidate_stage_identity(**overrides: object) -> dict[str, object]:
         "source_file": "candidate-requests.jsonl",
         "source_sha256": "a" * 64,
         "scorer": _candidate_stage_scorer_identity(),
-        "sentence_splitter_version": "exact_rules_v1",
+        "sentence_splitter_version": SENTENCE_SPLITTER_VERSION,
         "scoring_normalization_version": "trec_rag_whitespace_v1",
     }
     identity.update(overrides)
@@ -349,20 +349,6 @@ def _request() -> ExtractiveCandidateRequest:
     )
 
 
-def test_word_before_scans_backward_without_copying_the_paragraph_prefix() -> None:
-    """Regress the quadratic prefix copy in sentence-boundary validation."""
-
-    class NoSliceText(str):
-        def __getitem__(self, key):
-            if isinstance(key, slice):
-                raise AssertionError("sentence splitting must not copy a text prefix")
-            return super().__getitem__(key)
-
-    text = NoSliceText("A long paragraph ends with e.g.")
-
-    assert _word_before(text, len(text) - 1) == "e.g"
-
-
 def test_source_coordinate_cache_reuses_document_offsets() -> None:
     class CountedText(str):
         iterations = 0
@@ -464,6 +450,117 @@ def test_candidate_bytes_are_deterministic_and_source_hashes_fail_closed(tmp_pat
         extract_document_candidates(replace(request, document_sha256="0" * 64), scorer)
 
 
+def test_a_pair_never_spans_a_sentence_no_passage_covers() -> None:
+    """A pair quotes from its first span's start to its last span's end.
+
+    Sentences with no covering passage used to be filtered out before pairing,
+    which left non-adjacent sentences adjacent in the list. The pair built
+    across that gap quoted a middle sentence no retrieved passage supports.
+    """
+    source = (
+        "Alpha reported a clear improvement. "
+        "Bravo measured nothing unusual at all. "
+        "This result confirms the safety profile."
+    )
+    digest = _digest(source)
+    scoring_text = _scoring_text(source)
+    third_start = scoring_text.index("This")
+    request = ExtractiveCandidateRequest(
+        topic_id="224",
+        document_id="doc-a",
+        source=source,
+        document_sha256=digest,
+        scoring_text_sha256=_digest(scoring_text),
+        subnarratives=(CandidateSubnarrative("safety", "Safety evidence"),),
+        # One passage over the first sentence, one over the third. Nothing
+        # covers the middle sentence.
+        passages=(
+            ScoredPassage(
+                "p1", "original", "topic-224", 0, scoring_text.index("Bravo") - 1,
+                _digest(scoring_text), _digest(scoring_text[: scoring_text.index("Bravo") - 1]), 1.0, 1,
+            ),
+            ScoredPassage(
+                "p3", "original", "topic-224", third_start, len(scoring_text),
+                _digest(scoring_text), _digest(scoring_text[third_start:]), 0.9, 2,
+            ),
+        ),
+    )
+
+    candidates = extract_document_candidates(
+        request, _FixedScorer(lambda pairs: tuple(1.0 for _ in pairs))
+    )
+
+    # "This result..." carries a dependency cue, so before the fix it paired
+    # with "Alpha reported..." across the uncovered middle sentence.
+    assert [(row.candidate_kind, row.text) for row in candidates] == [
+        ("exact_sentence", "Alpha reported a clear improvement."),
+        ("exact_sentence", "This result confirms the safety profile."),
+    ]
+    assert not any("Bravo" in row.text for row in candidates)
+
+
+def test_a_heading_reaches_selection_joined_to_the_sentence_it_introduces() -> None:
+    """A heading is not evidence alone, and must not be silently discarded.
+
+    It has to survive both pair validators too: the builder and the validators
+    once disagreed about which pairs were admissible, and a pair the builder
+    emitted but a validator rejected aborted the entire candidate stage.
+    """
+    source = "Grocery Costs:\n\nGroceries are reasonably priced here. Imports cost more."
+    digest = _digest(source)
+    scoring_text = _scoring_text(source)
+    request = ExtractiveCandidateRequest(
+        topic_id="224",
+        document_id="doc-a",
+        source=source,
+        document_sha256=digest,
+        scoring_text_sha256=_digest(scoring_text),
+        subnarratives=(CandidateSubnarrative("safety", "Grocery evidence"),),
+        passages=(ScoredPassage(
+            "p1", "original", "topic-224", 0, len(scoring_text),
+            _digest(scoring_text), _digest(scoring_text), 1.0, 1,
+        ),),
+    )
+
+    candidates = extract_document_candidates(
+        request, _FixedScorer(lambda pairs: tuple(1.0 for _ in pairs))
+    )
+
+    # Never admitted alone...
+    assert "Grocery Costs:" not in [row.text for row in candidates]
+    # ...but reaches selection as part of a full thought.
+    assert [row.text for row in candidates if row.candidate_kind == "exact_sentence_pair"] == [
+        "Grocery Costs:\n\nGroceries are reasonably priced here."
+    ]
+
+
+def test_a_dependency_cue_still_pairs_when_both_sentences_are_covered() -> None:
+    """Positive control for the pairing guard above: real pairs still form."""
+    source = "Alpha reported a clear improvement. This result confirms the safety profile."
+    digest = _digest(source)
+    scoring_text = _scoring_text(source)
+    request = ExtractiveCandidateRequest(
+        topic_id="224",
+        document_id="doc-a",
+        source=source,
+        document_sha256=digest,
+        scoring_text_sha256=_digest(scoring_text),
+        subnarratives=(CandidateSubnarrative("safety", "Safety evidence"),),
+        passages=(ScoredPassage(
+            "p1", "original", "topic-224", 0, len(scoring_text),
+            _digest(scoring_text), _digest(scoring_text), 1.0, 1,
+        ),),
+    )
+
+    candidates = extract_document_candidates(
+        request, _FixedScorer(lambda pairs: tuple(1.0 for _ in pairs))
+    )
+
+    assert [row.text for row in candidates if row.candidate_kind == "exact_sentence_pair"] == [
+        "Alpha reported a clear improvement. This result confirms the safety profile."
+    ]
+
+
 def test_candidate_artifact_matches_fixed_golden_bytes(tmp_path: Path) -> None:
     source = "Evidence sentence."
     digest = "2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720"
@@ -486,7 +583,7 @@ def test_candidate_artifact_matches_fixed_golden_bytes(tmp_path: Path) -> None:
     )
 
     assert output.read_bytes() == (
-        b'{"candidate_kind":"exact_sentence","candidate_nugget_id":"ecn1_d493c7728fc4a51bd71774e2274b50d1541ae595ea92adcadde3eaf7aa1317b1","context_after":null,"context_before":null,"docid":"doc-a","document_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","evidence_sentences":[{"cross_encoder_score":1.25,"end_byte":18,"end_char":18,"start_byte":0,"start_char":0,"text":"Evidence sentence.","text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720"}],"matched_paragraph":{"end_byte":18,"end_char":18,"start_byte":0,"start_char":0,"text":"Evidence sentence.","text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720"},"nugget_type":"extractive","passages":[{"chunk_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","cross_encoder_rank":1,"cross_encoder_score":1.0,"lane_id":"original","normalization_version":"trec_rag_whitespace_v1","passage_id":"p1","query_id":"topic-224","scoring_end_char":18,"scoring_start_char":0,"scoring_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","source_end_byte":18,"source_end_char":18,"source_start_byte":0,"source_start_char":0,"source_text":"Evidence sentence.","source_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720"}],"rank_within_document_subnarrative":1,"schema_version":"extractive_candidate_nugget_v1","scoring_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","sentence_cross_encoder_score":1.25,"sentence_splitter_version":"exact_rules_v1","subnarrative_id":"safety","subnarrative_sha256":"2e194dbac187930e8b8016c241be054aaeb7e4344f8676edbefa0ddadb065db0","text":"Evidence sentence.","topic_id":"224"}\n'
+        b'{"candidate_kind":"exact_sentence","candidate_nugget_id":"ecn1_d493c7728fc4a51bd71774e2274b50d1541ae595ea92adcadde3eaf7aa1317b1","context_after":null,"context_before":null,"docid":"doc-a","document_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","evidence_sentences":[{"cross_encoder_score":1.25,"end_byte":18,"end_char":18,"start_byte":0,"start_char":0,"text":"Evidence sentence.","text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720"}],"matched_paragraph":{"end_byte":18,"end_char":18,"start_byte":0,"start_char":0,"text":"Evidence sentence.","text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720"},"nugget_type":"extractive","passages":[{"chunk_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","cross_encoder_rank":1,"cross_encoder_score":1.0,"lane_id":"original","normalization_version":"trec_rag_whitespace_v1","passage_id":"p1","query_id":"topic-224","scoring_end_char":18,"scoring_start_char":0,"scoring_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","source_end_byte":18,"source_end_char":18,"source_start_byte":0,"source_start_char":0,"source_text":"Evidence sentence.","source_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720"}],"rank_within_document_subnarrative":1,"schema_version":"extractive_candidate_nugget_v1","scoring_text_sha256":"2f9d0ed51668da4cb7bac73526265ba58f58db77ed2e4eba87128c4ef5c7c720","sentence_cross_encoder_score":1.25,"sentence_splitter_version":"spacy_en_core_web_sm_3.8.0_v1","subnarrative_id":"safety","subnarrative_sha256":"2e194dbac187930e8b8016c241be054aaeb7e4344f8676edbefa0ddadb065db0","text":"Evidence sentence.","topic_id":"224"}\n'
     )
 
 
@@ -585,7 +682,7 @@ def test_selection_artifact_matches_fixed_golden_digest(tmp_path: Path) -> None:
         "source_file": "candidate-requests.jsonl",
         "source_sha256": text_digest,
         "scorer": dict(_LiteralScorer.identity),
-        "sentence_splitter_version": "exact_rules_v1",
+        "sentence_splitter_version": SENTENCE_SPLITTER_VERSION,
         "scoring_normalization_version": "trec_rag_whitespace_v1",
     })
     narrative = "Explain documented coastal safety measures."
@@ -1089,7 +1186,7 @@ def test_candidate_validation_opens_records_and_validates_all_sources(
     )
     assert stage_identity["source_file"] == handoff.requests_path.name
     assert stage_identity["scorer"] == _LiteralScorer.identity
-    assert stage_identity["sentence_splitter_version"] == "exact_rules_v1"
+    assert stage_identity["sentence_splitter_version"] == SENTENCE_SPLITTER_VERSION
     assert stage_identity["scoring_normalization_version"] == (
         "trec_rag_whitespace_v1"
     )

@@ -36,6 +36,7 @@ import weakref
 from .document_store import DocumentReceipt, DocumentStore, DocumentStoreIntegrityError
 from .facet_evidence import (
     SCHEMA_VERSION as CANDIDATE_SCHEMA_VERSION,
+    pair_is_admissible,
     SCORING_NORMALIZATION_VERSION,
     SENTENCE_SPLITTER_VERSION,
     ExtractiveCandidate,
@@ -1194,9 +1195,16 @@ def _check_evidence_membership(
             raise TopicRecordsIntegrityError("candidate evidence is not an exact source sentence")
         ordinals.append(ordinal)
     if candidate_kind == "exact_sentence_pair":
-        second = evidence[1]
-        if ordinals[1] != ordinals[0] + 1 or not _dependency_cue(
-            geometry.source[second[0]:second[1]]
+        # Same admission rule the builder used. Duplicating the condition here
+        # once let the builder emit pairs this check then rejected, which aborts
+        # the whole candidate stage rather than dropping one candidate.
+        paragraph = geometry.paragraphs[geometry.paragraph_index[matched]]
+        sentences = geometry.sentences_for(matched)
+        if ordinals[1] != ordinals[0] + 1 or not pair_is_admissible(
+            geometry.source,
+            paragraph,
+            sentences[ordinals[0]],
+            sentences[ordinals[1]],
         ):
             raise TopicRecordsIntegrityError("candidate sentence pair is not admitted")
 
