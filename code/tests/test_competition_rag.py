@@ -20,6 +20,7 @@ import pytest
 import trec_rag.competition_rag as competition_rag
 from trec_rag.competition_rag import (
     OpenRouterJsonGenerator,
+    PriorityAwareConfig,
     RagGenerationConfig,
     arguments,
     build_submission_record,
@@ -76,6 +77,22 @@ inputs:
   concurrency: 4
 {generation_extra}
 {root_extra}"""
+
+
+def _priority_generation_extra() -> str:
+    return """  strategy: priority_aware
+  priority_aware:
+    planner_model: deepseek/deepseek-v4-flash
+    planner_reasoning_effort: minimal
+    planner_structured_output: json_object
+    planner_temperature: 0
+    planner_max_tokens: 4000
+    min_claims_per_group: 1
+    max_claims_per_group: 4
+    max_claims: 24
+    target_min_words: 700
+    target_max_words: 900
+"""
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -188,6 +205,46 @@ def test_config_loads_coverage_aware_generation_strategy(tmp_path: Path) -> None
     assert config.strategy == "coverage_aware"
 
 
+def test_config_loads_priority_aware_generation_strategy(tmp_path: Path) -> None:
+    config = load_rag_generation_config(
+        _write_config(
+            tmp_path,
+            _config_text(generation_extra=_priority_generation_extra()),
+        )
+    )
+
+    assert config.strategy == "priority_aware"
+    assert config.priority_aware == PriorityAwareConfig(
+        planner_model="deepseek/deepseek-v4-flash",
+        planner_reasoning_effort="minimal",
+        planner_structured_output="json_object",
+        planner_temperature=0.0,
+        planner_max_tokens=4000,
+        min_claims_per_group=1,
+        max_claims_per_group=4,
+        max_claims=24,
+        target_min_words=700,
+        target_max_words=900,
+    )
+
+
+def test_config_requires_priority_settings_only_for_priority_strategy(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="priority_aware is required"):
+        load_rag_generation_config(
+            _write_config(
+                tmp_path,
+                _config_text(generation_extra="  strategy: priority_aware\n"),
+            )
+        )
+    nested = _priority_generation_extra().replace("  strategy: priority_aware\n", "")
+    with pytest.raises(ValueError, match="only valid"):
+        load_rag_generation_config(
+            _write_config(tmp_path, _config_text(generation_extra=nested))
+        )
+
+
 def test_config_rejects_unknown_generation_strategy(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="generation.strategy is unsupported"):
         load_rag_generation_config(
@@ -233,6 +290,24 @@ def test_checked_in_competition_configs_use_only_the_full_handoff(
     assert not hasattr(config, "queries_path")
     assert not hasattr(config, "run_path")
     assert not hasattr(config, "documents_path")
+
+
+def test_checked_in_priority_config_is_full_handoff_and_two_stage() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    config = load_rag_generation_config(
+        repo_root / "configs/rag26_competition_rag_priority_aware_v3.yaml"
+    )
+    retrieval = load_facet_pilot_config(
+        repo_root / "configs/rag26_competition_retrieval_v2.yaml"
+    )
+
+    assert config.topic_ids is None
+    assert config.strategy == "priority_aware"
+    assert config.priority_aware is not None
+    assert config.priority_aware.planner_model == "deepseek/deepseek-v4-flash"
+    assert config.handoff_manifest_path == (
+        retrieval.output_dir / "generation_handoff_manifest.json"
+    )
 
 
 def _generated_record() -> dict[str, Any]:
@@ -295,6 +370,72 @@ def test_coverage_aware_prompt_adds_handoff_only_checklist_and_one_audit() -> No
     assert "Second selected passage." in coverage
     assert "gold nugget" not in coverage.lower()
     assert "qrels" not in coverage.lower()
+
+
+def test_priority_planner_prompt_and_schema_use_only_authenticated_handoff() -> None:
+    topic = _two_group_generation_topic("rag2026-0")
+    settings = _priority_settings()
+
+    prompt = competition_rag.render_priority_planner_prompt(topic, settings)
+    schema = competition_rag.priority_plan_schema(topic, settings)
+
+    assert topic.narrative in prompt
+    assert "First group evidence." in prompt
+    assert "Second group evidence." in prompt
+    assert "essential" in prompt
+    assert "operational trivia" in prompt
+    assert "gold nugget" not in prompt.lower()
+    assert "Do not use outside knowledge" in competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
+    assert "gold nuggets" in competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
+    assert schema["properties"]["claims"]["minItems"] == 2
+    assert schema["properties"]["claims"]["maxItems"] == 24
+
+
+def test_priority_plan_validation_enforces_order_dedup_and_group_ownership() -> None:
+    topic = _two_group_generation_topic("rag2026-0")
+    settings = _priority_settings()
+    valid = {
+        "claims": [
+            {
+                "group_id": "rag2026-0-g1",
+                "priority": "essential",
+                "claim": "The first evidence supports a central claim.",
+                "evidence_ids": ["rag2026-0-e1"],
+            },
+            {
+                "group_id": "rag2026-0-g2",
+                "priority": "important",
+                "claim": "The second evidence adds a distinct consequence.",
+                "evidence_ids": ["rag2026-0-e2"],
+            },
+        ]
+    }
+
+    assert competition_rag.validate_priority_plan(
+        valid, topic=topic, config=settings
+    ) == valid
+
+    cross_group = copy.deepcopy(valid)
+    cross_group["claims"][1]["evidence_ids"] = ["rag2026-0-e1"]
+    with pytest.raises(ValueError, match="another group"):
+        competition_rag.validate_priority_plan(
+            cross_group, topic=topic, config=settings
+        )
+
+    duplicate = copy.deepcopy(valid)
+    duplicate["claims"][1]["claim"] = duplicate["claims"][0]["claim"]
+    with pytest.raises(ValueError, match="duplicates"):
+        competition_rag.validate_priority_plan(
+            duplicate, topic=topic, config=settings
+        )
+
+    misordered = copy.deepcopy(valid)
+    misordered["claims"][0]["priority"] = "important"
+    misordered["claims"][1]["priority"] = "essential"
+    with pytest.raises(ValueError, match="sorted by priority"):
+        competition_rag.validate_priority_plan(
+            misordered, topic=topic, config=settings
+        )
 
 
 def _submission_record() -> dict[str, Any]:
@@ -859,6 +1000,66 @@ def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     assert "docid=climbmix-b" in topic_one_prompt
 
 
+def _priority_settings() -> PriorityAwareConfig:
+    return PriorityAwareConfig(
+        planner_model="deepseek/deepseek-v4-flash",
+        planner_reasoning_effort="minimal",
+        planner_structured_output="json_object",
+        planner_temperature=0.0,
+        planner_max_tokens=4000,
+        min_claims_per_group=1,
+        max_claims_per_group=4,
+        max_claims=24,
+        target_min_words=700,
+        target_max_words=900,
+    )
+
+
+def _two_group_generation_topic(topic_id: str) -> GenerationTopic:
+    topic = _generation_topic(
+        topic_id,
+        "Explain both selected facets.",
+        [
+            ("climbmix-a", "First group evidence."),
+            ("climbmix-b", "Second group evidence."),
+        ],
+    )
+    second_group_id = f"{topic_id}-g2"
+    second_evidence = replace(
+        topic.evidence[1], group_id=second_group_id, cluster_ordinal=1
+    )
+    return GenerationTopic(
+        topic_id=topic.topic_id,
+        narrative=topic.narrative,
+        groups=(
+            replace(
+                topic.groups[0],
+                selected_clusters=(topic.groups[0].selected_clusters[0],),
+            ),
+            EvidenceGroup(
+                group_id=second_group_id,
+                kind="generated_subnarrative",
+                text="Second selected facet.",
+                selected_clusters=(
+                    replace(topic.groups[0].selected_clusters[1], ordinal=1),
+                ),
+            ),
+        ),
+        evidence=(topic.evidence[0], second_evidence),
+        claim_hints=(
+            topic.claim_hints[0],
+            ClaimHint(
+                claim_id=f"{topic_id}-claim-2",
+                group_id=second_group_id,
+                kind="canonical",
+                text="The second group adds another supported point.",
+                evidence_ids=(second_evidence.evidence_id,),
+            ),
+        ),
+        source_receipts=topic.source_receipts,
+    )
+
+
 def test_coverage_aware_generation_is_one_hosted_completion_per_topic(
     tmp_path: Path,
 ) -> None:
@@ -881,6 +1082,118 @@ def test_coverage_aware_generation_is_one_hosted_completion_per_topic(
     assert len(generator.calls) == 1
     assert "Ordered answer checklist:" in generator.calls[0]["user_prompt"]
     assert "perform exactly one private audit" in generator.calls[0]["user_prompt"]
+
+
+def test_priority_aware_generation_plans_then_writes_once(tmp_path: Path) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+    planner = FakeGenerator(
+        {
+            "rag2026-1": {
+                "claims": [
+                    {
+                        "group_id": "rag2026-1-g1",
+                        "priority": "essential",
+                        "claim": "Evidence A supports the central answer.",
+                        "evidence_ids": ["rag2026-1-e1"],
+                    }
+                ]
+            }
+        }
+    )
+    writer = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["climbmix-a"], "Evidence A supports the central answer."
+            )
+        }
+    )
+
+    asyncio.run(run_generation(config, writer, planner=planner))
+
+    assert len(planner.calls) == 1
+    assert len(writer.calls) == 1
+    assert planner.calls[0]["system_prompt"] == (
+        competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
+    )
+    assert "VALIDATED PRIORITY PLAN" in writer.calls[0]["user_prompt"]
+    assert "priority=essential" in writer.calls[0]["user_prompt"]
+    assert "750" not in writer.calls[0]["user_prompt"]
+    assert "700 to 900 answer words" in writer.calls[0]["user_prompt"]
+    plan_path = next((config.work_dir / "plans").glob("*.json"))
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan == planner.outputs["rag2026-1"]
+    assert len(list((config.work_dir / "raw").glob("*.plan-attempt-*.json"))) == 1
+
+
+def test_priority_aware_requires_a_separate_planner_generator(tmp_path: Path) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+
+    with pytest.raises(ValueError, match="requires a planner generator"):
+        asyncio.run(run_generation(config, FakeGenerator({})))
+    assert not config.work_dir.exists()
+
+
+def test_priority_aware_resume_reuses_a_valid_plan(tmp_path: Path) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+    planner = FakeGenerator(
+        {
+            "rag2026-1": {
+                "claims": [
+                    {
+                        "group_id": "rag2026-1-g1",
+                        "priority": "essential",
+                        "claim": "Evidence A supports the central answer.",
+                        "evidence_ids": ["rag2026-1-e1"],
+                    }
+                ]
+            }
+        }
+    )
+    invalid_writer = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["outside-handoff"], "An invalid answer."
+            )
+        }
+    )
+
+    with pytest.raises(RuntimeError, match=r"1 topic\(s\) failed"):
+        asyncio.run(run_generation(config, invalid_writer, planner=planner))
+    assert len(planner.calls) == 1
+
+    resumed_planner = FakeGenerator({})
+    resumed_writer = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["climbmix-a"], "Evidence A supports the central answer."
+            )
+        }
+    )
+    asyncio.run(
+        run_generation(
+            replace(config, resume=True),
+            resumed_writer,
+            planner=resumed_planner,
+        )
+    )
+
+    assert resumed_planner.calls == []
+    assert len(resumed_writer.calls) == 1
 
 
 def test_generation_trims_an_over_limit_completion_before_validation(
@@ -1915,10 +2228,45 @@ def test_generation_identity_covers_every_request_setting(tmp_path: Path) -> Non
         assert changed != base, f"{field} does not invalidate the identity"
 
 
-def test_identity_version_rejects_rows_written_before_generation_strategy(
+def test_generation_identity_covers_every_priority_planner_setting(
     tmp_path: Path,
 ) -> None:
-    """Version 6 rows did not bind the config-controlled generation strategy."""
+    config = replace(
+        _pipeline_config(tmp_path),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+    handoff = load_generation_handoff(config.handoff_manifest_path)
+    topics = select_generation_topics(handoff, config.topic_ids)
+    base = competition_rag._generation_identity(config, handoff, topics)
+    assert config.priority_aware is not None
+
+    for field, value in [
+        ("planner_model", "other/planner"),
+        ("planner_reasoning_effort", "low"),
+        ("planner_structured_output", "strict_schema"),
+        ("planner_temperature", 0.2),
+        ("planner_max_tokens", 5000),
+        ("min_claims_per_group", 2),
+        ("max_claims_per_group", 5),
+        ("max_claims", 30),
+        ("target_min_words", 750),
+        ("target_max_words", 950),
+    ]:
+        changed_config = replace(
+            config,
+            priority_aware=replace(config.priority_aware, **{field: value}),
+        )
+        changed = competition_rag._generation_identity(
+            changed_config, handoff, topics
+        )
+        assert changed != base, f"priority_aware.{field} does not invalidate identity"
+
+
+def test_identity_version_rejects_rows_written_before_priority_planning(
+    tmp_path: Path,
+) -> None:
+    """Version 7 rows did not bind the two-stage planner contract."""
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
     generated = {
         "references": ["climbmix-a"],
@@ -1927,14 +2275,15 @@ def test_identity_version_rejects_rows_written_before_generation_strategy(
     asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
     path = config.work_dir / "generation_identity.json"
     recorded = json.loads(path.read_text())
-    assert recorded["identity_version"] == 7
+    assert recorded["identity_version"] == 8
     assert recorded["citation_validation_contract_version"] == (
         "exact_hint_linked_docids_v1"
     )
     assert recorded["call_telemetry_contract_version"] == (
         "generation_call_telemetry_v1"
     )
-    recorded["identity_version"] = 6
+    assert recorded["priority_plan_contract_version"] == "priority_plan_v1"
+    recorded["identity_version"] = 7
     path.write_text(json.dumps(recorded), encoding="utf-8")
 
     with pytest.raises(ValueError, match="older revision"):

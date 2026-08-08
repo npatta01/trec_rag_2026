@@ -832,6 +832,27 @@ nuggets, qrels, retrieval candidates, the organizer run, or the full-text ZIP.
 The strategy is included in the generation identity, so rows cannot be resumed
 across strategies.
 
+The checked-in multi-stage config is
+`configs/rag26_competition_rag_priority_aware_v3.yaml`. It sets
+`generation.strategy: priority_aware` and makes two hosted calls for each newly
+generated topic:
+
+1. A planner reads only the authenticated handoff and returns a bounded list of
+   atomic claims classified as `essential`, `important`, or `optional`, with
+   one to three exact same-group evidence IDs per claim.
+2. The writer receives the locally validated plan plus the same selected
+   evidence. It covers essential claims before important claims and uses
+   optional claims only when the word budget remains.
+
+The runner rejects plans with foreign or cross-group evidence IDs, exact claim
+duplicates, invalid priority order, missing group quotas, too many claims, or a
+group containing only optional material. Valid plans are stored privately under
+the run's `work/plans/` directory and reused on resume when the final answer is
+missing. Planner model and token settings, claim quotas, writer word targets,
+both prompt contracts, and the topic-specific plan schema are bound into the
+generation identity. Planning never opens evaluator plans, gold nuggets, qrels,
+retrieval candidates, the organizer run, or the full-text ZIP.
+
 Generation validates the complete handoff before mutating generation state.
 The model must cite raw ClimbMix document IDs from the current topic's sealed
 domain; code validates those IDs and deterministically converts them to the
