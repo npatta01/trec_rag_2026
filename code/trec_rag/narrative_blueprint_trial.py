@@ -3,9 +3,9 @@
 Question: does a compact narrative blueprint improve answer coverage for one
 fixed-evidence topic under the 1,024-word cap without degrading citations?
 
-This prototype intentionally has no resume, overwrite, orchestration, or test
-surface. It exists to make one planner call and at most two writer calls for a
-single topic using the existing sealed handoff and generation helpers.
+Legacy modes intentionally have no resume, overwrite, orchestration, or test
+surface. The opt-in bounded-revision mode adds durable one-topic state and a
+strict call ledger while continuing to use the existing sealed handoff helpers.
 """
 
 from __future__ import annotations
@@ -1210,20 +1210,67 @@ def _bounded_revalidate_files(root: Path, state: dict[str, Any]) -> None:
 
 def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
     changed = False
-    for reservation in state.get("sol_reservations", []):
-        if reservation.get("status") != "pending":
-            continue
+    state.setdefault("recovered_payloads", {})
+    for reservation in [
+        *state.get("luna_reservations", []),
+        *state.get("sol_reservations", []),
+    ]:
         receipt_path = root / str(reservation.get("receipt", ""))
-        terminal_transport = False
+        receipt: dict[str, Any] = {}
         if receipt_path.is_file():
             try:
-                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                loaded = json.loads(receipt_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    receipt = loaded
             except (OSError, UnicodeError, json.JSONDecodeError):
-                receipt = {}
-            terminal_transport = receipt.get("outcome") == "terminal_transport_failure"
-        reservation["status"] = (
-            "terminal_transport_failure" if terminal_transport else "crash_consumed"
-        )
+                pass
+        stage = str(reservation.get("stage") or reservation.get("role") or "")
+        if (
+            receipt.get("outcome") == "semantic_success"
+            and isinstance(receipt.get("accepted_payload"), dict)
+        ):
+            state["recovered_payloads"].setdefault(stage, receipt["accepted_payload"])
+        if reservation.get("status") != "pending":
+            continue
+        outcome = receipt.get("outcome")
+        if outcome == "terminal_transport_failure":
+            reservation["status"] = "terminal_transport_failure"
+        elif outcome == "semantic_success" and isinstance(
+            receipt.get("accepted_payload"), dict
+        ):
+            reservation["status"] = "semantic_returned"
+            state["recovered_payloads"][stage] = receipt["accepted_payload"]
+        elif outcome in {"semantic_success", "semantic_error"}:
+            reservation["status"] = "semantic_returned"
+        else:
+            reservation["status"] = "crash_consumed"
+        if receipt:
+            ordinal = reservation.get("ordinal")
+            if not any(
+                call.get("stage") == stage
+                and call.get("reservation_ordinal") == ordinal
+                for call in state.get("calls", [])
+            ):
+                state.setdefault("calls", []).append(
+                    {
+                        key: receipt.get(key)
+                        for key in (
+                            "stage",
+                            "model",
+                            "reasoning_effort",
+                            "prompt_sha256",
+                            "schema_sha256",
+                            "reservation_ordinal",
+                            "outcome",
+                            "latency_seconds",
+                            "provider_cost",
+                            "usage",
+                            "transport_outcome",
+                            "error",
+                        )
+                        if key in receipt
+                    }
+                )
         changed = True
     if changed:
         _bounded_write_state(root, state)
@@ -1254,19 +1301,104 @@ def _bounded_reserve_sol(
         raise ValueError("repair reservation requires deterministic validation errors")
     if role != "repair" and len([item for item in reservations if item["role"] != "repair"]) >= 2:
         raise ValueError("bounded-revision routine Sol reservation ceiling is exhausted")
-    if any(item["role"] == role for item in state.get("sol_reservations", [])):
+    if any(
+        item["role"] == role
+        and item.get("status") != "terminal_transport_failure"
+        for item in state.get("sol_reservations", [])
+    ):
         raise ValueError(f"bounded-revision role already reserved: {role}")
-    ordinal = len(state.get("sol_reservations", [])) + 1
+    ordinal = max(
+        (int(item.get("ordinal", 0)) for item in state.get("sol_reservations", [])),
+        default=0,
+    ) + 1
     state.setdefault("sol_reservations", []).append(
         {
             "ordinal": ordinal,
             "role": role,
+            "stage": receipt_name,
             "status": "pending",
             "receipt": f"receipts/{receipt_name}.json",
         }
     )
     _bounded_write_state(root, state)
     return ordinal
+
+
+def _bounded_reserve_luna(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    stage: str,
+) -> int:
+    prior = [item for item in state.get("luna_reservations", []) if item.get("stage") == stage]
+    if any(item.get("status") in {"crash_consumed", "semantic_returned"} for item in prior):
+        raise ValueError(f"bounded-revision Luna stage is already consumed: {stage}")
+    ordinal = max(
+        (int(item.get("ordinal", 0)) for item in state.get("luna_reservations", [])),
+        default=0,
+    ) + 1
+    state.setdefault("luna_reservations", []).append(
+        {
+            "ordinal": ordinal,
+            "stage": stage,
+            "status": "pending",
+            "receipt": f"receipts/{stage}.json",
+        }
+    )
+    _bounded_write_state(root, state)
+    return ordinal
+
+
+def _bounded_finish_luna(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    ordinal: int,
+    status: str,
+) -> None:
+    for reservation in state.get("luna_reservations", []):
+        if reservation.get("ordinal") == ordinal:
+            reservation["status"] = status
+            break
+    else:
+        raise ValueError(f"unknown Luna reservation ordinal: {ordinal}")
+    _bounded_write_state(root, state)
+
+
+def _bounded_recovered_payload(
+    state: dict[str, Any], stage: str
+) -> tuple[bool, dict[str, Any] | None]:
+    payloads = state.setdefault("recovered_payloads", {})
+    if stage not in payloads:
+        return False, None
+    payload = payloads.pop(stage)
+    if not isinstance(payload, dict):
+        raise ValueError(f"recovered {stage} payload is not an object")
+    return True, payload
+
+
+def _bounded_blocked_stage(
+    state: dict[str, Any], *, stage: str, luna: bool
+) -> bool:
+    reservations = state.get("luna_reservations" if luna else "sol_reservations", [])
+    return any(
+        item.get("stage", item.get("role")) == stage
+        and item.get("status")
+        in {"crash_consumed", "ambiguous_failure", "semantic_returned"}
+        for item in reservations
+    )
+
+
+def _bounded_stage_status(
+    state: dict[str, Any], *, stage: str, luna: bool
+) -> str | None:
+    reservations = state.get("luna_reservations" if luna else "sol_reservations", [])
+    statuses = [
+        str(item.get("status"))
+        for item in reservations
+        if item.get("stage", item.get("role")) == stage
+    ]
+    return statuses[-1] if statuses else None
 
 
 def _bounded_finish_sol(
@@ -1332,13 +1464,21 @@ async def _bounded_provider_call(
         raw_response = exc.raw_response
         error = f"{type(exc).__name__}: {exc}"
         outcome = "semantic_error"
-    except (RuntimeError, OSError) as exc:
+    except RuntimeError as exc:
         error = f"{type(exc).__name__}: {exc}"
-        outcome = "terminal_transport_failure"
-        transport_outcome = "failure"
+        if (
+            isinstance(generator, OpenRouterJsonGenerator)
+            and str(exc) == "OpenRouter generation transport failed"
+        ):
+            outcome = "terminal_transport_failure"
+            transport_outcome = "failure"
+        else:
+            outcome = "ambiguous_failure"
+            transport_outcome = "unknown"
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
-        outcome = "semantic_error"
+        outcome = "ambiguous_failure"
+        transport_outcome = "unknown"
     usage, cost = _bounded_usage(raw_response)
     receipt = {
         "stage": stage,
@@ -1354,6 +1494,7 @@ async def _bounded_provider_call(
         "outcome": outcome,
         "transport_outcome": transport_outcome,
         "error": error,
+        "accepted_payload": payload if outcome == "semantic_success" else None,
         "raw_response": raw_response,
     }
     _write_json(root / "receipts" / f"{stage}.json", receipt, api_key=api_key)
@@ -1402,6 +1543,28 @@ def _bounded_candidate(
     )
     _validate_exact_hint_citations(record, topic=topic)
     return record
+
+
+def _bounded_rebind_candidate(
+    record: dict[str, Any],
+    *,
+    topic: GenerationTopic,
+    config: Any,
+    run_id: str,
+) -> dict[str, Any]:
+    rebound = json.loads(json.dumps(record, ensure_ascii=False))
+    rebound["metadata"]["run_id"] = run_id
+    _validate_generated_submission_record(
+        rebound,
+        topic_id=topic.topic_id,
+        narrative=topic.narrative,
+        allowed_docids=list(topic.citation_docids),
+        team_id=config.team_id,
+        run_id=run_id,
+        run_desc=config.run_desc,
+    )
+    _validate_exact_hint_citations(rebound, topic=topic)
+    return rebound
 
 
 def _bounded_write_candidate(root: Path, arm: str, record: dict[str, Any]) -> Path:
@@ -1547,7 +1710,9 @@ async def _run_bounded_revision(
                 "final": False,
             },
             "stage_hashes": {},
+            "luna_reservations": [],
             "sol_reservations": [],
+            "recovered_payloads": {},
             "calls": [],
             "failure": None,
         }
@@ -1601,23 +1766,40 @@ async def _run_bounded_revision(
         )
         blueprint, projection = loaded
     else:
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-luna") as executor:
-            planner_payload, planner_call = await _bounded_provider_call(
-                luna,
-                root=root,
-                api_key=api_key,
-                topic_id=topic.topic_id,
-                stage="planner",
-                model=LUNA_MODEL,
-                reasoning_effort=LUNA_REASONING_EFFORT,
-                system_prompt=PLANNER_SYSTEM_PROMPT,
-                user_prompt=planner_prompt,
-                response_schema=planner_schema,
-                executor=executor,
+        recovered, planner_payload = _bounded_recovered_payload(state, "planner")
+        if recovered:
+            planner_call = None
+        else:
+            if _bounded_blocked_stage(state, stage="planner", luna=True):
+                raise RuntimeError("planner reservation was consumed without a reusable payload")
+            planner_ordinal = _bounded_reserve_luna(root, state, stage="planner")
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-luna") as executor:
+                planner_payload, planner_call = await _bounded_provider_call(
+                    luna,
+                    root=root,
+                    api_key=api_key,
+                    topic_id=topic.topic_id,
+                    stage="planner",
+                    model=LUNA_MODEL,
+                    reasoning_effort=LUNA_REASONING_EFFORT,
+                    system_prompt=PLANNER_SYSTEM_PROMPT,
+                    user_prompt=planner_prompt,
+                    response_schema=planner_schema,
+                    executor=executor,
+                    reservation_ordinal=planner_ordinal,
+                )
+            state["calls"].append(planner_call)
+            state["luna_call_count"] = state.get("luna_call_count", 0) + 1
+            _bounded_finish_luna(
+                root,
+                state,
+                ordinal=planner_ordinal,
+                status=(
+                    "semantic_returned"
+                    if planner_payload is not None
+                    else planner_call["outcome"]
+                ),
             )
-        state["calls"].append(planner_call)
-        state["luna_call_count"] = state.get("luna_call_count", 0) + 1
-        _bounded_write_state(root, state)
         if planner_payload is None:
             state["failure"] = "planner did not return an accepted semantic response"
             _bounded_write_state(root, state)
@@ -1644,33 +1826,40 @@ async def _run_bounded_revision(
     draft: dict[str, Any] | None = None
     draft_path = root / "draft.record.json"
     draft_errors: tuple[str, ...] = ()
+    invalid_draft_payload: dict[str, Any] | None = None
     if state["stages"].get("draft") and draft_path.is_file():
         draft = json.loads(draft_path.read_text(encoding="utf-8"))
     else:
-        draft_ordinal = _bounded_reserve_sol(root, state, role="draft", receipt_name="draft")
-        draft_prompt = _render_hybrid_writer_prompt(topic, blueprint, projection)
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
-            generated, draft_call = await _bounded_provider_call(
-                sol,
-                root=root,
-                api_key=api_key,
-                topic_id=topic.topic_id,
-                stage="draft",
-                model=config.model,
-                reasoning_effort=config.reasoning_effort,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=draft_prompt,
-                response_schema=output_schema(),
-                executor=executor,
-                reservation_ordinal=draft_ordinal,
+        recovered, generated = _bounded_recovered_payload(state, "draft")
+        if not recovered:
+            if _bounded_blocked_stage(state, stage="draft", luna=False):
+                raise RuntimeError("draft reservation was consumed without a reusable payload")
+            draft_ordinal = _bounded_reserve_sol(root, state, role="draft", receipt_name="draft")
+            draft_prompt = _render_hybrid_writer_prompt(topic, blueprint, projection)
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+                generated, draft_call = await _bounded_provider_call(
+                    sol,
+                    root=root,
+                    api_key=api_key,
+                    topic_id=topic.topic_id,
+                    stage="draft",
+                    model=config.model,
+                    reasoning_effort=config.reasoning_effort,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=draft_prompt,
+                    response_schema=output_schema(),
+                    executor=executor,
+                    reservation_ordinal=draft_ordinal,
+                )
+            state["calls"].append(draft_call)
+            _bounded_finish_sol(
+                root,
+                state,
+                ordinal=draft_ordinal,
+                status=(
+                    "semantic_returned" if generated is not None else draft_call["outcome"]
+                ),
             )
-        state["calls"].append(draft_call)
-        _bounded_finish_sol(
-            root,
-            state,
-            ordinal=draft_ordinal,
-            status="semantic_returned" if generated is not None else draft_call["outcome"],
-        )
         if generated is not None:
             try:
                 draft = _bounded_candidate(
@@ -1678,6 +1867,7 @@ async def _run_bounded_revision(
                 )
             except (ValueError, RuntimeError, TypeError) as exc:
                 draft_errors = (f"{type(exc).__name__}: {exc}",)
+                invalid_draft_payload = generated
         if draft is not None:
             _atomic_write_text(
                 draft_path,
@@ -1693,45 +1883,58 @@ async def _run_bounded_revision(
             state["stages"]["draft"] = True
         _bounded_write_state(root, state)
 
+    if draft is None and not draft_errors:
+        state["failure"] = "draft did not return a candidate that can be repaired"
+        _bounded_write_state(root, state)
+        _atomic_write_text(
+            root / "manifest.json",
+            json.dumps(_bounded_manifest(root, state, topic=topic, draft=None, final=None), indent=2) + "\n",
+        )
+        raise RuntimeError(state["failure"])
+
     if draft is None:
-        if not draft_errors:
-            draft_errors = ("draft did not produce a valid candidate",)
-        repair_ordinal = _bounded_reserve_sol(
-            root,
-            state,
-            role="repair",
-            receipt_name="repair",
-            has_validation_errors=True,
-        )
-        repair_prompt = _bounded_repair_prompt(
-            topic,
-            blueprint,
-            projection,
-            invalid_candidate={},
-            validation_errors=draft_errors,
-        )
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
-            repaired, repair_call = await _bounded_provider_call(
-                sol,
-                root=root,
-                api_key=api_key,
-                topic_id=topic.topic_id,
-                stage="repair",
-                model=config.model,
-                reasoning_effort=config.reasoning_effort,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=repair_prompt,
-                response_schema=output_schema(),
-                executor=executor,
-                reservation_ordinal=repair_ordinal,
+        recovered, repaired = _bounded_recovered_payload(state, "repair")
+        if not recovered:
+            if _bounded_blocked_stage(state, stage="repair", luna=False):
+                raise RuntimeError("repair reservation was consumed without a reusable payload")
+            repair_ordinal = _bounded_reserve_sol(
+                root,
+                state,
+                role="repair",
+                receipt_name="repair",
+                has_validation_errors=True,
             )
-        state["calls"].append(repair_call)
-        _bounded_finish_sol(
-            root,
-            state,
-            ordinal=repair_ordinal,
-            status="semantic_returned" if repaired is not None else repair_call["outcome"],
-        )
+            repair_prompt = _bounded_repair_prompt(
+                topic,
+                blueprint,
+                projection,
+                invalid_candidate=invalid_draft_payload or {},
+                validation_errors=draft_errors,
+            )
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+                repaired, repair_call = await _bounded_provider_call(
+                    sol,
+                    root=root,
+                    api_key=api_key,
+                    topic_id=topic.topic_id,
+                    stage="repair",
+                    model=config.model,
+                    reasoning_effort=config.reasoning_effort,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=repair_prompt,
+                    response_schema=output_schema(),
+                    executor=executor,
+                    reservation_ordinal=repair_ordinal,
+                )
+            state["calls"].append(repair_call)
+            _bounded_finish_sol(
+                root,
+                state,
+                ordinal=repair_ordinal,
+                status=(
+                    "semantic_returned" if repaired is not None else repair_call["outcome"]
+                ),
+            )
         if repaired is not None:
             try:
                 draft = _bounded_candidate(
@@ -1766,22 +1969,43 @@ async def _run_bounded_revision(
             all_cards = json.loads(cards_path.read_text(encoding="utf-8"))
             cards_by_group[group.group_id] = tuple(all_cards.get(group.group_id, ()))
             continue
-        audit_prompt = render_group_audit_prompt(topic, group_id=group.group_id, draft=draft)
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-luna") as executor:
-            audit_payload, audit_call = await _bounded_provider_call(
-                luna,
-                root=root,
-                api_key=api_key,
-                topic_id=topic.topic_id,
-                stage=f"audit-{_audit_aliases(topic)[0][group.group_id]}",
-                model=LUNA_MODEL,
-                reasoning_effort=LUNA_REASONING_EFFORT,
-                system_prompt="You are an evidence-only omission auditor. Return only the requested JSON.",
-                user_prompt=audit_prompt,
-                response_schema=audit_response_schema(),
-                executor=executor,
+        audit_stage = f"audit-{_audit_aliases(topic)[0][group.group_id]}"
+        recovered, audit_payload = _bounded_recovered_payload(state, audit_stage)
+        if not recovered:
+            if _bounded_blocked_stage(state, stage=audit_stage, luna=True):
+                raise RuntimeError(
+                    f"{audit_stage} reservation was consumed without a reusable payload"
+                )
+            audit_ordinal = _bounded_reserve_luna(root, state, stage=audit_stage)
+            audit_prompt = render_group_audit_prompt(
+                topic, group_id=group.group_id, draft=draft
             )
-        state["calls"].append(audit_call)
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-luna") as executor:
+                audit_payload, audit_call = await _bounded_provider_call(
+                    luna,
+                    root=root,
+                    api_key=api_key,
+                    topic_id=topic.topic_id,
+                    stage=audit_stage,
+                    model=LUNA_MODEL,
+                    reasoning_effort=LUNA_REASONING_EFFORT,
+                    system_prompt="You are an evidence-only omission auditor. Return only the requested JSON.",
+                    user_prompt=audit_prompt,
+                    response_schema=audit_response_schema(),
+                    executor=executor,
+                    reservation_ordinal=audit_ordinal,
+                )
+            state["calls"].append(audit_call)
+            _bounded_finish_luna(
+                root,
+                state,
+                ordinal=audit_ordinal,
+                status=(
+                    "semantic_returned" if audit_payload is not None else audit_call["outcome"]
+                ),
+            )
+            if audit_call["outcome"] == "terminal_transport_failure":
+                raise RuntimeError(f"{audit_stage} transport failed; resume may retry it")
         try:
             cards_by_group[group.group_id] = (
                 validate_group_audit(topic, group_id=group.group_id, payload=audit_payload)
@@ -1813,32 +2037,45 @@ async def _run_bounded_revision(
 
     final: dict[str, Any] | None = None
     revision_errors: tuple[str, ...] = ()
-    revision_ordinal = _bounded_reserve_sol(root, state, role="revision", receipt_name="revision")
-    revision_prompt = _bounded_revision_prompt(
-        topic, blueprint, projection, draft=draft, audit_cards=audit_cards
-    )
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
-        revised, revision_call = await _bounded_provider_call(
-            sol,
-            root=root,
-            api_key=api_key,
-            topic_id=topic.topic_id,
-            stage="revision",
-            model=config.model,
-            reasoning_effort=config.reasoning_effort,
-            system_prompt=SYSTEM_PROMPT,
-            user_prompt=revision_prompt,
-            response_schema=output_schema(),
-            executor=executor,
-            reservation_ordinal=revision_ordinal,
-        )
-    state["calls"].append(revision_call)
-    _bounded_finish_sol(
-        root,
-        state,
-        ordinal=revision_ordinal,
-        status="semantic_returned" if revised is not None else revision_call["outcome"],
-    )
+    invalid_revision_payload: dict[str, Any] | None = None
+    recovered, revised = _bounded_recovered_payload(state, "revision")
+    if not recovered:
+        revision_status = _bounded_stage_status(state, stage="revision", luna=False)
+        if revision_status in {"crash_consumed", "ambiguous_failure"}:
+            raise RuntimeError("revision reservation was consumed without a reusable payload")
+        if revision_status == "semantic_returned":
+            revised = None
+        else:
+            revision_ordinal = _bounded_reserve_sol(
+                root, state, role="revision", receipt_name="revision"
+            )
+            revision_prompt = _bounded_revision_prompt(
+                topic, blueprint, projection, draft=draft, audit_cards=audit_cards
+            )
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+                revised, revision_call = await _bounded_provider_call(
+                    sol,
+                    root=root,
+                    api_key=api_key,
+                    topic_id=topic.topic_id,
+                    stage="revision",
+                    model=config.model,
+                    reasoning_effort=config.reasoning_effort,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=revision_prompt,
+                    response_schema=output_schema(),
+                    executor=executor,
+                    reservation_ordinal=revision_ordinal,
+                )
+            state["calls"].append(revision_call)
+            _bounded_finish_sol(
+                root,
+                state,
+                ordinal=revision_ordinal,
+                status=(
+                    "semantic_returned" if revised is not None else revision_call["outcome"]
+                ),
+            )
     if revised is not None:
         try:
             final = _bounded_candidate(
@@ -1846,46 +2083,51 @@ async def _run_bounded_revision(
             )
         except (ValueError, RuntimeError, TypeError) as exc:
             revision_errors = (f"{type(exc).__name__}: {exc}",)
+            invalid_revision_payload = revised
 
-    if final is None:
-        if not revision_errors:
-            revision_errors = ("revision did not produce a valid candidate",)
-        repair_ordinal = _bounded_reserve_sol(
-            root,
-            state,
-            role="repair",
-            receipt_name="repair",
-            has_validation_errors=True,
-        )
-        repair_prompt = _bounded_repair_prompt(
-            topic,
-            blueprint,
-            projection,
-            invalid_candidate=revised or {},
-            validation_errors=revision_errors,
-        )
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
-            repaired, repair_call = await _bounded_provider_call(
-                sol,
-                root=root,
-                api_key=api_key,
-                topic_id=topic.topic_id,
-                stage="repair",
-                model=config.model,
-                reasoning_effort=config.reasoning_effort,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=repair_prompt,
-                response_schema=output_schema(),
-                executor=executor,
-                reservation_ordinal=repair_ordinal,
+    if revision_errors:
+        recovered, repaired = _bounded_recovered_payload(state, "repair")
+        if not recovered:
+            if _bounded_blocked_stage(state, stage="repair", luna=False):
+                raise RuntimeError("repair reservation was consumed without a reusable payload")
+            repair_ordinal = _bounded_reserve_sol(
+                root,
+                state,
+                role="repair",
+                receipt_name="repair",
+                has_validation_errors=True,
             )
-        state["calls"].append(repair_call)
-        _bounded_finish_sol(
-            root,
-            state,
-            ordinal=repair_ordinal,
-            status="semantic_returned" if repaired is not None else repair_call["outcome"],
-        )
+            repair_prompt = _bounded_repair_prompt(
+                topic,
+                blueprint,
+                projection,
+                invalid_candidate=invalid_revision_payload or {},
+                validation_errors=revision_errors,
+            )
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+                repaired, repair_call = await _bounded_provider_call(
+                    sol,
+                    root=root,
+                    api_key=api_key,
+                    topic_id=topic.topic_id,
+                    stage="repair",
+                    model=config.model,
+                    reasoning_effort=config.reasoning_effort,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=repair_prompt,
+                    response_schema=output_schema(),
+                    executor=executor,
+                    reservation_ordinal=repair_ordinal,
+                )
+            state["calls"].append(repair_call)
+            _bounded_finish_sol(
+                root,
+                state,
+                ordinal=repair_ordinal,
+                status=(
+                    "semantic_returned" if repaired is not None else repair_call["outcome"]
+                ),
+            )
         if repaired is not None:
             try:
                 final = _bounded_candidate(
@@ -1894,7 +2136,19 @@ async def _run_bounded_revision(
             except (ValueError, RuntimeError, TypeError):
                 final = None
         if final is None:
-            final = draft
+            final = _bounded_rebind_candidate(
+                draft,
+                topic=topic,
+                config=config,
+                run_id=f"{config.run_id}-final",
+            )
+    elif final is None:
+        final = _bounded_rebind_candidate(
+            draft,
+            topic=topic,
+            config=config,
+            run_id=f"{config.run_id}-final",
+        )
 
     final_output = _bounded_write_candidate(root, "final", final)
     final_identity = _bounded_write_identity(
