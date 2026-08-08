@@ -126,7 +126,7 @@ Add a short prototype section to `code/trec_rag/README.md` with the dry-run, cre
 Run:
 
 ```bash
-.venv/bin/ruff check code/trec_rag/narrative_blueprint_trial.py
+ruff check code/trec_rag/narrative_blueprint_trial.py
 .venv/bin/python -m py_compile code/trec_rag/narrative_blueprint_trial.py
 PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial --config configs/local/bounded-revision-233.yaml --topic 233 --bounded-revision --state-mode create --dry-run
 PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial --config configs/local/bounded-revision-300.yaml --topic 300 --bounded-revision --state-mode create --dry-run
