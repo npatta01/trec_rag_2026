@@ -1,0 +1,95 @@
+experiment:
+  id: rag25_dev4_full_extraction_ag_three_way_v1
+  runtime_id: windows_openrouter_three_way_v1
+  run_date: 2026-08-08
+  split: development
+  status: pilot_complete_do_not_promote_priority_aware
+  issue: https://github.com/npatta01/trec_rag_2026/issues/52
+  description: >-
+    Four-topic controlled answer-generation comparison of baseline, coverage-aware,
+    and two-stage priority-aware generation over one authenticated evidence handoff.
+
+code:
+  branch: codex/issue-52-coverage-aware-ag
+  base_commit: 35affe29dd2fe405416c9865cc588850085246e7
+  ragdoll_submodule: 1f0671908ab6dc581a61648463e3566ba413b480
+  data_submodule: a6255c10119a2984a874f46172d94045168ab1f3
+  skills_submodule: f281e88f61252662033c681df8b1ed2d0ceda97e
+  python: 3.12.13
+  node: 24.19.0
+  pi: 0.73.1
+
+config:
+  retriever: authenticated_selected_evidence_handoff
+  index: climbmix-400b
+  query_source: narrative_groups_selected_passages_and_advisory_claim_hints
+  ranking: fixed_upstream_handoff
+  writer_model: openai/gpt-5.6-sol
+  writer_reasoning_effort: medium
+  planner_model: deepseek/deepseek-v4-flash
+  planner_reasoning_effort: minimal
+  strategies: [baseline, coverage_aware, priority_aware]
+  judge_model: openrouter/deepseek/deepseek-v4-flash
+  judge_thinking: minimal
+  nugget_assign_mode: support-grade-3
+  nugget_window_size: 10
+
+scope:
+  topic_count: 4
+  topic_ids: ["31", "72", "200", "225"]
+  phase: issue_52_phase_1_priority_probe
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  authenticated_handoff: outputs/nonagentic-rag25-dev-all22-replay-p4-20260807/generation_handoff_manifest.json
+  handoff_manifest_file_sha256: 6b2cdd576282cf28779bdd6e97d6f333ec2b98d815fb440ed4df06d3c607227b
+  handoff_authenticated_digest: 451bd0478f5419e0f5471b170757fb641195ef42d3fde771914260077d03c7ad
+  gold_nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  gold_nuggets_sha256: cbcdbea534f3d8aa1cebdfbb1e112df32146afe5599246a6f5fe4704d9fc8183
+  gold_nugget_count_per_arm: 256
+  vital_nugget_count_per_arm: 191
+
+counts:
+  rag_rows_total: 12
+  priority_answer_objects: 132
+  priority_plan_claims: 128
+  priority_support_tasks: 204
+  priority_nugget_assignments: 256
+
+metrics:
+  ndcg_at_10: null
+  recall_at_100: null
+  baseline_strict_vital: 0.395432
+  coverage_aware_strict_vital: 0.423685
+  priority_aware_strict_vital: 0.433258
+  priority_minus_coverage_strict_vital: 0.009573
+  coverage_aware_weighted_citation_precision_first: 0.929098
+  priority_aware_weighted_citation_precision_first: 0.797090
+  priority_minus_coverage_weighted_citation_precision_first: -0.132008
+  coverage_aware_hard_citation_precision: 0.897409
+  priority_aware_hard_citation_precision: 0.632186
+  priority_minus_coverage_hard_citation_precision: -0.265223
+
+private_artifact_receipts:
+  priority_output_sha256: 2071679c3d5fa51f36a5ed14baaec72e895fa7f415bf3d09d75a42128e8b2b70
+  priority_identity_sha256: a5f564782b41e1728d2b3a3ca8f3f9ceff6966afc6652fea68249a69dba86e86
+  priority_nugget_assignments_sha256: c0d7f54a3a8e5b7e867d3166f963402eb8d1a6e5b83ed17d34e79749de58332f
+  priority_support_judgments_sha256: 2106eb8d8a88d192acf8aff0af7999b346f5af9119af33dac25b552f928b8ed7
+
+tracked_record_files:
+  metrics: metrics.json
+  run_table: system_scores.csv
+  topic_table: topic_system_scores.csv
+  notes: notes.md
+
+local_artifacts:
+  output_dir: outputs/rag25_dev4_full_extraction_ag_priority_aware_v3
+  cache_dir: cache/ragdoll/issue52
+  committed_answers: false
+  committed_passages: false
+  committed_provider_responses: false
+
+notes: >-
+  Priority-aware planning improves aggregate nugget coverage slightly but causes a
+  large citation-support regression. Keep coverage-aware as the current default and
+  test an atomic one-claim, one-citation priority writer next.

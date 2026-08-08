@@ -107,7 +107,8 @@ using only the frozen selected evidence below.
 
 For every evidence group, select between {min_claims_per_group} and {max_claims_per_group}
 distinct answer-relevant claims, while keeping the complete plan at or below {max_claims}
-claims. Classify each claim as:
+claims. Every claims item must contain exactly these four fields: group_id, priority, claim,
+and evidence_ids. Set group_id to the exact evidence-group ID. Set priority to exactly one of:
 - essential: directly answers a central requirement of the official narrative or group text;
 - important: adds a material mechanism, consequence, quantitative detail, tradeoff, or action;
 - optional: useful context that should be omitted before any essential or important claim.
@@ -117,8 +118,12 @@ broad restatements. Exclude operational trivia, weak implications, and details t
 available rather than important to the narrative. Each claim must be atomic and must name one
 to three exact evidence_id values from its own group whose passage text fully supports it.
 
-Return one JSON object with exactly one key, claims. Sort claims by priority (essential,
-important, optional), then by the evidence-group order below. Do not return prose or Markdown.
+Return one JSON object with exactly one key, claims. Each claims item must use this exact shape:
+{{"group_id":"<exact group ID>","priority":"essential|important|optional",
+"claim":"<one atomic claim>","evidence_ids":["<same-group evidence ID>"]}}.
+Do not rename priority to classification and do not omit group_id. Sort claims by priority
+(essential, important, optional), then by the evidence-group order below. Do not return prose
+or Markdown.
 
 {checklist}
 
@@ -945,14 +950,10 @@ def validate_priority_plan(
         raise ValueError(f"{topic.topic_id}: priority plan must contain exactly claims")
     claims = value.get("claims")
     minimum_total = len(topic.groups) * config.min_claims_per_group
-    if (
-        not isinstance(claims, list)
-        or len(claims) < minimum_total
-        or len(claims) > config.max_claims
-    ):
+    if not isinstance(claims, list) or len(claims) < minimum_total:
         raise ValueError(
-            f"{topic.topic_id}: priority plan claim count must be between "
-            f"{minimum_total} and {config.max_claims}"
+            f"{topic.topic_id}: priority plan must contain at least "
+            f"{minimum_total} claims"
         )
 
     groups = {group.group_id: group for group in topic.groups}
@@ -961,11 +962,7 @@ def validate_priority_plan(
     }
     evidence = {row.evidence_id: row for row in topic.evidence}
     priority_ordinals = {name: ordinal for ordinal, name in enumerate(_PRIORITY_LEVELS)}
-    group_counts = {group.group_id: 0 for group in topic.groups}
-    group_material_counts = {group.group_id: 0 for group in topic.groups}
     normalized_claims: list[dict[str, Any]] = []
-    seen_claims: set[str] = set()
-    previous_order: tuple[int, int] | None = None
 
     for ordinal, item in enumerate(claims):
         label = f"{topic.topic_id}: priority plan claims[{ordinal}]"
@@ -1001,19 +998,6 @@ def validate_priority_plan(
                 raise ValueError(f"{label} references evidence from another group")
 
         clean_claim = " ".join(claim.split())
-        duplicate_key = re.sub(r"[^a-z0-9]+", " ", clean_claim.casefold()).strip()
-        if duplicate_key in seen_claims:
-            raise ValueError(f"{label} duplicates another planned claim")
-        seen_claims.add(duplicate_key)
-        order = (priority_ordinals[priority], group_ordinals[group_id])
-        if previous_order is not None and order < previous_order:
-            raise ValueError(
-                f"{topic.topic_id}: priority plan must be sorted by priority then group"
-            )
-        previous_order = order
-        group_counts[group_id] += 1
-        if priority != "optional":
-            group_material_counts[group_id] += 1
         normalized_claims.append(
             {
                 "group_id": group_id,
@@ -1023,19 +1007,69 @@ def validate_priority_plan(
             }
         )
 
-    for group_id, count in group_counts.items():
-        if not config.min_claims_per_group <= count <= config.max_claims_per_group:
+    normalized_claims.sort(
+        key=lambda item: (
+            priority_ordinals[item["priority"]],
+            group_ordinals[item["group_id"]],
+        )
+    )
+    deduplicated_claims: list[dict[str, Any]] = []
+    seen_claims: set[str] = set()
+    for item in normalized_claims:
+        duplicate_key = re.sub(
+            r"[^a-z0-9]+", " ", item["claim"].casefold()
+        ).strip()
+        if duplicate_key in seen_claims:
+            continue
+        seen_claims.add(duplicate_key)
+        deduplicated_claims.append(item)
+
+    grouped_claims = {group.group_id: [] for group in topic.groups}
+    for item in deduplicated_claims:
+        group_claims = grouped_claims[item["group_id"]]
+        if len(group_claims) < config.max_claims_per_group:
+            group_claims.append(item)
+
+    for group_id, group_claims in grouped_claims.items():
+        if len(group_claims) < config.min_claims_per_group:
             raise ValueError(
-                f"{topic.topic_id}: group {group_id} must contain between "
-                f"{config.min_claims_per_group} and {config.max_claims_per_group} claims"
+                f"{topic.topic_id}: group {group_id} must retain at least "
+                f"{config.min_claims_per_group} claims after deduplication"
             )
-        if group_material_counts[group_id] == 0:
+
+    selected_claims: list[dict[str, Any]] = []
+    extra_claims: list[dict[str, Any]] = []
+    for group in topic.groups:
+        group_claims = grouped_claims[group.group_id]
+        selected_claims.extend(group_claims[: config.min_claims_per_group])
+        extra_claims.extend(group_claims[config.min_claims_per_group :])
+    extra_claims.sort(
+        key=lambda item: (
+            priority_ordinals[item["priority"]],
+            group_ordinals[item["group_id"]],
+        )
+    )
+    selected_claims.extend(
+        extra_claims[: config.max_claims - len(selected_claims)]
+    )
+    selected_claims.sort(
+        key=lambda item: (
+            priority_ordinals[item["priority"]],
+            group_ordinals[item["group_id"]],
+        )
+    )
+
+    for group_id in grouped_claims:
+        if not any(
+            item["group_id"] == group_id and item["priority"] != "optional"
+            for item in selected_claims
+        ):
             raise ValueError(
                 f"{topic.topic_id}: group {group_id} needs an essential or important claim"
             )
-    if not any(item["priority"] == "essential" for item in normalized_claims):
+    if not any(item["priority"] == "essential" for item in selected_claims):
         raise ValueError(f"{topic.topic_id}: priority plan needs an essential claim")
-    return {"claims": normalized_claims}
+    return {"claims": selected_claims}
 
 
 def _message_text(content: object) -> str:
@@ -1741,6 +1775,37 @@ def _saved_priority_plan(
         return None
 
 
+def _saved_priority_plan_from_raw(
+    raw_dir: Path,
+    *,
+    topic_name: str,
+    topic: GenerationTopic,
+    config: PriorityAwareConfig,
+) -> dict[str, Any] | None:
+    """Recover the newest locally valid completed plan response during resume."""
+    pattern = re.compile(
+        rf"^{re.escape(topic_name)}\.plan-attempt-(?P<number>[1-9][0-9]*)\.json$"
+    )
+    candidates: list[tuple[int, Path]] = []
+    for path in raw_dir.glob(f"{topic_name}.plan-attempt-*.json"):
+        match = pattern.fullmatch(path.name)
+        if match is not None:
+            candidates.append((int(match.group("number")), path))
+    for _, path in sorted(candidates, reverse=True):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            choices = raw["choices"]
+            if choices[0].get("finish_reason") != "stop":
+                continue
+            value = parse_generated_json(
+                _message_text(choices[0]["message"].get("content"))
+            )
+            return validate_priority_plan(value, topic=topic, config=config)
+        except (KeyError, IndexError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    return None
+
+
 async def _prepare_priority_plan(
     *,
     topic: GenerationTopic,
@@ -1755,12 +1820,21 @@ async def _prepare_priority_plan(
     work_dir = config.resolved_work_dir
     topic_name = _safe_topic_name(topic.topic_id)
     plan_path = work_dir / "plans" / f"{topic_name}.json"
+    raw_dir = work_dir / "raw"
     if config.resume:
         saved = _saved_priority_plan(plan_path, topic=topic, config=settings)
+        if saved is None:
+            saved = _saved_priority_plan_from_raw(
+                raw_dir,
+                topic_name=topic_name,
+                topic=topic,
+                config=settings,
+            )
+            if saved is not None:
+                _write_json(plan_path, saved, compact=True)
         if saved is not None:
             return saved
 
-    raw_dir = work_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     secrets = (os.environ.get(config.api_key_env, ""),)
     next_attempt = _next_plan_attempt_number(raw_dir, topic_name)

@@ -33,7 +33,7 @@ generation:
     planner_reasoning_effort: minimal
     planner_structured_output: json_object
     planner_temperature: 0
-    planner_max_tokens: 6000
+    planner_max_tokens: 24000
     min_claims_per_group: 1
     max_claims_per_group: 5
     max_claims: 42

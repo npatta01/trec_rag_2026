@@ -774,7 +774,34 @@ def test_validate_support_judgments_requires_every_completed_task(
     failed_rows[1]["status"] = "failed"
     failed_rows[1]["support_label"] = None
     _write_jsonl(judgments, failed_rows)
-    with pytest.raises(ValueError, match=r"s1:c0.*not completed"):
+    with pytest.raises(ValueError, match="missing 1 expected task"):
+        ragdoll_io.validate_support_judgments(support_input, judgments)
+
+    retried_rows = list(ragdoll_io._read_jsonl(judgments))
+    retried_rows.append(
+        _support_judgment(
+            task_id="dev-spike:58:s1:c0",
+            statement="Waste storage remains unresolved.",
+            citation="Generator-visible passage B.",
+            sentence_index=1,
+            citation_index=0,
+            docid="climbmix-b",
+        )
+    )
+    _write_jsonl(judgments, retried_rows)
+    assert ragdoll_io.validate_support_judgments(support_input, judgments) == 2
+
+    duplicate_completed = list(ragdoll_io._read_jsonl(judgments))
+    duplicate_completed.append(duplicate_completed[-1])
+    _write_jsonl(judgments, duplicate_completed)
+    with pytest.raises(ValueError, match="duplicate completed task"):
+        ragdoll_io.validate_support_judgments(support_input, judgments)
+
+    unknown_status = list(ragdoll_io._read_jsonl(judgments))[:2]
+    unknown_status[1]["status"] = "retrying"
+    unknown_status[1]["support_label"] = None
+    _write_jsonl(judgments, unknown_status)
+    with pytest.raises(ValueError, match="invalid judgment status"):
         ragdoll_io.validate_support_judgments(support_input, judgments)
 
 

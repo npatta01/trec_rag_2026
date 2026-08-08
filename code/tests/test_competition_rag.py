@@ -384,6 +384,8 @@ def test_priority_planner_prompt_and_schema_use_only_authenticated_handoff() -> 
     assert "Second group evidence." in prompt
     assert "essential" in prompt
     assert "operational trivia" in prompt
+    assert "exactly these four fields: group_id, priority, claim" in prompt
+    assert "Do not rename priority to classification" in prompt
     assert "gold nugget" not in prompt.lower()
     assert "Do not use outside knowledge" in competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
     assert "gold nuggets" in competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
@@ -391,7 +393,7 @@ def test_priority_planner_prompt_and_schema_use_only_authenticated_handoff() -> 
     assert schema["properties"]["claims"]["maxItems"] == 24
 
 
-def test_priority_plan_validation_enforces_order_dedup_and_group_ownership() -> None:
+def test_priority_plan_validation_normalizes_order_and_enforces_group_ownership() -> None:
     topic = _two_group_generation_topic("rag2026-0")
     settings = _priority_settings()
     valid = {
@@ -422,20 +424,68 @@ def test_priority_plan_validation_enforces_order_dedup_and_group_ownership() -> 
             cross_group, topic=topic, config=settings
         )
 
-    duplicate = copy.deepcopy(valid)
-    duplicate["claims"][1]["claim"] = duplicate["claims"][0]["claim"]
-    with pytest.raises(ValueError, match="duplicates"):
+    duplicate_without_spare = copy.deepcopy(valid)
+    duplicate_without_spare["claims"][1]["claim"] = duplicate_without_spare[
+        "claims"
+    ][0]["claim"]
+    with pytest.raises(ValueError, match="must retain at least"):
         competition_rag.validate_priority_plan(
-            duplicate, topic=topic, config=settings
+            duplicate_without_spare, topic=topic, config=settings
         )
+
+    duplicate_with_spare = copy.deepcopy(duplicate_without_spare)
+    duplicate_with_spare["claims"].append(
+        {
+            "group_id": "rag2026-0-g2",
+            "priority": "important",
+            "claim": "The second evidence adds a distinct consequence.",
+            "evidence_ids": ["rag2026-0-e2"],
+        }
+    )
+    deduplicated = competition_rag.validate_priority_plan(
+        duplicate_with_spare, topic=topic, config=settings
+    )
+    assert len(deduplicated["claims"]) == 2
+    assert [item["group_id"] for item in deduplicated["claims"]] == [
+        "rag2026-0-g1",
+        "rag2026-0-g2",
+    ]
+
+    overlong = copy.deepcopy(valid)
+    for ordinal in range(1, 6):
+        overlong["claims"].append(
+            {
+                "group_id": "rag2026-0-g1",
+                "priority": "important",
+                "claim": f"Distinct supported detail {ordinal} from the first evidence.",
+                "evidence_ids": ["rag2026-0-e1"],
+            }
+        )
+    bounded = competition_rag.validate_priority_plan(
+        overlong,
+        topic=topic,
+        config=replace(settings, max_claims=3),
+    )
+    assert len(bounded["claims"]) == 3
+    assert {item["group_id"] for item in bounded["claims"]} == {
+        "rag2026-0-g1",
+        "rag2026-0-g2",
+    }
 
     misordered = copy.deepcopy(valid)
     misordered["claims"][0]["priority"] = "important"
     misordered["claims"][1]["priority"] = "essential"
-    with pytest.raises(ValueError, match="sorted by priority"):
-        competition_rag.validate_priority_plan(
-            misordered, topic=topic, config=settings
-        )
+    normalized = competition_rag.validate_priority_plan(
+        misordered, topic=topic, config=settings
+    )
+    assert [item["priority"] for item in normalized["claims"]] == [
+        "essential",
+        "important",
+    ]
+    assert [item["claim"] for item in normalized["claims"]] == [
+        "The second evidence adds a distinct consequence.",
+        "The first evidence supports a central claim.",
+    ]
 
 
 def _submission_record() -> dict[str, Any]:
@@ -1194,6 +1244,52 @@ def test_priority_aware_resume_reuses_a_valid_plan(tmp_path: Path) -> None:
 
     assert resumed_planner.calls == []
     assert len(resumed_writer.calls) == 1
+
+
+def test_priority_aware_resume_recovers_a_valid_completed_raw_plan(
+    tmp_path: Path,
+) -> None:
+    topic = _generation_topic(
+        "rag2026-1", "Question one", [("climbmix-a", "Evidence A.")]
+    )
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    raw_plan = {
+        "claims": [
+            {
+                "group_id": "rag2026-1-g1",
+                "priority": "essential",
+                "claim": "Evidence A supports the central answer.",
+                "evidence_ids": ["rag2026-1-e1"],
+            }
+        ]
+    }
+    (raw_dir / "rag2026-1-deadbeef.plan-attempt-10.json").write_text(
+        json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps(raw_plan)},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (raw_dir / "rag2026-1-deadbeef.plan-attempt-9.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+
+    recovered = competition_rag._saved_priority_plan_from_raw(
+        raw_dir,
+        topic_name="rag2026-1-deadbeef",
+        topic=topic,
+        config=_priority_settings(),
+    )
+
+    assert recovered == raw_plan
 
 
 def test_generation_trims_an_over_limit_completion_before_validation(
