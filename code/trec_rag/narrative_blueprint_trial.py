@@ -63,6 +63,26 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
+NO_PLANNER_CONTROL_INSTRUCTION = """
+
+No-planner control: treat every distinct request in the official narrative as a checklist. Aim
+for 850–950 words only when the selected evidence supports that coverage; never pad or repeat.
+Cover the core answer plus distinct high-specificity facts, including quantities, named
+mechanisms, actors, interventions, contrasts, and caveats. Preserve every supported member of
+an evidence-backed list rather than replacing it with a generic summary. Keep each answer
+object self-contained and cite only the strongest supporting selected docids."""
+
+
+NO_PLANNER_OUTPUT_CONTRACT = """
+
+Output contract: return exactly one JSON object with exactly `references` and `answer`; do not
+return Markdown. `references` must contain only raw ClimbMix docid strings from the evidence
+catalog, and only when an answer object cites them. Each `answer` item must contain one
+self-contained sentence stating one claim and one to three unique raw docid strings in
+`citations`, ordered strongest support first. Never use numeric citation indexes, never cite an
+unsupported passage, and keep the complete answer at or below 1,024 whitespace-separated words."""
+
+
 def _canonical_json(value: object) -> bytes:
     return json.dumps(
         value,
@@ -79,6 +99,42 @@ def _digest_text(value: str) -> str:
 
 def _digest_json(value: object) -> str:
     return sha256(_canonical_json(value)).hexdigest()
+
+
+def _render_no_planner_control_prompt(topic: GenerationTopic) -> str:
+    """Render one deterministic, deduplicated full-evidence control prompt."""
+
+    group_aliases = {
+        group.group_id: f"g{index:03d}"
+        for index, group in enumerate(topic.groups, start=1)
+    }
+    claim_aliases = {
+        claim.claim_id: f"c{index:03d}"
+        for index, claim in enumerate(topic.claim_hints, start=1)
+    }
+    lines = [
+        "NO-PLANNER FULL-EVIDENCE CONTROL",
+        "",
+        "OFFICIAL NARRATIVE:",
+        topic.narrative,
+        "",
+        "RETRIEVAL GROUPS AND ADVISORY CLAIM HINTS (DISPLAY ALIASES ONLY):",
+    ]
+    for group in topic.groups:
+        lines.append(f"[{group_aliases[group.group_id]}] GROUP: {group.text}")
+        for claim in topic.claim_hints:
+            if claim.group_id == group.group_id:
+                lines.append(f"  [{claim_aliases[claim.claim_id]}] CLAIM HINT: {claim.text}")
+    lines.extend(["", "SELECTED EVIDENCE CATALOG (EVERY PASSAGE IS AUTHORITATIVE):"])
+    for index, evidence in enumerate(topic.evidence, start=1):
+        lines.extend(
+            [
+                f"[e{index:03d}] DOCID: {evidence.docid}",
+                evidence.text,
+            ]
+        )
+    lines.extend([NO_PLANNER_CONTROL_INSTRUCTION, NO_PLANNER_OUTPUT_CONTRACT])
+    return "\n".join(lines)
 
 
 def _write_json(path: Path, value: object, *, api_key: str) -> None:
@@ -106,9 +162,17 @@ def _topic_for_cli(config: Any, handoff: GenerationHandoff, topic_id: str) -> Ge
 
 
 def _print_dry_run(
-    config: Any, topic: GenerationTopic, *, writer_attempts: int
+    config: Any,
+    topic: GenerationTopic,
+    *,
+    no_planner_control: bool,
+    writer_attempts: int,
 ) -> None:
-    planner_prompt = render_planner_prompt(topic)
+    prompt = (
+        _render_no_planner_control_prompt(topic)
+        if no_planner_control
+        else render_planner_prompt(topic)
+    )
     evidence_chars = sum(len(row.text) for row in topic.evidence)
     print(f"topic={topic.topic_id}")
     print(
@@ -119,17 +183,18 @@ def _print_dry_run(
     print(
         "sizes="
         f"narrative_words:{len(topic.narrative.split())},"
-        f"planner_prompt_chars:{len(planner_prompt)},evidence_chars:{evidence_chars}"
+        f"{'writer' if no_planner_control else 'planner'}_prompt_chars:{len(prompt)},"
+        f"evidence_chars:{evidence_chars}"
     )
-    print(
-        f"budget=planner:1,writer:{writer_attempts},"
-        f"total_semantic_calls:{1 + writer_attempts}"
-    )
+    planner_calls = 0 if no_planner_control else 1
+    print(f"budget=planner:{planner_calls},writer:{writer_attempts},total_semantic_calls:{planner_calls + writer_attempts}")
     del config
 
 
-def _private_root(config: Any, topic: GenerationTopic) -> Path:
-    return config.resolved_work_dir / "blueprint_prototype" / _safe_topic_name(topic.topic_id)
+def _private_root(
+    config: Any, topic: GenerationTopic, *, mode: str = "blueprint_prototype"
+) -> Path:
+    return config.resolved_work_dir / mode / _safe_topic_name(topic.topic_id)
 
 
 def _refuse_existing_state(config: Any) -> None:
@@ -352,6 +417,103 @@ async def _run_live(
     ) from last_error
 
 
+async def _run_no_planner_control(
+    config: Any,
+    topic: GenerationTopic,
+    generator: OpenRouterJsonGenerator,
+    *,
+    api_key: str,
+) -> dict[str, Any]:
+    _validate_artifact_paths(config)
+    _refuse_existing_state(config)
+    private_root = _private_root(config, topic, mode="no_planner_control")
+    private_root.mkdir(parents=True, exist_ok=False)
+    user_prompt = _render_no_planner_control_prompt(topic)
+    writer_raw: dict[str, Any] | None = None
+    receipt_path = private_root / "writer.receipt.json"
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="blueprint-control") as executor:
+            generated, writer_raw = await _complete(
+                generator,
+                topic_id=topic.topic_id,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_schema=output_schema(),
+                executor=executor,
+            )
+        _write_json(
+            receipt_path,
+            {
+                "stage": "writer",
+                "control": "no_planner",
+                "attempt": 1,
+                "prompt_sha256": _digest_text(user_prompt),
+                "schema_sha256": _digest_json(output_schema()),
+                "raw_response": writer_raw,
+            },
+            api_key=api_key,
+        )
+        record = normalize_generated_record(
+            trim_to_word_limit(
+                build_submission_record(
+                    generated,
+                    topic_id=topic.topic_id,
+                    narrative=topic.narrative,
+                    team_id=config.team_id,
+                    run_id=config.run_id,
+                    run_desc=config.run_desc,
+                )
+            ),
+            allowed_docids=list(topic.citation_docids),
+        )
+        _validate_generated_submission_record(
+            record,
+            topic_id=topic.topic_id,
+            narrative=topic.narrative,
+            allowed_docids=list(topic.citation_docids),
+            team_id=config.team_id,
+            run_id=config.run_id,
+            run_desc=config.run_desc,
+        )
+        _validate_exact_hint_citations(record, topic=topic)
+        _atomic_write_text(
+            config.output_path,
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n",
+        )
+        return record
+    except SemanticCompletionError as exc:
+        _write_json(
+            receipt_path,
+            {
+                "stage": "writer",
+                "control": "no_planner",
+                "attempt": 1,
+                "prompt_sha256": _digest_text(user_prompt),
+                "schema_sha256": _digest_json(output_schema()),
+                "error": f"{type(exc).__name__}: {exc}",
+                "raw_response": exc.raw_response,
+            },
+            api_key=api_key,
+        )
+        raise
+    except Exception as exc:
+        if not receipt_path.exists():
+            _write_json(
+                receipt_path,
+                {
+                    "stage": "writer",
+                    "control": "no_planner",
+                    "attempt": 1,
+                    "prompt_sha256": _digest_text(user_prompt),
+                    "schema_sha256": _digest_json(output_schema()),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "raw_response": writer_raw,
+                },
+                api_key=api_key,
+            )
+        raise
+
+
 def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True, help="Prototype RAG YAML config.")
@@ -362,10 +524,15 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print topic/count/size/budget statistics without provider calls.",
     )
     parser.add_argument(
+        "--no-planner-control",
+        action="store_true",
+        help="Run the approved one-writer, no-planner control.",
+    )
+    parser.add_argument(
         "--writer-attempts",
         type=int,
         choices=(1, 2),
-        default=2,
+        default=None,
         help="Maximum writer semantic attempts for this isolated invocation.",
     )
     return parser.parse_args(argv)
@@ -376,8 +543,19 @@ def main(argv: list[str] | None = None) -> None:
     config = load_rag_generation_config(args.config)
     handoff = load_generation_handoff(config.handoff_manifest_path)
     topic = _topic_for_cli(config, handoff, args.topic)
+    if args.no_planner_control:
+        if args.writer_attempts not in {None, 1}:
+            raise SystemExit("--no-planner-control requires --writer-attempts 1")
+        writer_attempts = 1
+    else:
+        writer_attempts = args.writer_attempts if args.writer_attempts is not None else 2
     if args.dry_run:
-        _print_dry_run(config, topic, writer_attempts=args.writer_attempts)
+        _print_dry_run(
+            config,
+            topic,
+            no_planner_control=args.no_planner_control,
+            writer_attempts=writer_attempts,
+        )
         return
 
     repo_root = find_repo_root(args.config.resolve().parent)
@@ -394,15 +572,18 @@ def main(argv: list[str] | None = None) -> None:
         timeout_seconds=config.timeout_seconds,
         transport_max_attempts=config.transport_max_attempts,
     )
-    asyncio.run(
-        _run_live(
-            config,
-            topic,
-            generator,
-            api_key=api_key,
-            writer_attempts=args.writer_attempts,
+    if args.no_planner_control:
+        asyncio.run(_run_no_planner_control(config, topic, generator, api_key=api_key))
+    else:
+        asyncio.run(
+            _run_live(
+                config,
+                topic,
+                generator,
+                api_key=api_key,
+                writer_attempts=writer_attempts,
+            )
         )
-    )
     print(f"completed topic={topic.topic_id} output={config.output_path}")
 
 

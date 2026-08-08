@@ -27,7 +27,19 @@ Interpretation: controlled length plus explicit narrative obligations is promisi
 
 The repeated residual gap is loss of high-specificity facts: quantities, named examples, and members of long enumerations. Examples include numeric environmental statistics, named Holocaust camps and Einsatzgruppen, and concrete waste/economy figures. Some of these details regressed from the baseline even as overall coverage improved. The prototype prompt now asks the planner for complementary high-specificity claim aliases and asks the writer to preserve supported lists. It also requires distinct anchors after topic `31` exposed duplicate anchors for compound narrative phrases.
 
-Do not productionize yet. The next design decision is whether to (a) keep the planner and add a bounded high-specificity fact budget inside each obligation, or (b) test a one-call length/checklist control to determine how much of the gain comes from the planner versus the 850–950-word target. Before scaling, obtain a small comparable semantic citation-support sample; current prototype outputs have organizer-valid citations but no paired semantic support judgments.
+### Matched one-call control
+
+A no-planner control was then run on topics `72` and `200`. It used one writer call, the same controlled-length/detail instruction, every advisory hint once, and every selected passage once. Its prompt size was comparable to the blueprint writer context, so this isolates the obligation plan more fairly than the original duplicated one-shot renderer.
+
+| Topic | Blueprint strict vital | Control strict vital | Blueprint − control | Blueprint strict all | Control strict all | Blueprint − control | Words |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `72` | 0.486111 | 0.361111 | +0.125000 | 0.422222 | 0.322222 | +0.100000 | 855 / 853 |
+| `200` | 0.655738 | 0.737705 | −0.081967 | 0.590909 | 0.625000 | −0.034091 | 1,012 / 972 |
+| **Two-topic macro** | **0.570925** | **0.549408** | **+0.021516** | **0.506566** | **0.473611** | **+0.032954** | **934 / 913 avg.** |
+
+The opposing winners explain the mechanism. On topic `72`, planner obligations improved cross-facet mechanisms, human/ecological effects, and policy coverage. On topic `200`, the control preserved concrete enumerations and named facts—most visibly all six named death camps and the Einsatzgruppen—that the selected blueprint claims omitted. The planner's small two-topic macro advantage does not justify treating either current strategy as ideal, especially with only two matched topics.
+
+The next prototype should therefore be a hybrid, still limited to one planner plus one writer: keep the obligation map and word allocation, but render every advisory claim hint once in a global grouped catalog instead of hiding unselected hints. Selected aliases remain the core checklist; unselected aliases are optional specificity candidates. Continue rendering each selected passage once. This directly combines the observed breadth benefit with the observed list/detail benefit without adding a call. Do not productionize or expand tests until that hybrid wins a small held-out trial. Before scaling further, obtain a comparable semantic citation-support sample; current prototype outputs have organizer-valid citations but no paired semantic support judgments.
 
 ## Global Constraints
 
