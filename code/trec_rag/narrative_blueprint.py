@@ -290,11 +290,15 @@ def render_planner_prompt(topic: GenerationTopic) -> str:
     lines.extend(
         [
             "",
-            "Return JSON matching the supplied schema. Anchor every obligation to exact",
-            "phrases from the official narrative, and allocate 850–950 words in total.",
+            "Return JSON matching the supplied schema. The narrative_spans field is an",
+            "authentication boundary: copy every span character-for-character from one",
+            "contiguous substring of the OFFICIAL NARRATIVE. Never paraphrase, insert an",
+            "ellipsis, or copy a concept that appears only in a group or claim hint.",
             "Give every obligation a distinct normalized anchor set. When splitting one",
             "compound narrative phrase, use the smallest distinctive subphrase for each part",
             "instead of repeating the complete phrase across obligations.",
+            "Before returning, verify every span against the official narrative and verify",
+            "that target_words across all obligations totals between 850 and 950 inclusive.",
         ]
     )
     return "\n".join(lines)

@@ -45,6 +45,8 @@ from trec_rag.generation_handoff import (
 )
 from trec_rag.narrative_blueprint import (
     BLUEPRINT_CONTRACT_VERSION,
+    BlueprintProjection,
+    NarrativeBlueprint,
     load_blueprint_state,
     planner_response_schema,
     project_blueprint,
@@ -137,6 +139,103 @@ def _render_no_planner_control_prompt(topic: GenerationTopic) -> str:
     return "\n".join(lines)
 
 
+def _render_hybrid_writer_prompt(
+    topic: GenerationTopic,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+) -> str:
+    """Render one hybrid writer prompt from an authenticated planner state."""
+
+    claim_aliases = {
+        claim.claim_id: f"c{index:03d}"
+        for index, claim in enumerate(topic.claim_hints, start=1)
+    }
+    evidence_alias_by_id = {
+        evidence.evidence_id: f"e{index:03d}"
+        for index, evidence in enumerate(topic.evidence, start=1)
+    }
+    selected_claim_ids = {
+        claim_id
+        for obligation in projection.obligations
+        for claim_id in obligation.claim_ids
+    }
+    lines = [
+        "NARRATIVE BLUEPRINT HYBRID WRITER",
+        "Write a grounded answer to the complete official narrative using the authenticated",
+        "blueprint as the core coverage checklist and every handoff passage as factual authority.",
+        "Selected claim hints are advisory. Facts must be verified against the evidence catalog.",
+        "Unselected claim hints are optional specificity candidates, never requirements or authority.",
+        "Obligation-selected evidence aliases are focus cues only; do not omit other handoff passages.",
+        "Preserve supported named lists, numbers, quantities, mechanisms, actors, interventions,",
+        "contrasts, and caveats instead of replacing them with generic summaries.",
+        "Use the full citation domain below; the planner cannot prune it. Cite only exact docids",
+        "supported by the evidence catalog.",
+        "",
+        "OFFICIAL NARRATIVE:",
+        topic.narrative,
+        "",
+        "BLUEPRINT OBLIGATIONS (CORE):",
+    ]
+    for index, (blueprint_obligation, projection_obligation) in enumerate(
+        zip(blueprint.obligations, projection.obligations), start=1
+    ):
+        selected_aliases = ", ".join(
+            claim_aliases[claim_id] for claim_id in projection_obligation.claim_ids
+        )
+        evidence_aliases = ", ".join(
+            evidence_alias_by_id[evidence_id]
+            for evidence_id in projection_obligation.evidence_ids
+        )
+        lines.extend(
+            [
+                f"OBLIGATION {index} [{projection_obligation.priority}; "
+                f"{projection_obligation.answer_mode}; ~{projection_obligation.target_words} words] "
+                f"{blueprint_obligation.label}",
+                "  Narrative anchors: "
+                + " | ".join(blueprint_obligation.narrative_spans),
+                "  Selected claim aliases (core): " + selected_aliases,
+                "  Selected evidence aliases: " + evidence_aliases,
+            ]
+        )
+    lines.extend(["", "ADVISORY CLAIM HINTS (EVERY HINT EXACTLY ONCE):"])
+    for claim in topic.claim_hints:
+        alias = claim_aliases[claim.claim_id]
+        status = (
+            "SELECTED CORE CLAIM"
+            if claim.claim_id in selected_claim_ids
+            else "UNSELECTED OPTIONAL SPECIFICITY CANDIDATE"
+        )
+        lines.append(f"[{alias}] {status}: {claim.text}")
+    lines.extend(
+        [
+            "",
+            "FULL EVIDENCE CATALOG (EVERY PASSAGE EXACTLY ONCE; AUTHORITATIVE):",
+        ]
+    )
+    for evidence in topic.evidence:
+        lines.extend(
+            [
+                f"[{evidence_alias_by_id[evidence.evidence_id]}] DOCID: {evidence.docid}",
+                evidence.text,
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "FULL CITATION DOMAIN (PLANNER CANNOT PRUNE):",
+            ", ".join(topic.citation_docids),
+            "",
+            "Return exactly one organizer JSON object with exactly `references` and `answer`;",
+            "do not return Markdown. `references` must contain only raw docid strings from",
+            "the full citation domain, and only when an answer object cites them. Each answer",
+            "item must contain one self-contained sentence stating one claim and one to three",
+            "unique raw docid strings in `citations`, ordered strongest support first. Never",
+            "use numeric citation indexes. Keep the complete answer at or below 1,024 words.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _write_json(path: Path, value: object, *, api_key: str) -> None:
     _atomic_write_text(
         path,
@@ -166,13 +265,16 @@ def _print_dry_run(
     topic: GenerationTopic,
     *,
     no_planner_control: bool,
+    planner_only: bool,
+    hybrid_plan: tuple[NarrativeBlueprint, BlueprintProjection] | None = None,
     writer_attempts: int,
 ) -> None:
-    prompt = (
-        _render_no_planner_control_prompt(topic)
-        if no_planner_control
-        else render_planner_prompt(topic)
-    )
+    if hybrid_plan is not None:
+        prompt = _render_hybrid_writer_prompt(topic, *hybrid_plan)
+    elif no_planner_control:
+        prompt = _render_no_planner_control_prompt(topic)
+    else:
+        prompt = render_planner_prompt(topic)
     evidence_chars = sum(len(row.text) for row in topic.evidence)
     print(f"topic={topic.topic_id}")
     print(
@@ -180,14 +282,22 @@ def _print_dry_run(
         f"groups:{len(topic.groups)},claims:{len(topic.claim_hints)},"
         f"evidence_passages:{len(topic.evidence)},citation_docids:{len(topic.citation_docids)}"
     )
+    prompt_kind = "writer" if no_planner_control or hybrid_plan is not None else "planner"
     print(
         "sizes="
         f"narrative_words:{len(topic.narrative.split())},"
-        f"{'writer' if no_planner_control else 'planner'}_prompt_chars:{len(prompt)},"
+        f"{prompt_kind}_prompt_chars:{len(prompt)},"
         f"evidence_chars:{evidence_chars}"
     )
-    planner_calls = 0 if no_planner_control else 1
-    print(f"budget=planner:{planner_calls},writer:{writer_attempts},total_semantic_calls:{planner_calls + writer_attempts}")
+    planner_calls = 0 if no_planner_control or hybrid_plan is not None else 1
+    effective_writer_attempts = 0 if planner_only else writer_attempts
+    total_calls = planner_calls + effective_writer_attempts
+    total_label = "total" if planner_only else "total_semantic_calls"
+    print(
+        "budget="
+        f"planner:{planner_calls},writer:{effective_writer_attempts},"
+        f"{total_label}:{total_calls}"
+    )
     del config
 
 
@@ -417,6 +527,213 @@ async def _run_live(
     ) from last_error
 
 
+async def _run_planner_only(
+    config: Any,
+    topic: GenerationTopic,
+    generator: OpenRouterJsonGenerator,
+    *,
+    api_key: str,
+) -> Path:
+    _validate_artifact_paths(config)
+    _refuse_existing_state(config)
+    private_root = _private_root(config, topic, mode="planner_only")
+    private_root.mkdir(parents=True, exist_ok=False)
+    planner_prompt = render_planner_prompt(topic)
+    planner_prompt_sha256 = _digest_text(planner_prompt)
+    planner_schema = planner_response_schema()
+    planner_raw: dict[str, Any] | None = None
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="blueprint-planner-only") as executor:
+            planner_payload, planner_raw = await _complete(
+                generator,
+                topic_id=topic.topic_id,
+                system_prompt=PLANNER_SYSTEM_PROMPT,
+                user_prompt=planner_prompt,
+                response_schema=planner_schema,
+                executor=executor,
+            )
+        _write_json(
+            private_root / "planner.receipt.json",
+            {
+                "stage": "planner",
+                "mode": "planner_only",
+                "contract_version": BLUEPRINT_CONTRACT_VERSION,
+                "prompt_sha256": planner_prompt_sha256,
+                "schema_sha256": _digest_json(planner_schema),
+                "raw_response": planner_raw,
+            },
+            api_key=api_key,
+        )
+        blueprint = validate_blueprint(topic, planner_payload)
+        projection = project_blueprint(topic, blueprint)
+        writer_context = render_blueprint_writer_context(topic, blueprint, projection)
+        state = serialize_blueprint_state(
+            topic,
+            blueprint,
+            projection,
+            planner_prompt_sha256=planner_prompt_sha256,
+            writer_context_sha256=_digest_text(writer_context),
+        )
+        state_path = private_root / "blueprint.state.json"
+        _write_json(state_path, state, api_key=api_key)
+        load_blueprint_state(
+            topic,
+            json.loads(state_path.read_text(encoding="utf-8")),
+            planner_prompt_sha256=planner_prompt_sha256,
+        )
+        return private_root
+    except SemanticCompletionError as exc:
+        _write_json(
+            private_root / "planner.receipt.json",
+            {
+                "stage": "planner",
+                "mode": "planner_only",
+                "prompt_sha256": planner_prompt_sha256,
+                "schema_sha256": _digest_json(planner_schema),
+                "error": f"{type(exc).__name__}: {exc}",
+                "raw_response": exc.raw_response,
+            },
+            api_key=api_key,
+        )
+        raise
+    except Exception as exc:
+        if planner_raw is None:
+            _write_json(
+                private_root / "planner.receipt.json",
+                {
+                    "stage": "planner",
+                    "mode": "planner_only",
+                    "prompt_sha256": planner_prompt_sha256,
+                    "schema_sha256": _digest_json(planner_schema),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                api_key=api_key,
+            )
+        raise
+
+
+def _load_hybrid_plan(
+    topic: GenerationTopic, path: Path
+) -> tuple[NarrativeBlueprint, BlueprintProjection]:
+    """Load and authenticate a planner-only state for a held-out writer run."""
+
+    plan_path = path.expanduser().resolve()
+    if not plan_path.is_file():
+        raise ValueError(f"hybrid planner state is not a file: {plan_path}")
+    try:
+        payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read hybrid planner state: {plan_path}") from exc
+    planner_prompt_sha256 = _digest_text(render_planner_prompt(topic))
+    try:
+        return load_blueprint_state(
+            topic,
+            payload,
+            planner_prompt_sha256=planner_prompt_sha256,
+        )
+    except Exception as exc:
+        raise ValueError(f"invalid hybrid planner state: {plan_path}: {exc}") from exc
+
+
+async def _run_hybrid(
+    config: Any,
+    topic: GenerationTopic,
+    generator: OpenRouterJsonGenerator,
+    *,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+    api_key: str,
+) -> dict[str, Any]:
+    _validate_artifact_paths(config)
+    _refuse_existing_state(config)
+    private_root = _private_root(config, topic, mode="hybrid")
+    private_root.mkdir(parents=True, exist_ok=False)
+    user_prompt = _render_hybrid_writer_prompt(topic, blueprint, projection)
+    writer_raw: dict[str, Any] | None = None
+    receipt_path = private_root / "writer.receipt.json"
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="blueprint-hybrid") as executor:
+            generated, writer_raw = await _complete(
+                generator,
+                topic_id=topic.topic_id,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_schema=output_schema(),
+                executor=executor,
+            )
+        _write_json(
+            receipt_path,
+            {
+                "stage": "writer",
+                "mode": "hybrid",
+                "attempt": 1,
+                "prompt_sha256": _digest_text(user_prompt),
+                "schema_sha256": _digest_json(output_schema()),
+                "raw_response": writer_raw,
+            },
+            api_key=api_key,
+        )
+        record = normalize_generated_record(
+            trim_to_word_limit(
+                build_submission_record(
+                    generated,
+                    topic_id=topic.topic_id,
+                    narrative=topic.narrative,
+                    team_id=config.team_id,
+                    run_id=config.run_id,
+                    run_desc=config.run_desc,
+                )
+            ),
+            allowed_docids=list(topic.citation_docids),
+        )
+        _validate_generated_submission_record(
+            record,
+            topic_id=topic.topic_id,
+            narrative=topic.narrative,
+            allowed_docids=list(topic.citation_docids),
+            team_id=config.team_id,
+            run_id=config.run_id,
+            run_desc=config.run_desc,
+        )
+        _validate_exact_hint_citations(record, topic=topic)
+        _atomic_write_text(
+            config.output_path,
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n",
+        )
+        return record
+    except SemanticCompletionError as exc:
+        _write_json(
+            receipt_path,
+            {
+                "stage": "writer",
+                "mode": "hybrid",
+                "attempt": 1,
+                "prompt_sha256": _digest_text(user_prompt),
+                "schema_sha256": _digest_json(output_schema()),
+                "error": f"{type(exc).__name__}: {exc}",
+                "raw_response": exc.raw_response,
+            },
+            api_key=api_key,
+        )
+        raise
+    except Exception as exc:
+        if not receipt_path.exists():
+            _write_json(
+                receipt_path,
+                {
+                    "stage": "writer",
+                    "mode": "hybrid",
+                    "attempt": 1,
+                    "prompt_sha256": _digest_text(user_prompt),
+                    "schema_sha256": _digest_json(output_schema()),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "raw_response": writer_raw,
+                },
+                api_key=api_key,
+            )
+        raise
+
+
 async def _run_no_planner_control(
     config: Any,
     topic: GenerationTopic,
@@ -523,10 +840,21 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print topic/count/size/budget statistics without provider calls.",
     )
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--no-planner-control",
         action="store_true",
         help="Run the approved one-writer, no-planner control.",
+    )
+    mode_group.add_argument(
+        "--planner-only",
+        action="store_true",
+        help="Run exactly one planner call, persist its state, and skip the writer.",
+    )
+    mode_group.add_argument(
+        "--hybrid-plan",
+        type=Path,
+        help="Load a validated planner-only blueprint.state.json and run one writer call.",
     )
     parser.add_argument(
         "--writer-attempts",
@@ -547,13 +875,26 @@ def main(argv: list[str] | None = None) -> None:
         if args.writer_attempts not in {None, 1}:
             raise SystemExit("--no-planner-control requires --writer-attempts 1")
         writer_attempts = 1
+    elif args.planner_only:
+        writer_attempts = 0
+    elif args.hybrid_plan is not None:
+        if args.writer_attempts not in {None, 1}:
+            raise SystemExit("--hybrid-plan requires --writer-attempts 1")
+        writer_attempts = 1
     else:
         writer_attempts = args.writer_attempts if args.writer_attempts is not None else 2
+    hybrid_plan = (
+        _load_hybrid_plan(topic, args.hybrid_plan)
+        if args.hybrid_plan is not None
+        else None
+    )
     if args.dry_run:
         _print_dry_run(
             config,
             topic,
             no_planner_control=args.no_planner_control,
+            planner_only=args.planner_only,
+            hybrid_plan=hybrid_plan,
             writer_attempts=writer_attempts,
         )
         return
@@ -572,6 +913,27 @@ def main(argv: list[str] | None = None) -> None:
         timeout_seconds=config.timeout_seconds,
         transport_max_attempts=config.transport_max_attempts,
     )
+    if args.planner_only:
+        work_path = asyncio.run(
+            _run_planner_only(config, topic, generator, api_key=api_key)
+        )
+        print(f"completed planner-only topic={topic.topic_id} work={work_path}")
+        return
+    if args.hybrid_plan is not None:
+        if hybrid_plan is None:
+            raise RuntimeError("hybrid planner state was not loaded")
+        asyncio.run(
+            _run_hybrid(
+                config,
+                topic,
+                generator,
+                blueprint=hybrid_plan[0],
+                projection=hybrid_plan[1],
+                api_key=api_key,
+            )
+        )
+        print(f"completed hybrid topic={topic.topic_id} output={config.output_path}")
+        return
     if args.no_planner_control:
         asyncio.run(_run_no_planner_control(config, topic, generator, api_key=api_key))
     else:

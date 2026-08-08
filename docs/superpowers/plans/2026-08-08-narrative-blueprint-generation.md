@@ -41,9 +41,72 @@ The opposing winners explain the mechanism. On topic `72`, planner obligations i
 
 The next prototype should therefore be a hybrid, still limited to one planner plus one writer: keep the obligation map and word allocation, but render every advisory claim hint once in a global grouped catalog instead of hiding unselected hints. Selected aliases remain the core checklist; unselected aliases are optional specificity candidates. Continue rendering each selected passage once. This directly combines the observed breadth benefit with the observed list/detail benefit without adding a call. Do not productionize or expand tests until that hybrid wins a small held-out trial. Before scaling further, obtain a comparable semantic citation-support sample; current prototype outputs have organizer-valid citations but no paired semantic support judgments.
 
+### Held-out topic `84`: cheap-planner/full-evidence hybrid
+
+Topic `84` was selected from handoff structure without reading its gold nugget text or prior
+answers. It contains seven generated groups, 108 advisory claim hints, 355 selected passages,
+and 257 citation-domain documents. Gold was opened only after all answer arms were complete;
+the topic has 54 gold nuggets, 41 marked vital.
+
+The hybrid writer received every hint and every selected passage exactly once. Planner-selected
+aliases were emphasis cues only and did not prune the factual input or citation domain. The
+matched control received the same complete hint/evidence inputs without a blueprint.
+
+| Arm | Cheap planner | Selected hints | Planner projection | Words | Strict vital | Strict all | Partial-credit vital | Partial-credit all |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| No-planner control | none | — | — | 1,019 | 0.634146 | 0.574074 | **0.695122** | **0.620370** |
+| Mini-plan hybrid | GPT-5 Mini | 64 / 108 | 239 / 355 passages | 970 | **0.634146** | **0.592593** | 0.670732 | **0.620370** |
+| Luna-plan hybrid | GPT-5.6 Luna | 82 / 108 | 355 / 355 passages | 1,017 | 0.609756 | 0.500000 | 0.670732 | 0.564815 |
+
+The Mini planner cost `$0.003568` and needed one deterministic local repair: it added a trailing
+comma to an otherwise exact narrative anchor. Luna passed the strict planner contract on its
+first real request, cost `$0.000751925`, allocated 900 words across seven obligations, and
+selected more hints. Two earlier Luna attempts and one Sol attempt failed before a provider
+response because the restricted sandbox could not resolve `openrouter.ai`; they are transport
+failures, not semantic/model failures. The final topic budget was exactly three successful Sol
+writer completions: Mini hybrid, control, and Luna hybrid. No further Sol calls may be made for
+topic `84`.
+
+The Mini/control delta came from only five gold nuggets. Mini gained full support for childhood
+hepatitis B (vital) and toxoid vaccines (non-vital), but lost adult shingles (vital) and partial
+support for benefit-versus-rare-adverse-events and hesitancy-linked disease resurgence. The
+Mini plan selected the hepatitis B hint and labeled shingles optional, demonstrating that the
+`selected core` / `optional` distinction creates zero-sum attention even when all evidence is
+present.
+
+Luna's broader selection restored full support for hepatitis B, shingles, and hesitancy-linked
+disease resurgence and added partial support for perceived low disease risk and benefit/risk.
+It nevertheless lost exact coverage elsewhere: recombinant, polysaccharide, and conjugate
+vaccine mechanisms became partial; several safety statements disappeared; toxoid and named
+animal non-core examples disappeared. Selecting more claims before drafting therefore does not
+solve the compression problem; it changes which facts are sacrificed.
+
+Nine vital nuggets were unsupported by both Mini and control. A literal selected-passage scan
+found no obvious support for eight of them (complacency, perceived low disease risk, polio near
+eradication, the 2–3 million annual-deaths figure, the 99% U.S. measles reduction, and three
+specific animal-vaccine facts). One passage weakly mentioned vaccination inconvenience. This
+scan is not a semantic evidence judge, but it indicates that part of the residual gap is upstream
+retrieval/canonicalization rather than generation. Generation must not invent those facts.
+
+**Decision:** do not productionize either hybrid yet. On the next fresh held-out topic, use:
+
+1. one cheap Luna planner for narrative obligations and word allocation, with claim selections
+   treated as non-exclusive focus suggestions rather than a selected/optional partition;
+2. one Sol draft over every hint and every selected passage;
+3. one cheap post-draft omission audit against the narrative, all hints, and selected evidence
+   (never gold), returning only evidence-backed missing-detail cards;
+4. one Sol revision that replaces generic or redundant prose with the best audited details while
+   remaining at or below 1,024 words.
+
+This design uses two Sol calls per topic, stays below the three-call cap, and attacks the observed
+failure at the point where it is measurable: after seeing what the draft actually omitted. Keep
+tests light until this revision loop wins on fresh topics. Semantic citation-support comparison
+remains outstanding; all three topic-`84` outputs passed structural citation validation only.
+
 ## Global Constraints
 
-- Run only development topics `31`, `72`, and `200`; never start an all-topic run.
+- Prototype only one development topic at a time; completed topics are `31`, `72`, `200`, and
+  held-out `84`. Never start an all-topic run, and make no further Sol calls for topic `84`.
 - Use at most one planner and two writer semantic reservations per topic across every resume; never make a fourth Sol semantic call.
 - Count and report HTTP transport attempts separately from semantic reservations.
 - Planner inputs are limited to the untouched narrative, generated group text, and existing advisory claim-hint text with local aliases.
