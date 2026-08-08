@@ -25,6 +25,7 @@ from trec_rag.narrative_blueprint import (
     serialize_blueprint_state,
     validate_blueprint,
 )
+from trec_rag.narrative_blueprint_trial import audit_response_schema
 
 
 def _topic_fixture() -> GenerationTopic:
@@ -200,6 +201,21 @@ def test_planner_schema_is_strict_and_has_exact_contract() -> None:
         "answer_mode",
         "target_words",
         "selected_claim_aliases",
+    ]
+
+
+def test_audit_schema_requires_every_declared_card_property() -> None:
+    schema = audit_response_schema()
+
+    card = schema["properties"]["cards"]["items"]
+    assert card["required"] == [
+        "group_alias",
+        "missing_detail",
+        "evidence_aliases",
+        "importance",
+        "omission_type",
+        "rationale",
+        "replacement_answer_index",
     ]
 
 

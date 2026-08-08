@@ -303,6 +303,7 @@ def audit_response_schema() -> dict[str, object]:
                         "importance",
                         "omission_type",
                         "rationale",
+                        "replacement_answer_index",
                     ],
                     "properties": {
                         "group_alias": {"type": "string"},
