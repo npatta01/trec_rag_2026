@@ -1240,7 +1240,10 @@ def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
         ):
             reservation["status"] = "semantic_returned"
             state["recovered_payloads"][stage] = receipt["accepted_payload"]
-        elif outcome in {"semantic_success", "semantic_error"}:
+        elif outcome == "semantic_error":
+            reservation["status"] = "semantic_error"
+        elif outcome == "semantic_success":
+            reservation["status"] = "semantic_error"
             reservation["status"] = "semantic_returned"
         else:
             reservation["status"] = "crash_consumed"
@@ -1384,7 +1387,12 @@ def _bounded_blocked_stage(
     return any(
         item.get("stage", item.get("role")) == stage
         and item.get("status")
-        in {"crash_consumed", "ambiguous_failure", "semantic_returned"}
+        in {
+            "crash_consumed",
+            "ambiguous_failure",
+            "semantic_error",
+            "semantic_returned",
+        }
         for item in reservations
     )
 
@@ -2006,6 +2014,10 @@ async def _run_bounded_revision(
             )
             if audit_call["outcome"] == "terminal_transport_failure":
                 raise RuntimeError(f"{audit_stage} transport failed; resume may retry it")
+            if audit_call["outcome"] == "semantic_error":
+                raise RuntimeError(
+                    f"{audit_stage} semantic response failed; resume is fail-closed"
+                )
         try:
             cards_by_group[group.group_id] = (
                 validate_group_audit(topic, group_id=group.group_id, payload=audit_payload)
@@ -2041,7 +2053,7 @@ async def _run_bounded_revision(
     recovered, revised = _bounded_recovered_payload(state, "revision")
     if not recovered:
         revision_status = _bounded_stage_status(state, stage="revision", luna=False)
-        if revision_status in {"crash_consumed", "ambiguous_failure"}:
+        if revision_status in {"crash_consumed", "ambiguous_failure", "semantic_error"}:
             raise RuntimeError("revision reservation was consumed without a reusable payload")
         if revision_status == "semantic_returned":
             revised = None
