@@ -67,6 +67,19 @@ failures, not semantic/model failures. The final topic budget was exactly three 
 writer completions: Mini hybrid, control, and Luna hybrid. No further Sol calls may be made for
 topic `84`.
 
+Recorded provider cost for the complete held-out comparison:
+
+| Arm | Planner calls / cost | Sol writer calls / cost | DeepSeek eval windows / cost | Arm total |
+|---|---:|---:|---:|---:|
+| No-planner control | 0 / `$0.000000000` | 1 / `$0.214967500` | 6 / `$0.003534300` | `$0.218501800` |
+| Mini-plan hybrid | 1 / `$0.003568000` | 1 / `$0.248176250` | 6 / `$0.002697800` | `$0.254442050` |
+| Luna-plan hybrid | 1 / `$0.000751925` | 1 / `$0.247291250` | 6 / `$0.003136560` | `$0.251179735` |
+| **Total** | **2 / `$0.004319925`** | **3 / `$0.710435000`** | **18 / `$0.009368660`** | **`$0.724123585`** |
+
+The ledger counts 23 successful semantic calls. Three additional attempts failed during DNS
+resolution before any model response (two Luna planner transports and one Sol writer transport),
+so they have no recorded provider usage or cost and are not counted as semantic completions.
+
 The Mini/control delta came from only five gold nuggets. Mini gained full support for childhood
 hepatitis B (vital) and toxoid vaccines (non-vital), but lost adult shingles (vital) and partial
 support for benefit-versus-rare-adverse-events and hesitancy-linked disease resurgence. The
