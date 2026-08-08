@@ -8,6 +8,27 @@
 
 **Tech Stack:** Python 3.12, frozen dataclasses, canonical JSON/SHA-256, asyncio/threaded hosted calls, pytest, OpenRouter strict JSON Schema, authenticated `GenerationTopic` handoff records.
 
+## Prototype-first status — 2026-08-08
+
+Task 1 produced the pure blueprint/projection module and passed its task review. The user then corrected the execution strategy: do not over-engineer production tests before learning whether the approach improves answers. Tasks 2–4 below are therefore deferred. The next step is a clearly marked throwaway, one-topic-at-a-time driver using the Task 1 module, beginning with topic `72`; only behavior that wins the paired evaluation will be solidified in the production runner and tests.
+
+### Three-topic prototype result
+
+The sequential pilot completed on development topics `72`, `200`, and `31`. Each valid generation used one planner plus one writer completion; topic `31` additionally consumed one rejected planner completion in its first namespace, reaching but not exceeding the three-Sol-call topic cap. Coverage was scored afterward with the same fixed-gold RAGDoll/DeepSeek setup as the baseline.
+
+| Topic | Baseline strict vital | Blueprint strict vital | Delta | Baseline strict all | Blueprint strict all | Delta | Words |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `31` | 0.458333 | 0.541667 | +0.083334 | 0.470588 | 0.558824 | +0.088236 | 351 → 811 |
+| `72` | 0.277778 | 0.486111 | +0.208333 | 0.244444 | 0.422222 | +0.177778 | 408 → 855 |
+| `200` | 0.524590 | 0.655738 | +0.131148 | 0.477273 | 0.590909 | +0.113636 | 649 → 1,012 |
+| **Macro** | **0.420234** | **0.561172** | **+0.140938** | **0.397435** | **0.523985** | **+0.126550** | **469 → 893 avg.** |
+
+Interpretation: controlled length plus explicit narrative obligations is promising across all three topics. The trial does not isolate the extra planner call from the longer answer, although topic `200` improved from an already longer and stronger baseline. Every planner marked every direct narrative obligation `must`, so projection retained the full selected-evidence handoff; the measured gain is from planning and synthesis behavior, not evidence pruning.
+
+The repeated residual gap is loss of high-specificity facts: quantities, named examples, and members of long enumerations. Examples include numeric environmental statistics, named Holocaust camps and Einsatzgruppen, and concrete waste/economy figures. Some of these details regressed from the baseline even as overall coverage improved. The prototype prompt now asks the planner for complementary high-specificity claim aliases and asks the writer to preserve supported lists. It also requires distinct anchors after topic `31` exposed duplicate anchors for compound narrative phrases.
+
+Do not productionize yet. The next design decision is whether to (a) keep the planner and add a bounded high-specificity fact budget inside each obligation, or (b) test a one-call length/checklist control to determine how much of the gain comes from the planner versus the 850–950-word target. Before scaling, obtain a small comparable semantic citation-support sample; current prototype outputs have organizer-valid citations but no paired semantic support judgments.
+
 ## Global Constraints
 
 - Run only development topics `31`, `72`, and `200`; never start an all-topic run.

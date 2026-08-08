@@ -105,7 +105,9 @@ def _topic_for_cli(config: Any, handoff: GenerationHandoff, topic_id: str) -> Ge
     return topics[0]
 
 
-def _print_dry_run(config: Any, topic: GenerationTopic) -> None:
+def _print_dry_run(
+    config: Any, topic: GenerationTopic, *, writer_attempts: int
+) -> None:
     planner_prompt = render_planner_prompt(topic)
     evidence_chars = sum(len(row.text) for row in topic.evidence)
     print(f"topic={topic.topic_id}")
@@ -119,7 +121,10 @@ def _print_dry_run(config: Any, topic: GenerationTopic) -> None:
         f"narrative_words:{len(topic.narrative.split())},"
         f"planner_prompt_chars:{len(planner_prompt)},evidence_chars:{evidence_chars}"
     )
-    print("budget=planner:1,writer:2,total_semantic_calls:3")
+    print(
+        f"budget=planner:1,writer:{writer_attempts},"
+        f"total_semantic_calls:{1 + writer_attempts}"
+    )
     del config
 
 
@@ -170,6 +175,7 @@ async def _run_live(
     generator: OpenRouterJsonGenerator,
     *,
     api_key: str,
+    writer_attempts: int,
 ) -> dict[str, Any]:
     _validate_artifact_paths(config)
     _refuse_existing_state(config)
@@ -247,7 +253,7 @@ async def _run_live(
 
     last_error: Exception | None = None
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="blueprint-prototype") as executor:
-        for attempt in range(1, 3):
+        for attempt in range(1, writer_attempts + 1):
             writer_raw: dict[str, Any] | None = None
             try:
                 user_prompt = writer_context
@@ -341,7 +347,8 @@ async def _run_live(
     if last_error is None:
         raise RuntimeError("writer semantic attempt budget must be positive")
     raise RuntimeError(
-        f"writer failed after at most two attempts: {type(last_error).__name__}: {last_error}"
+        f"writer failed after at most {writer_attempts} attempts: "
+        f"{type(last_error).__name__}: {last_error}"
     ) from last_error
 
 
@@ -354,6 +361,13 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print topic/count/size/budget statistics without provider calls.",
     )
+    parser.add_argument(
+        "--writer-attempts",
+        type=int,
+        choices=(1, 2),
+        default=2,
+        help="Maximum writer semantic attempts for this isolated invocation.",
+    )
     return parser.parse_args(argv)
 
 
@@ -363,7 +377,7 @@ def main(argv: list[str] | None = None) -> None:
     handoff = load_generation_handoff(config.handoff_manifest_path)
     topic = _topic_for_cli(config, handoff, args.topic)
     if args.dry_run:
-        _print_dry_run(config, topic)
+        _print_dry_run(config, topic, writer_attempts=args.writer_attempts)
         return
 
     repo_root = find_repo_root(args.config.resolve().parent)
@@ -380,7 +394,15 @@ def main(argv: list[str] | None = None) -> None:
         timeout_seconds=config.timeout_seconds,
         transport_max_attempts=config.transport_max_attempts,
     )
-    asyncio.run(_run_live(config, topic, generator, api_key=api_key))
+    asyncio.run(
+        _run_live(
+            config,
+            topic,
+            generator,
+            api_key=api_key,
+            writer_attempts=args.writer_attempts,
+        )
+    )
     print(f"completed topic={topic.topic_id} output={config.output_path}")
 
 

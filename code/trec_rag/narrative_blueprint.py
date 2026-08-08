@@ -229,7 +229,6 @@ def planner_response_schema() -> dict[str, object]:
                 "type": "array",
                 "minItems": 1,
                 "items": {"type": "string", "pattern": r"^c[0-9]{3}$"},
-                "uniqueItems": True,
             },
         },
         "required": [
@@ -266,6 +265,9 @@ def render_planner_prompt(topic: GenerationTopic) -> str:
         "Derive 3–8 answer obligations from the complete official narrative.",
         "Generated groups are retrieval structure, not independent output requirements.",
         "Claim hints are advisory routing aids; selected passages remain factual authority.",
+        "Select complementary, nonredundant claim aliases that form a coverage checklist.",
+        "Favor specific quantities, named mechanisms, actors, interventions, contrasts, and",
+        "uncertainties over several aliases that merely restate one broad point.",
         "Use only the aliases below when selecting claims. Do not invent aliases.",
         "",
         "OFFICIAL NARRATIVE:",
@@ -290,6 +292,9 @@ def render_planner_prompt(topic: GenerationTopic) -> str:
             "",
             "Return JSON matching the supplied schema. Anchor every obligation to exact",
             "phrases from the official narrative, and allocate 850–950 words in total.",
+            "Give every obligation a distinct normalized anchor set. When splitting one",
+            "compound narrative phrase, use the smallest distinctive subphrase for each part",
+            "instead of repeating the complete phrase across obligations.",
         ]
     )
     return "\n".join(lines)
@@ -542,6 +547,9 @@ def render_blueprint_writer_context(
         "Write a grounded answer to the complete official narrative.",
         "Cover must obligations first, then should obligations, and use could obligations only when room remains.",
         "The target word allocations are planning capacity, not a padding quota; never repeat or pad.",
+        "Within each obligation, treat its advisory claims as a coverage checklist after verifying them against the passages.",
+        "Prefer distinct, high-specificity facts—including quantities, named mechanisms, actors, interventions, contrasts, and uncertainty—over broad repetition.",
+        "Do not collapse a supported list of distinct causes, effects, or actions into only a generic category label.",
         "Use only the frozen selected retrieval evidence below and cite its exact docids.",
         "FROZEN SELECTED RETRIEVAL EVIDENCE",
         "",
