@@ -95,6 +95,7 @@ def test_loads_strict_generation_config_and_resolves_inputs_from_checkout(
         / "outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json"
     )
     assert config.topic_ids is None
+    assert config.strategy == "baseline"
     assert config.output_path == (
         tmp_path / "outputs/rag26_competition_rag_gpt_sol_v2/rag_output_trec_rag_2026.jsonl"
     )
@@ -172,6 +173,27 @@ def test_config_rejects_old_retrieval_and_prompt_profile_sections(
             _write_config(
                 tmp_path,
                 _config_text(generation_extra="  prompt_profile: focused_citations_tail\n"),
+        )
+    )
+
+
+def test_config_loads_coverage_aware_generation_strategy(tmp_path: Path) -> None:
+    config = load_rag_generation_config(
+        _write_config(
+            tmp_path,
+            _config_text(generation_extra="  strategy: coverage_aware\n"),
+        )
+    )
+
+    assert config.strategy == "coverage_aware"
+
+
+def test_config_rejects_unknown_generation_strategy(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="generation.strategy is unsupported"):
+        load_rag_generation_config(
+            _write_config(
+                tmp_path,
+                _config_text(generation_extra="  strategy: open_ended_agent\n"),
             )
         )
 
@@ -204,6 +226,7 @@ def test_checked_in_competition_configs_use_only_the_full_handoff(
     )
 
     assert config.topic_ids is None
+    assert config.strategy == "baseline"
     assert config.handoff_manifest_path == (
         retrieval.output_dir / "generation_handoff_manifest.json"
     )
@@ -247,6 +270,31 @@ def test_v2_provider_schema_and_prompt_require_raw_docids() -> None:
     prompt = competition_rag.render_prompt(topic)
     assert "raw ClimbMix docid" in prompt
     assert "do not use numeric citation indexes" in prompt.lower()
+
+
+def test_coverage_aware_prompt_adds_handoff_only_checklist_and_one_audit() -> None:
+    topic = _generation_topic(
+        "rag2026-0",
+        "What does the evidence show?",
+        [
+            ("climbmix-a", "First selected passage."),
+            ("climbmix-b", "Second selected passage."),
+        ],
+    )
+
+    baseline = competition_rag.render_prompt(topic)
+    coverage = competition_rag.render_prompt(topic, strategy="coverage_aware")
+
+    assert "Ordered answer checklist:" not in baseline
+    assert "Ordered answer checklist:" in coverage
+    assert "[rag2026-0-g1] Selected evidence for rag2026-0." in coverage
+    assert "selected passages: 2; advisory claim hints: 1" in coverage
+    assert "perform exactly one private audit" in coverage
+    assert "roughly 900 to 1,000 answer words" in coverage
+    assert "First selected passage." in coverage
+    assert "Second selected passage." in coverage
+    assert "gold nugget" not in coverage.lower()
+    assert "qrels" not in coverage.lower()
 
 
 def _submission_record() -> dict[str, Any]:
@@ -809,6 +857,30 @@ def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     topic_one_prompt = next(call["user_prompt"] for call in generator.calls if call["topic_id"] == "rag2026-1")
     assert "docid=climbmix-a" in topic_one_prompt
     assert "docid=climbmix-b" in topic_one_prompt
+
+
+def test_coverage_aware_generation_is_one_hosted_completion_per_topic(
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="coverage_aware",
+    )
+    generator = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["climbmix-a"],
+                "The selected evidence supports the answer.",
+            )
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    assert len(generator.calls) == 1
+    assert "Ordered answer checklist:" in generator.calls[0]["user_prompt"]
+    assert "perform exactly one private audit" in generator.calls[0]["user_prompt"]
 
 
 def test_generation_trims_an_over_limit_completion_before_validation(
@@ -1473,7 +1545,10 @@ def test_atomic_publication_fsyncs_file_and_parent_directory(
     asyncio.run(run_generation(config, generator))
 
     assert "file" in synced_kinds
-    assert "directory" in synced_kinds
+    if os.name == "nt":
+        assert "directory" not in synced_kinds
+    else:
+        assert "directory" in synced_kinds
 
 
 def test_second_process_cannot_mutate_same_generation_artifacts(tmp_path: Path) -> None:
@@ -1828,6 +1903,7 @@ def test_generation_identity_covers_every_request_setting(tmp_path: Path) -> Non
         ("api_base", "https://elsewhere.test"),
         ("structured_output", "json_object"),
         ("reasoning_effort", "high"),
+        ("strategy", "coverage_aware"),
         ("provider", "other-provider"),
         ("model", "other/model"),
     ]:
@@ -1839,10 +1915,10 @@ def test_generation_identity_covers_every_request_setting(tmp_path: Path) -> Non
         assert changed != base, f"{field} does not invalidate the identity"
 
 
-def test_identity_version_rejects_rows_written_before_citation_validation(
+def test_identity_version_rejects_rows_written_before_generation_strategy(
     tmp_path: Path,
 ) -> None:
-    """Version 5 rows did not bind exact-hint citation validation."""
+    """Version 6 rows did not bind the config-controlled generation strategy."""
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
     generated = {
         "references": ["climbmix-a"],
@@ -1851,11 +1927,14 @@ def test_identity_version_rejects_rows_written_before_citation_validation(
     asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
     path = config.work_dir / "generation_identity.json"
     recorded = json.loads(path.read_text())
-    assert recorded["identity_version"] == 6
+    assert recorded["identity_version"] == 7
     assert recorded["citation_validation_contract_version"] == (
         "exact_hint_linked_docids_v1"
     )
-    recorded["identity_version"] = 5
+    assert recorded["call_telemetry_contract_version"] == (
+        "generation_call_telemetry_v1"
+    )
+    recorded["identity_version"] = 6
     path.write_text(json.dumps(recorded), encoding="utf-8")
 
     with pytest.raises(ValueError, match="older revision"):
@@ -2062,6 +2141,17 @@ class FakeHttpResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+def _without_call_telemetry(raw: dict[str, Any]) -> dict[str, Any]:
+    cleaned = copy.deepcopy(raw)
+    telemetry = cleaned.pop("_trec_rag_call")
+    assert telemetry["schema_version"] == "generation_call_telemetry_v1"
+    assert telemetry["provider"] == "openrouter"
+    assert telemetry["latency_ms"] >= 0
+    assert telemetry["transport_attempts"] >= 1
+    assert telemetry["transport_retries"] == telemetry["transport_attempts"] - 1
+    return cleaned
+
+
 def _mock_http_transport(post: Any) -> httpx.MockTransport:
     def handle(request: httpx.Request) -> httpx.Response:
         response = post(
@@ -2149,9 +2239,13 @@ def test_openrouter_uses_an_openai_compatible_http_transport() -> None:
     assert captured["url"] == "https://openrouter.example/v1/chat/completions"
     assert captured["authorization"] == "Bearer secret"
     assert captured["body"]["reasoning"] == {"effort": "medium", "exclude": True}
+    assert captured["body"]["usage"] == {"include": True}
     assert captured["body"]["provider"] == {"require_parameters": True}
     assert generated["answer"][0]["citations"] == ["climbmix-a"]
     assert raw["id"] == "response-1"
+    assert raw["_trec_rag_call"]["transport_attempts"] == 1
+    assert raw["_trec_rag_call"]["transport_retries"] == 0
+    assert raw["_trec_rag_call"]["latency_ms"] >= 0
 
 
 def test_openrouter_honors_an_http_date_retry_after(
@@ -2162,7 +2256,7 @@ def test_openrouter_honors_an_http_date_retry_after(
     sleeps: list[float] = []
     monkeypatch.setattr(httpx_retry_module.time, "sleep", sleeps.append)
 
-    _openrouter_generator(
+    _, raw = _openrouter_generator(
         lambda *args, **kwargs: responses.pop(0), timeout_seconds=900
     ).complete_json(
         topic_id="rag2026-1",
@@ -2172,6 +2266,8 @@ def test_openrouter_honors_an_http_date_retry_after(
     )
 
     assert sleeps == [900.0]
+    assert raw["_trec_rag_call"]["transport_attempts"] == 2
+    assert raw["_trec_rag_call"]["transport_retries"] == 1
 
 
 def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
@@ -2189,6 +2285,7 @@ def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
 
     assert captured["url"] == "https://openrouter.example/v1/chat/completions"
     assert captured["json"]["reasoning"] == {"effort": "medium", "exclude": True}
+    assert captured["json"]["usage"] == {"include": True}
     assert captured["json"]["provider"] == {"require_parameters": True}
     assert captured["json"]["response_format"]["type"] == "json_schema"
     assert captured["json"]["response_format"]["json_schema"]["strict"] is True
@@ -2482,7 +2579,7 @@ def test_http_json_failure_omits_body_with_decodable_escaped_api_key(
 
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     raw = json.loads(failed_raw.read_text(encoding="utf-8"))
-    assert raw == {
+    assert _without_call_telemetry(raw) == {
         "http_status": 400,
         "envelope": {"error": {"message": "rejected bearer [REDACTED]"}},
     }
@@ -2521,7 +2618,7 @@ def test_http_non_json_failure_omits_body_and_keeps_non_reversible_diagnostics(
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     raw = json.loads(failed_raw.read_text(encoding="utf-8"))
     body_bytes = body_text.encode("utf-8")
-    assert raw == {
+    assert _without_call_telemetry(raw) == {
         "http_status": 400,
         "body_omitted": True,
         "body_utf8_byte_length": len(body_bytes),
@@ -2561,7 +2658,7 @@ def test_http_non_json_failure_omits_plain_body_and_keeps_non_reversible_diagnos
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     persisted = failed_raw.read_text(encoding="utf-8")
     body_bytes = body_text.encode("utf-8")
-    assert json.loads(persisted) == {
+    assert _without_call_telemetry(json.loads(persisted)) == {
         "http_status": 400,
         "body_omitted": True,
         "body_utf8_byte_length": len(body_bytes),
@@ -2601,7 +2698,7 @@ def test_http_non_json_success_never_persists_nested_decodable_api_key(
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     persisted = failed_raw.read_text(encoding="utf-8")
     body_bytes = body_text.encode("utf-8")
-    assert json.loads(persisted) == {
+    assert _without_call_telemetry(json.loads(persisted)) == {
         "http_status": 200,
         "body_omitted": True,
         "body_utf8_byte_length": len(body_bytes),

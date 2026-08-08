@@ -822,6 +822,16 @@ inputs:
   handoff_manifest: outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
 ```
 
+`generation.strategy` is optional and defaults to `baseline`, preserving the
+checked-in prompt byte for byte. Development experiments may set it to
+`coverage_aware`. That strategy prepends an ordered checklist derived only from
+the authenticated handoff's evidence groups, selected-passage counts, and
+advisory-claim counts. It asks the same single completion to perform one private
+pre-emission coverage/support audit. It does not open evaluator plans, gold
+nuggets, qrels, retrieval candidates, the organizer run, or the full-text ZIP.
+The strategy is included in the generation identity, so rows cannot be resumed
+across strategies.
+
 Generation validates the complete handoff before mutating generation state.
 The model must cite raw ClimbMix document IDs from the current topic's sealed
 domain; code validates those IDs and deterministically converts them to the
@@ -900,7 +910,10 @@ removes or rewrites retrieval artifacts or the handoff.
 
 Each topic gets at most two semantic attempts. Parsed provider responses are
 stored only after recursive secret redaction. Opaque non-JSON bodies are stored
-as status, byte length, and SHA-256, never verbatim. Run the offline contract
+as status, byte length, and SHA-256, never verbatim. Private provider records
+also include `_trec_rag_call` telemetry with wall latency, actual
+transport attempts/retries, the configured retry ceiling, model identity, and
+the provider's token/cost usage object when returned. Run the offline contract
 tests with:
 
 ```bash

@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -42,12 +43,14 @@ _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"
 # strict_schema pins provider selection to schema-capable endpoints; json_object is the
 # portable fallback; none sends no response_format at all.
 STRUCTURED_OUTPUT_MODES = frozenset({"strict_schema", "json_object", "none"})
+GENERATION_STRATEGIES = frozenset({"baseline", "coverage_aware"})
 # The organizer answer cap. Kept here so validation, trimming, and post-run reporting all
 # read one contract value instead of repeating the literal.
 ANSWER_WORD_LIMIT = 1024
 _MAX_REDACTION_NORMALIZATION_ROUNDS = 32
 MAX_SEMANTIC_ATTEMPTS = 2
 _CITATION_VALIDATION_CONTRACT_VERSION = "exact_hint_linked_docids_v1"
+_CALL_TELEMETRY_CONTRACT_VERSION = "generation_call_telemetry_v1"
 
 SYSTEM_PROMPT = """You are a selected-evidence RAG answer-generation agent. Use only the
 provided selected passages and the user's task instructions. Treat claim hints as advisory.
@@ -73,6 +76,23 @@ Return one JSON object with exactly references and answer; no Markdown.
 Restating the output contract: one JSON object with exactly references and answer; each answer
 object is one self-contained sentence with one claim and one to three unique raw ClimbMix
 docids in citations, never numeric indexes; never exceed 1,024 words."""
+
+COVERAGE_AWARE_INSTRUCTION = """Use the ordered answer checklist below as a coverage
+control. Address every checklist item with distinct, supported answer objects before adding
+optional synthesis. The checklist is routing guidance, not factual authority: verify every
+claim against the selected passages in that item's evidence group, and treat its claim hints
+as advisory.
+
+Aim for roughly 900 to 1,000 answer words when the selected evidence supports that much useful
+content, but never add filler or weakly supported claims to reach the target. Prefer the single
+strongest supporting document for each object; add another citation only when it independently
+supports the complete object.
+
+Before returning JSON, perform exactly one private audit: check every checklist item for a
+supported answer object, add any material supported omission, and remove or narrow any claim
+whose citations do not fully support it. Do not output the checklist or audit.
+
+{checklist}"""
 
 SEMANTIC_RETRY_INSTRUCTION = """
 
@@ -130,6 +150,7 @@ class RagGenerationConfig:
     api_key_env: str
     model: str
     reasoning_effort: str
+    strategy: str
     structured_output: str
     temperature: float | None
     max_tokens: int
@@ -189,6 +210,7 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             "api_key_env",
             "model",
             "reasoning_effort",
+            "strategy",
             "structured_output",
             "temperature",
             "max_tokens",
@@ -219,6 +241,9 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     )
     if structured_output not in STRUCTURED_OUTPUT_MODES:
         raise ValueError("generation.structured_output is unsupported")
+    strategy = _optional_text(generation, "strategy", "generation") or "baseline"
+    if strategy not in GENERATION_STRATEGIES:
+        raise ValueError("generation.strategy is unsupported")
 
     return RagGenerationConfig(
         schema_version=_SCHEMA_VERSION,
@@ -239,6 +264,7 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         api_key_env=_text(generation, "api_key_env", "generation"),
         model=_text(generation, "model", "generation"),
         reasoning_effort=reasoning_effort,
+        strategy=strategy,
         structured_output=structured_output,
         temperature=_optional_finite_float(generation, "temperature", "generation"),
         max_tokens=_positive_int(generation, "max_tokens", "generation"),
@@ -517,7 +543,8 @@ class OpenRouterJsonGenerator:
             "max_tokens": self.max_tokens,
         }
         extra_body: dict[str, Any] = {
-            "reasoning": {"effort": self.reasoning_effort, "exclude": True}
+            "reasoning": {"effort": self.reasoning_effort, "exclude": True},
+            "usage": {"include": True},
         }
         if self.structured_output == "strict_schema":
             # require_parameters excludes any provider that cannot honour the schema. For some
@@ -537,6 +564,7 @@ class OpenRouterJsonGenerator:
             request_body["response_format"] = {"type": "json_object"}
         if self.temperature is not None:
             request_body["temperature"] = self.temperature
+        started = time.perf_counter()
         try:
             raw_response = self._client.chat.completions.with_raw_response.create(
                 **request_body,
@@ -544,16 +572,41 @@ class OpenRouterJsonGenerator:
             )
         except APIStatusError as exc:
             _, _, safe_response = _safe_http_response(exc.response, self._api_key)
+            safe_response = _with_call_telemetry(
+                safe_response,
+                response=exc.response,
+                elapsed_seconds=time.perf_counter() - started,
+                model=self.model,
+                transport_max_attempts=self.transport_max_attempts,
+            )
             raise SemanticCompletionError(
                 f"OpenRouter HTTP {exc.status_code}; no repair call was made",
                 safe_response,
             ) from exc
         except APIConnectionError as exc:
-            raise RuntimeError("OpenRouter generation transport failed") from exc
+            safe_response = _with_call_telemetry(
+                {},
+                response=None,
+                elapsed_seconds=time.perf_counter() - started,
+                model=self.model,
+                transport_max_attempts=self.transport_max_attempts,
+                transport_attempts=self.transport_max_attempts,
+            )
+            raise SemanticCompletionError(
+                "OpenRouter generation transport failed after transport retries",
+                safe_response,
+            ) from exc
 
         response = raw_response.http_response
         response_is_json, envelope, safe_response = _safe_http_response(
             response, self._api_key
+        )
+        safe_response = _with_call_telemetry(
+            safe_response,
+            response=response,
+            elapsed_seconds=time.perf_counter() - started,
+            model=self.model,
+            transport_max_attempts=self.transport_max_attempts,
         )
         if not response_is_json:
             raise SemanticCompletionError(
@@ -630,6 +683,37 @@ def _safe_http_response(
         }
     return True, envelope, safe_envelope
 
+
+def _with_call_telemetry(
+    safe_response: object,
+    *,
+    response: httpx.Response | None,
+    elapsed_seconds: float,
+    model: str,
+    transport_max_attempts: int,
+    transport_attempts: int | None = None,
+) -> dict[str, Any]:
+    """Attach non-secret execution accounting to one persisted provider attempt."""
+    if transport_attempts is None:
+        retry_state = response.extensions.get("retry") if response is not None else None
+        retries = getattr(retry_state, "attempts_made", 0)
+        transport_attempts = int(retries) + 1
+    transport_attempts = max(1, int(transport_attempts))
+    telemetry: dict[str, Any] = {
+        "schema_version": _CALL_TELEMETRY_CONTRACT_VERSION,
+        "provider": "openrouter",
+        "model": model,
+        "latency_ms": round(max(0.0, elapsed_seconds) * 1000.0, 3),
+        "transport_attempts": transport_attempts,
+        "transport_retries": transport_attempts - 1,
+        "transport_max_attempts": transport_max_attempts,
+    }
+    if isinstance(safe_response, dict) and isinstance(safe_response.get("usage"), dict):
+        telemetry["usage"] = safe_response["usage"]
+    if isinstance(safe_response, dict):
+        return {**safe_response, "_trec_rag_call": telemetry}
+    return {"provider_response": safe_response, "_trec_rag_call": telemetry}
+
 def _message_text(content: object) -> str:
     if isinstance(content, str) and content.strip():
         return content.strip()
@@ -646,13 +730,53 @@ def _message_text(content: object) -> str:
     raise ValueError("completion content is not nonempty text")
 
 
-def render_prompt(topic: GenerationTopic) -> str:
-    """Render the one pinned writer prompt from a validated evidence topic."""
+def render_answer_checklist(topic: GenerationTopic) -> str:
+    """Render compact coverage controls from authenticated handoff fields only."""
     if not isinstance(topic, GenerationTopic):
         raise TypeError("topic must be GenerationTopic")
-    return SELECTED_EVIDENCE_USER_PROMPT.format(
+    hint_counts: dict[str, int] = {}
+    evidence_counts: dict[str, int] = {}
+    for hint in topic.claim_hints:
+        hint_counts[hint.group_id] = hint_counts.get(hint.group_id, 0) + 1
+    for evidence in topic.evidence:
+        evidence_counts[evidence.group_id] = evidence_counts.get(evidence.group_id, 0) + 1
+    lines = ["Ordered answer checklist:"]
+    for ordinal, group in enumerate(topic.groups, start=1):
+        text = " ".join(group.text.split())
+        lines.append(
+            f"{ordinal}. [{group.group_id}] {text} "
+            f"(selected passages: {evidence_counts.get(group.group_id, 0)}; "
+            f"advisory claim hints: {hint_counts.get(group.group_id, 0)})"
+        )
+    return "\n".join(lines)
+
+
+def render_prompt(topic: GenerationTopic, *, strategy: str = "baseline") -> str:
+    """Render one strategy-bound writer prompt from a validated evidence topic."""
+    if not isinstance(topic, GenerationTopic):
+        raise TypeError("topic must be GenerationTopic")
+    if strategy not in GENERATION_STRATEGIES:
+        raise ValueError(f"unsupported generation strategy: {strategy}")
+    prompt = SELECTED_EVIDENCE_USER_PROMPT.format(
         evidence=render_generation_evidence(topic)
     )
+    if strategy == "baseline":
+        return prompt
+    coverage_instruction = COVERAGE_AWARE_INSTRUCTION.format(
+        checklist=render_answer_checklist(topic)
+    )
+    return f"{coverage_instruction}\n\n{prompt}"
+
+
+def _render_configured_prompt(
+    topic: GenerationTopic,
+    config: RagGenerationConfig,
+) -> str:
+    if config.strategy == "baseline":
+        # Preserve the historical one-argument call path so the frozen baseline prompt is
+        # byte-identical and existing prompt-identity tests remain meaningful.
+        return render_prompt(topic)
+    return render_prompt(topic, strategy=config.strategy)
 
 
 def parse_generated_json(text: str) -> dict[str, Any]:
@@ -1095,6 +1219,10 @@ def _decode_unicode_escapes(value: str) -> str:
 
 
 def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        # Windows rejects directory handles from os.open. File contents are still fsynced
+        # before the atomic replacement; only the POSIX parent-directory flush is skipped.
+        return
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     descriptor = os.open(path, flags)
     try:
@@ -1196,7 +1324,7 @@ async def _generate_topic(
         failed_path = raw_dir / f"{topic_name}.attempt-{attempt_number}.failed.json"
         raw_written = False
         try:
-            user_prompt = render_prompt(topic)
+            user_prompt = _render_configured_prompt(topic, config)
             if semantic_attempt:
                 user_prompt += SEMANTIC_RETRY_INSTRUCTION
             async with semaphore:
@@ -1325,15 +1453,17 @@ def _generation_identity(
     create and resume cannot silently mix answers grounded in different contexts.
     """
     return {
-        # Version 6 also binds deterministic claim-hint citation validation.
-        "identity_version": 6,
+        # Version 7 also binds the answer-generation strategy and its rendered checklist.
+        "identity_version": 7,
         "handoff_schema_version": handoff.schema_version,
         "handoff_manifest_sha256": handoff.manifest_sha256,
         "selected_topics": [
             {
                 "topic_id": topic.topic_id,
                 "context_sha256": topic.context_sha256,
-                "prompt_sha256": sha256(render_prompt(topic).encode("utf-8")).hexdigest(),
+                "prompt_sha256": sha256(
+                    _render_configured_prompt(topic, config).encode("utf-8")
+                ).hexdigest(),
             }
             for topic in topics
         ],
@@ -1350,6 +1480,7 @@ def _generation_identity(
             ).hexdigest(),
         },
         "citation_validation_contract_version": _CITATION_VALIDATION_CONTRACT_VERSION,
+        "call_telemetry_contract_version": _CALL_TELEMETRY_CONTRACT_VERSION,
         "team_id": config.team_id,
         "run_id": config.run_id,
         "run_desc": config.run_desc,
@@ -1358,6 +1489,7 @@ def _generation_identity(
         "api_base": config.api_base,
         "api_key_env": config.api_key_env,
         "reasoning_effort": config.reasoning_effort,
+        "strategy": config.strategy,
         "structured_output": config.structured_output,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,

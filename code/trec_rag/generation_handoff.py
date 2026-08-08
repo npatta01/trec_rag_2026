@@ -818,6 +818,10 @@ def load_generation_handoff(path: Path) -> GenerationHandoff:
 
 
 def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        # Windows does not permit opening a directory through os.open. The file itself is
+        # flushed before publication, and the final hard-link operation remains atomic.
+        return
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)

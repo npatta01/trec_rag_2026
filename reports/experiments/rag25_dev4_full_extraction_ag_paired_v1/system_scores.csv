@@ -1,0 +1,3 @@
+arm,run_id,topics,words,answer_objects,references,citations,strict_vital,strict_all,vital_partial_credit,all_partial_credit,weighted_precision_first,weighted_precision_all,hard_precision,generation_cost_usd,nugget_judge_cost_usd,support_judge_cost_usd,known_total_cost_usd
+baseline,rag25_dev4_full_extraction_ag_baseline_v1,4,1929,108,110,116,0.395432,0.379356,0.481385,0.451651,0.907738,0.911644,0.830952,1.96862125,0.01332188,0.01738213,1.99932526
+coverage_aware,rag25_dev4_full_extraction_ag_coverage_v1,4,3043,160,151,160,0.423685,0.397382,0.516958,0.481259,0.929098,0.929098,0.897409,2.12398500,0.01487294,0.02358411,2.16244205

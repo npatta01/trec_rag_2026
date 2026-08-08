@@ -1,0 +1,153 @@
+{
+  "schema_version": "rag25_dev4_full_extraction_ag_paired_metrics_v1",
+  "experiment_id": "rag25_dev4_full_extraction_ag_paired_v1",
+  "topics": ["31", "72", "200", "225"],
+  "denominators": {
+    "topics_per_arm": 4,
+    "gold_nuggets_per_arm": 256,
+    "vital_nuggets_per_arm": 191,
+    "baseline_support_tasks": 116,
+    "coverage_aware_support_tasks": 160
+  },
+  "arms": {
+    "baseline": {
+      "run_id": "rag25_dev4_full_extraction_ag_baseline_v1",
+      "answer": {
+        "words": 1929,
+        "mean_words": 482.25,
+        "objects": 108,
+        "references": 110,
+        "citations": 116,
+        "mean_citations_per_object": 1.074074
+      },
+      "nugget_coverage_macro": {
+        "strict_vital": 0.395432,
+        "strict_all": 0.379356,
+        "vital_partial_credit": 0.481385,
+        "all_partial_credit": 0.451651
+      },
+      "nugget_labels": {
+        "support": 92,
+        "partial_support": 34,
+        "not_support": 130,
+        "failed": 0
+      },
+      "citation_support_macro": {
+        "weighted_precision_first_citation": 0.907738,
+        "weighted_recall_first_citation": 0.907738,
+        "weighted_precision_all_judged_citations": 0.911644,
+        "weighted_recall_all_judged_citations": 0.911644,
+        "hard_precision": 0.830952,
+        "hard_recall": 0.830952
+      },
+      "citation_labels": {"full": 97, "partial": 17, "none": 2},
+      "generation": {
+        "successful_calls": 4,
+        "semantic_retries": 0,
+        "transport_retries": 0,
+        "setup_auth_rejections": 4,
+        "prompt_tokens": 270481,
+        "completion_tokens": 9271,
+        "total_tokens": 279752,
+        "latency_seconds_sum": 150.652,
+        "reported_cost_usd": 1.96862125
+      },
+      "nugget_judge": {
+        "window_calls": 27,
+        "input_tokens": 28365,
+        "output_tokens": 33395,
+        "reported_cost_usd": 0.01332188
+      },
+      "support_judge": {
+        "final_tasks": 116,
+        "recovered_parse_failures": 1,
+        "unresolved_failures": 0,
+        "conflicting_completed_labels": 0,
+        "input_tokens": 76145,
+        "output_tokens": 23752,
+        "reported_cost_usd": 0.01738213
+      },
+      "known_total_cost_usd": 1.99932526
+    },
+    "coverage_aware": {
+      "run_id": "rag25_dev4_full_extraction_ag_coverage_v1",
+      "answer": {
+        "words": 3043,
+        "mean_words": 760.75,
+        "objects": 160,
+        "references": 151,
+        "citations": 160,
+        "mean_citations_per_object": 1.0
+      },
+      "nugget_coverage_macro": {
+        "strict_vital": 0.423685,
+        "strict_all": 0.397382,
+        "vital_partial_credit": 0.516958,
+        "all_partial_credit": 0.481259
+      },
+      "nugget_labels": {
+        "support": 99,
+        "partial_support": 37,
+        "not_support": 120,
+        "failed": 0
+      },
+      "citation_support_macro": {
+        "weighted_precision_first_citation": 0.929098,
+        "weighted_recall_first_citation": 0.929098,
+        "weighted_precision_all_judged_citations": 0.929098,
+        "weighted_recall_all_judged_citations": 0.929098,
+        "hard_precision": 0.897409,
+        "hard_recall": 0.897409
+      },
+      "citation_labels": {"full": 144, "partial": 10, "none": 6},
+      "generation": {
+        "successful_calls": 4,
+        "semantic_retries": 0,
+        "transport_retries": 0,
+        "prompt_tokens": 272184,
+        "completion_tokens": 14095,
+        "total_tokens": 286279,
+        "latency_seconds_sum": 194.955,
+        "reported_cost_usd": 2.123985
+      },
+      "nugget_judge": {
+        "window_calls": 27,
+        "input_tokens": 36908,
+        "output_tokens": 34663,
+        "reported_cost_usd": 0.01487294
+      },
+      "support_judge": {
+        "final_tasks": 160,
+        "hosted_calls_with_receipts": 154,
+        "exact_prompt_cache_hits": 6,
+        "unresolved_failures": 0,
+        "conflicting_completed_labels": 0,
+        "input_tokens": 96049,
+        "output_tokens": 35816,
+        "reported_cost_usd": 0.02358411
+      },
+      "known_total_cost_usd": 2.16244205
+    }
+  },
+  "treatment_minus_baseline": {
+    "mean_words": 278.5,
+    "strict_vital": 0.028253,
+    "strict_all": 0.018026,
+    "vital_partial_credit": 0.035573,
+    "all_partial_credit": 0.029608,
+    "weighted_precision_first_citation": 0.021360,
+    "weighted_precision_all_judged_citations": 0.017454,
+    "hard_precision": 0.066457,
+    "known_cost_usd": 0.16311679
+  },
+  "known_total_experiment_cost_usd": 4.16176731,
+  "validation": {
+    "organizer_rows_valid": 8,
+    "narratives_exact": 8,
+    "answers_over_1024_words": 0,
+    "invalid_citation_domains": 0,
+    "nugget_assignment_failures": 0,
+    "unresolved_support_failures": 0,
+    "support_label_conflicts": 0
+  }
+}
