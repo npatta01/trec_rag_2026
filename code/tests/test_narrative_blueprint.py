@@ -25,7 +25,12 @@ from trec_rag.narrative_blueprint import (
     serialize_blueprint_state,
     validate_blueprint,
 )
-from trec_rag.narrative_blueprint_trial import audit_response_schema
+from trec_rag.narrative_blueprint_trial import (
+    TRIAL_CONTRACT_VERSION,
+    _bounded_revision_prompt,
+    audit_response_schema,
+    merge_audit_cards,
+)
 
 
 def _topic_fixture() -> GenerationTopic:
@@ -217,6 +222,99 @@ def test_audit_schema_requires_every_declared_card_property() -> None:
         "rationale",
         "replacement_answer_index",
     ]
+
+
+def _audit_card(*, group_alias: str, detail: str, importance: str, omission_type: str) -> dict[str, object]:
+    return {
+        "group_alias": group_alias,
+        "missing_detail": detail,
+        "evidence_aliases": ["e001" if group_alias == "g001" else "e003"],
+        "importance": importance,
+        "omission_type": omission_type,
+        "rationale": "The detail is supported by the selected evidence.",
+        "replacement_answer_index": 0,
+    }
+
+
+def test_merged_audit_cards_get_stable_ids_without_changing_rank() -> None:
+    topic = _topic_fixture()
+    cards_by_group = {
+        "group-1": (
+            _audit_card(
+                group_alias="g001",
+                detail="lower-ranked detail",
+                importance="should",
+                omission_type="missing",
+            ),
+            _audit_card(
+                group_alias="g001",
+                detail="highest-ranked detail",
+                importance="must",
+                omission_type="missing quantity/example",
+            ),
+        ),
+        "group-2": (
+            _audit_card(
+                group_alias="g002",
+                detail="third-ranked detail",
+                importance="could",
+                omission_type="too generic",
+            ),
+        ),
+    }
+
+    merged = merge_audit_cards(topic, cards_by_group)
+
+    assert [card["missing_detail"] for card in merged] == [
+        "highest-ranked detail",
+        "lower-ranked detail",
+        "third-ranked detail",
+    ]
+    assert [card["card_id"] for card in merged] == ["a001", "a002", "a003"]
+    assert merged == merge_audit_cards(topic, cards_by_group)
+
+
+def test_splice_revision_prompt_indexes_draft_and_uses_audit_card_ids() -> None:
+    topic = _topic_fixture()
+    blueprint = validate_blueprint(topic, _valid_payload())
+    projection = project_blueprint(topic, blueprint)
+    cards = merge_audit_cards(
+        topic,
+        {
+            "group-1": (_audit_card(
+                group_alias="g001",
+                detail="missing detail",
+                importance="must",
+                omission_type="missing",
+            ),),
+            "group-2": (),
+        },
+    )
+    draft = {
+        "references": ["DOCID_SENTINEL_ALPHA"],
+        "answer": [
+            {"text": "Draft first object.", "citations": [0]},
+            {"text": "Draft second object.", "citations": [0]},
+        ],
+    }
+
+    prompt = _bounded_revision_prompt(
+        topic,
+        blueprint,
+        projection,
+        draft=draft,
+        audit_cards=cards,
+    )
+
+    assert "DRAFT ANSWER OBJECTS" in prompt
+    assert "[0]" in prompt and "[1]" in prompt
+    assert "a001" in prompt
+    assert "operations" in prompt
+    assert "Return a complete replacement organizer JSON object" not in prompt
+
+
+def test_splice_trial_uses_a_new_contract_version() -> None:
+    assert TRIAL_CONTRACT_VERSION != "bounded_narrative_revision_trial_v1"
 
 
 @pytest.mark.parametrize(

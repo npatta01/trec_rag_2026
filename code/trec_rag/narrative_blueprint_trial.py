@@ -46,6 +46,13 @@ from trec_rag.generation_handoff import (
     load_generation_handoff,
     select_generation_topics,
 )
+from trec_rag.bounded_splice import (
+    SpliceValidationError,
+    apply_splice_operations,
+    splice_response_schema,
+    validate_repaired_splice_payload,
+    validate_splice_payload,
+)
 from trec_rag.narrative_blueprint import (
     BLUEPRINT_CONTRACT_VERSION,
     BlueprintProjection,
@@ -68,7 +75,7 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
-TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v1"
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v2_splice"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
 MAX_SOL_RESERVATIONS = 3
@@ -168,12 +175,12 @@ def _render_no_planner_control_prompt(topic: GenerationTopic) -> str:
     return "\n".join(lines)
 
 
-def _render_hybrid_writer_prompt(
+def _render_hybrid_common_context(
     topic: GenerationTopic,
     blueprint: NarrativeBlueprint,
     projection: BlueprintProjection,
 ) -> str:
-    """Render one hybrid writer prompt from an authenticated planner state."""
+    """Render authenticated narrative, plan, hints, evidence, and citation context."""
 
     claim_aliases = {
         claim.claim_id: f"c{index:03d}"
@@ -254,6 +261,21 @@ def _render_hybrid_writer_prompt(
             "FULL CITATION DOMAIN (PLANNER CANNOT PRUNE):",
             ", ".join(topic.citation_docids),
             "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_hybrid_writer_prompt(
+    topic: GenerationTopic,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+) -> str:
+    """Render one hybrid writer prompt from an authenticated planner state."""
+
+    common = _render_hybrid_common_context(topic, blueprint, projection)
+    return common + "\n" + "\n".join(
+        [
             "Return exactly one organizer JSON object with exactly `references` and `answer`;",
             "do not return Markdown. `references` must contain only raw docid strings from",
             "the full citation domain, and only when an answer object cites them. Each answer",
@@ -262,7 +284,6 @@ def _render_hybrid_writer_prompt(
             "use numeric citation indexes. Keep the complete answer at or below 1,024 words.",
         ]
     )
-    return "\n".join(lines)
 
 
 def _audit_aliases(
@@ -538,7 +559,13 @@ def merge_audit_cards(
             retained.append((key, dict(card)))
             ordinal += 1
     retained.sort(key=lambda item: item[0])
-    return tuple(card for _key, card in retained[:MAX_MERGED_AUDIT_CARDS])
+    return tuple(
+        {
+            **card,
+            "card_id": f"a{index:03d}",
+        }
+        for index, (_key, card) in enumerate(retained[:MAX_MERGED_AUDIT_CARDS], start=1)
+    )
 
 
 def _write_json(path: Path, value: object, *, api_key: str) -> None:
@@ -1173,6 +1200,7 @@ def _bounded_identity(
         ),
         "audit_schema_sha256": _digest_json(audit_response_schema()),
         "writer_schema_sha256": _digest_json(output_schema()),
+        "splice_schema_sha256": _digest_json(splice_response_schema()),
     }
 
 
@@ -1608,6 +1636,21 @@ def _bounded_candidate_summary(root: Path, arm: str, record: dict[str, Any]) -> 
     }
 
 
+def _bounded_draft_objects_prompt(draft: dict[str, Any]) -> list[str]:
+    """Render the validated draft with immutable zero-based answer indexes."""
+
+    lines = [
+        "VALIDATED DRAFT REFERENCES (existing numeric positions are immutable):",
+        json.dumps(draft["references"], ensure_ascii=False, sort_keys=True),
+        "DRAFT ANSWER OBJECTS (immutable; every index refers to this original array):",
+    ]
+    lines.extend(
+        f"[{index}] {json.dumps(item, ensure_ascii=False, sort_keys=True)}"
+        for index, item in enumerate(draft["answer"])
+    )
+    return lines
+
+
 def _bounded_revision_prompt(
     topic: GenerationTopic,
     blueprint: NarrativeBlueprint,
@@ -1616,21 +1659,68 @@ def _bounded_revision_prompt(
     draft: dict[str, Any],
     audit_cards: tuple[dict[str, Any], ...],
 ) -> str:
-    context = _render_hybrid_writer_prompt(topic, blueprint, projection)
-    return context + "\n\n" + "\n".join(
+    context = _render_hybrid_common_context(topic, blueprint, projection)
+    lines = [
+        "BOUNDED POST-DRAFT SPLICE REVISION",
+        "Return exactly one JSON object with `decision` and `operations`; never return a full answer.",
+        "Use `keep_draft` with an empty operations array when no bounded edit would improve the",
+        "complete narrative. For `edit`, describe atomic operations against the immutable original",
+        "draft indexes above. `delete_count: 0` inserts before an index (including append at the",
+        "original answer length); `delete_count: 1`, `2`, or `3` replaces that contiguous range",
+        "with one new object. Pure deletion is not supported and every operation needs one or more",
+        "unique merged audit-card IDs.",
+        "Hard splice budgets: at most 6 operations, 4 insertions, 8 touched original objects,",
+        "and 1,024 whitespace-separated assembled answer words. Audit cards are advisory candidates,",
+        "not requirements. Prefer merge or replacement over unnecessary insertion, preserve caveats",
+        "and balance, retain causal qualifications and planner `must` obligations, and do not create",
+        "a citation-by-citation inventory. New object citations must be raw docids from the full",
+        "authenticated citation domain above.",
+        *_bounded_draft_objects_prompt(draft),
+        "MERGED AUDIT CARDS (ADVISORY; stable IDs are authenticated allowlist values):",
+    ]
+    lines.extend(
+        f"[{card['card_id']}] {json.dumps(card, ensure_ascii=False, sort_keys=True)}"
+        for card in audit_cards
+    )
+    return context + "\n\n" + "\n".join(lines)
+
+
+def _bounded_splice_repair_prompt(
+    topic: GenerationTopic,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+    *,
+    draft: dict[str, Any],
+    audit_cards: tuple[dict[str, Any], ...],
+    initial_payload: dict[str, Any],
+    validation_errors: tuple[str, ...],
+) -> str:
+    """Render a splice-only repair prompt authorized by the initial response."""
+
+    context = _render_hybrid_common_context(topic, blueprint, projection)
+    lines = [
+        "DETERMINISTIC SPLICE VALIDATION REPAIR",
+        "Return exactly one response matching the splice schema: a `keep_draft` wrapper with no",
+        "operations, or an `edit` wrapper containing a corrected subset/reordering of the initial",
+        "operations. You may correct only wrapper fields, indexes, ranges, budgets, or audit-card",
+        "references. Every repaired `new_object` must exactly equal a `new_object` from the initial",
+        "splice response; do not introduce or rewrite answer prose or citations.",
+        *_bounded_draft_objects_prompt(draft),
+        "MERGED AUDIT CARDS (ADVISORY; stable IDs are authenticated allowlist values):",
+    ]
+    lines.extend(
+        f"[{card['card_id']}] {json.dumps(card, ensure_ascii=False, sort_keys=True)}"
+        for card in audit_cards
+    )
+    lines.extend(
         [
-            "BOUNDED POST-DRAFT REVISION",
-            "Return a complete replacement organizer JSON object, never a patch.",
-            "Use the authenticated blueprint, all advisory hints, and all selected passages above.",
-            "Address the evidence-backed audit cards below by replacing generic or redundant",
-            "prose where possible; do not append blindly. Preserve supported details and remain",
-            "at or below 1,024 whitespace-separated words.",
-            "VALIDATED DRAFT:",
-            json.dumps(draft, ensure_ascii=False, sort_keys=True),
-            "MERGED AUDIT CARDS:",
-            json.dumps(list(audit_cards), ensure_ascii=False, sort_keys=True),
+            "INITIAL SPLICE RESPONSE:",
+            json.dumps(initial_payload, ensure_ascii=False, sort_keys=True),
+            "EXACT LOCAL VALIDATOR ERRORS:",
+            *validation_errors,
         ]
     )
+    return context + "\n\n" + "\n".join(lines)
 
 
 def _bounded_repair_prompt(
@@ -2050,14 +2140,15 @@ async def _run_bounded_revision(
 
     final: dict[str, Any] | None = None
     revision_errors: tuple[str, ...] = ()
-    invalid_revision_payload: dict[str, Any] | None = None
-    recovered, revised = _bounded_recovered_payload(state, "revision")
+    initial_splice_payload: dict[str, Any] | None = None
+    recovered, splice_payload = _bounded_recovered_payload(state, "revision")
     if not recovered:
         revision_status = _bounded_stage_status(state, stage="revision", luna=False)
         if revision_status in {"crash_consumed", "ambiguous_failure", "semantic_error"}:
-            raise RuntimeError("revision reservation was consumed without a reusable payload")
-        if revision_status == "semantic_returned":
-            revised = None
+            # A provider/schema failure leaves no authenticated operation set to repair.
+            splice_payload = None
+        elif revision_status == "semantic_returned":
+            splice_payload = None
         else:
             revision_ordinal = _bounded_reserve_sol(
                 root, state, role="revision", receipt_name="revision"
@@ -2066,7 +2157,7 @@ async def _run_bounded_revision(
                 topic, blueprint, projection, draft=draft, audit_cards=audit_cards
             )
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
-                revised, revision_call = await _bounded_provider_call(
+                splice_payload, revision_call = await _bounded_provider_call(
                     sol,
                     root=root,
                     api_key=api_key,
@@ -2076,7 +2167,7 @@ async def _run_bounded_revision(
                     reasoning_effort=config.reasoning_effort,
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=revision_prompt,
-                    response_schema=output_schema(),
+                    response_schema=splice_response_schema(),
                     executor=executor,
                     reservation_ordinal=revision_ordinal,
                 )
@@ -2086,67 +2177,109 @@ async def _run_bounded_revision(
                 state,
                 ordinal=revision_ordinal,
                 status=(
-                    "semantic_returned" if revised is not None else revision_call["outcome"]
+                    "semantic_returned"
+                    if splice_payload is not None
+                    else revision_call["outcome"]
                 ),
             )
-    if revised is not None:
+    if splice_payload is not None:
+        initial_splice_payload = splice_payload
         try:
-            final = _bounded_candidate(
-                revised, topic=topic, config=config, run_id=f"{config.run_id}-final"
+            operations = validate_splice_payload(
+                draft,
+                splice_payload,
+                tuple(topic.citation_docids),
+                tuple(card["card_id"] for card in audit_cards),
             )
-        except (ValueError, RuntimeError, TypeError) as exc:
+            if operations is None:
+                final = _bounded_rebind_candidate(
+                    draft,
+                    topic=topic,
+                    config=config,
+                    run_id=f"{config.run_id}-final",
+                )
+            else:
+                assembled = apply_splice_operations(draft, operations)
+                final = _bounded_rebind_candidate(
+                    assembled,
+                    topic=topic,
+                    config=config,
+                    run_id=f"{config.run_id}-final",
+                )
+        except (SpliceValidationError, ValueError, RuntimeError, TypeError) as exc:
             revision_errors = (f"{type(exc).__name__}: {exc}",)
-            invalid_revision_payload = revised
-
-    if revision_errors:
+    if revision_errors and initial_splice_payload is not None:
         recovered, repaired = _bounded_recovered_payload(state, "repair")
         if not recovered:
             if _bounded_blocked_stage(state, stage="repair", luna=False):
-                raise RuntimeError("repair reservation was consumed without a reusable payload")
-            repair_ordinal = _bounded_reserve_sol(
-                root,
-                state,
-                role="repair",
-                receipt_name="repair",
-                has_validation_errors=True,
-            )
-            repair_prompt = _bounded_repair_prompt(
-                topic,
-                blueprint,
-                projection,
-                invalid_candidate=invalid_revision_payload or {},
-                validation_errors=revision_errors,
-            )
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
-                repaired, repair_call = await _bounded_provider_call(
-                    sol,
-                    root=root,
-                    api_key=api_key,
-                    topic_id=topic.topic_id,
-                    stage="repair",
-                    model=config.model,
-                    reasoning_effort=config.reasoning_effort,
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=repair_prompt,
-                    response_schema=output_schema(),
-                    executor=executor,
-                    reservation_ordinal=repair_ordinal,
+                # A failed repair has no further safe fallback beyond the validated draft.
+                repaired = None
+            else:
+                repair_ordinal = _bounded_reserve_sol(
+                    root,
+                    state,
+                    role="repair",
+                    receipt_name="repair",
+                    has_validation_errors=True,
                 )
-            state["calls"].append(repair_call)
-            _bounded_finish_sol(
-                root,
-                state,
-                ordinal=repair_ordinal,
-                status=(
-                    "semantic_returned" if repaired is not None else repair_call["outcome"]
-                ),
-            )
+                repair_prompt = _bounded_splice_repair_prompt(
+                    topic,
+                    blueprint,
+                    projection,
+                    draft=draft,
+                    audit_cards=audit_cards,
+                    initial_payload=initial_splice_payload,
+                    validation_errors=revision_errors,
+                )
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+                    repaired, repair_call = await _bounded_provider_call(
+                        sol,
+                        root=root,
+                        api_key=api_key,
+                        topic_id=topic.topic_id,
+                        stage="repair",
+                        model=config.model,
+                        reasoning_effort=config.reasoning_effort,
+                        system_prompt=SYSTEM_PROMPT,
+                        user_prompt=repair_prompt,
+                        response_schema=splice_response_schema(),
+                        executor=executor,
+                        reservation_ordinal=repair_ordinal,
+                    )
+                state["calls"].append(repair_call)
+                _bounded_finish_sol(
+                    root,
+                    state,
+                    ordinal=repair_ordinal,
+                    status=(
+                        "semantic_returned" if repaired is not None else repair_call["outcome"]
+                    ),
+                )
         if repaired is not None:
             try:
-                final = _bounded_candidate(
-                    repaired, topic=topic, config=config, run_id=f"{config.run_id}-final"
+                operations = validate_repaired_splice_payload(
+                    draft,
+                    repaired,
+                    initial_splice_payload,
+                    tuple(topic.citation_docids),
+                    tuple(card["card_id"] for card in audit_cards),
                 )
-            except (ValueError, RuntimeError, TypeError):
+                if operations is None:
+                    final = _bounded_rebind_candidate(
+                        draft,
+                        topic=topic,
+                        config=config,
+                        run_id=f"{config.run_id}-final",
+                    )
+                else:
+                    assembled = apply_splice_operations(draft, operations)
+                    final = _bounded_rebind_candidate(
+                        assembled,
+                        topic=topic,
+                        config=config,
+                        run_id=f"{config.run_id}-final",
+                    )
+            except (SpliceValidationError, ValueError, RuntimeError, TypeError):
                 final = None
         if final is None:
             final = _bounded_rebind_candidate(
