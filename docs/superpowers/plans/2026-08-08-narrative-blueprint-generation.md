@@ -8,9 +8,27 @@
 
 **Tech Stack:** Python 3.12, frozen dataclasses, canonical JSON/SHA-256, asyncio/threaded hosted calls, pytest, OpenRouter strict JSON Schema, authenticated `GenerationTopic` handoff records.
 
+## Bounded revision result — 2026-08-08
+
+The sequential post-draft audit/revision trial completed for topics `233`, `300`, and
+`499`; aggregate results and exact spend are in
+[`docs/superpowers/reports/2026-08-08-bounded-narrative-revision-results.md`](../reports/2026-08-08-bounded-narrative-revision-results.md).
+The first evaluator improved on `233` and `300` and regressed on `499`, but three-run
+`499` repeats reversed the apparent direction often enough to invalidate tuning to the
+first pass. The current conclusion is uncertainty, not production readiness.
+
+The gold-free structural prototype allowed `233` (anchor margin `+0.062`) and `300`
+(`+0.000`) and rejected `499` only for replacement index `37` outside the 36-object
+draft range; anchors otherwise accepted all three. Use replacement-index validation and
+by-construction deterministic edit operations, with protected anchors as diagnostics or
+fallbacks. Keep gold/evaluation data out of generation, cap routine Sol work at draft plus
+revision with one optional validation-repair call, build the smallest throwaway edit-operation
+contract/applier, and then run one fresh sequential three-topic shadow batch before any
+production hardening.
+
 ## Prototype-first status — 2026-08-08
 
-Task 1 produced the pure blueprint/projection module and passed its task review. The user then corrected the execution strategy: do not over-engineer production tests before learning whether the approach improves answers. Tasks 2–4 below are therefore deferred. The next step is a clearly marked throwaway, one-topic-at-a-time driver using the Task 1 module, beginning with topic `72`; only behavior that wins the paired evaluation will be solidified in the production runner and tests.
+Task 1 produced the pure blueprint/projection module and passed its task review. The user then corrected the execution strategy: do not over-engineer production tests before learning whether the approach improves answers. Tasks 2–4 below remain deferred. The bounded revision result above is the current prototype evidence; only behavior that wins a fresh, judge-stable paired evaluation will be solidified in the production runner and tests.
 
 ### Three-topic prototype result
 
