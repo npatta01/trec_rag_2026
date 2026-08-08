@@ -3622,7 +3622,7 @@ def _validate_original_only_scoring(
     if (
         cross_scores
         or any(document.selected_from_lane != "original" for document in selected)
-        or {lane_name for _docid, lane_name in lane_scores} != {"original"}
+        or any(lane_name != "original" for _docid, lane_name in lane_scores)
     ):
         raise ValueError("original-only fallback scoring contains downstream data")
 
