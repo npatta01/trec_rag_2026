@@ -190,7 +190,7 @@ Run:
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_bounded_splice.py code/tests/test_narrative_blueprint.py -q
-PYTHONPATH=code .venv/bin/python -m ruff check code/trec_rag/bounded_splice.py code/trec_rag/narrative_blueprint_trial.py code/tests/test_bounded_splice.py code/tests/test_narrative_blueprint.py
+ruff check code/trec_rag/bounded_splice.py code/trec_rag/narrative_blueprint_trial.py code/tests/test_bounded_splice.py code/tests/test_narrative_blueprint.py
 ```
 
 Expected: both commands exit zero.
