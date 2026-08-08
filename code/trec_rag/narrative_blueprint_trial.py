@@ -13,11 +13,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from functools import partial
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any
 
 from trec_rag.competition_rag import (
@@ -31,6 +33,7 @@ from trec_rag.competition_rag import (
     _validate_artifact_paths,
     _validate_exact_hint_citations,
     _validate_generated_submission_record,
+    _generation_identity,
     build_submission_record,
     load_rag_generation_config,
     normalize_generated_record,
@@ -63,6 +66,32 @@ official narrative from the narrative and advisory group/claim hints supplied by
 Generated groups are retrieval structure, not separate answer requirements. Claim hints are
 advisory. Do not invent evidence, document identifiers, or claim identifiers; use only the
 provided local aliases. Return only the requested JSON object."""
+
+
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v1"
+LUNA_MODEL = "openai/gpt-5.6-luna"
+LUNA_REASONING_EFFORT = "medium"
+MAX_SOL_RESERVATIONS = 3
+MAX_AUDIT_CARDS_PER_GROUP = 6
+MAX_MERGED_AUDIT_CARDS = 24
+
+_AUDIT_IMPORTANCE = {"must": 3, "should": 2, "could": 1}
+_AUDIT_OMISSION_TYPES = (
+    "missing",
+    "too generic",
+    "incomplete enumeration",
+    "missing quantity/example",
+    "unbalanced tradeoff",
+    "redundant-space replacement",
+)
+_AUDIT_SPECIFICITY = {
+    "missing quantity/example": 6,
+    "incomplete enumeration": 5,
+    "unbalanced tradeoff": 4,
+    "missing": 3,
+    "too generic": 2,
+    "redundant-space replacement": 1,
+}
 
 
 NO_PLANNER_CONTROL_INSTRUCTION = """
@@ -234,6 +263,281 @@ def _render_hybrid_writer_prompt(
         ]
     )
     return "\n".join(lines)
+
+
+def _audit_aliases(
+    topic: GenerationTopic,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Return deterministic display aliases and the evidence-to-group mapping."""
+
+    group_aliases = {
+        group.group_id: f"g{index:03d}"
+        for index, group in enumerate(topic.groups, start=1)
+    }
+    evidence_aliases = {
+        evidence.evidence_id: f"e{index:03d}"
+        for index, evidence in enumerate(topic.evidence, start=1)
+    }
+    evidence_groups = {evidence.evidence_id: evidence.group_id for evidence in topic.evidence}
+    return group_aliases, evidence_aliases, evidence_groups
+
+
+def audit_response_schema() -> dict[str, object]:
+    """Return the strict structured-output schema for one group omission audit."""
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["cards"],
+        "properties": {
+            "cards": {
+                "type": "array",
+                "maxItems": MAX_AUDIT_CARDS_PER_GROUP,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "group_alias",
+                        "missing_detail",
+                        "evidence_aliases",
+                        "importance",
+                        "omission_type",
+                        "rationale",
+                    ],
+                    "properties": {
+                        "group_alias": {"type": "string"},
+                        "missing_detail": {"type": "string"},
+                        "evidence_aliases": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string"},
+                        },
+                        "importance": {
+                            "type": "string",
+                            "enum": ["must", "should", "could"],
+                        },
+                        "omission_type": {
+                            "type": "string",
+                            "enum": list(_AUDIT_OMISSION_TYPES),
+                        },
+                        "rationale": {"type": "string"},
+                        "replacement_answer_index": {
+                            "anyOf": [
+                                {"type": "integer", "minimum": 0},
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                },
+            }
+        },
+    }
+
+
+def render_group_audit_prompt(
+    topic: GenerationTopic,
+    *,
+    group_id: str,
+    draft: dict[str, Any],
+) -> str:
+    """Render one evidence-only post-draft audit for an authenticated group."""
+
+    if not isinstance(topic, GenerationTopic):
+        raise TypeError("topic must be GenerationTopic")
+    if not isinstance(group_id, str) or group_id not in {group.group_id for group in topic.groups}:
+        raise ValueError(f"unknown audit group: {group_id!r}")
+    if not isinstance(draft, dict):
+        raise TypeError("draft must be an object")
+
+    group_aliases, evidence_aliases, _evidence_groups = _audit_aliases(topic)
+    group = next(group for group in topic.groups if group.group_id == group_id)
+    claims = [claim for claim in topic.claim_hints if claim.group_id == group_id]
+    evidence = [row for row in topic.evidence if row.group_id == group_id]
+    lines = [
+        "BOUNDED NARRATIVE OMISSION AUDIT",
+        "Audit only the supplied draft against the untouched official narrative and this",
+        "authenticated group's selected evidence. Do not request retrieval or invent facts.",
+        "Return at most six evidence-backed cards. Empty output is valid.",
+        "Use only the local aliases shown below; never emit raw document or claim IDs.",
+        "A card must identify a concise missing detail, cite one or more passages that fully",
+        "support it, and explain why it matters. Do not reward interesting but unsupported facts.",
+        "",
+        "OFFICIAL NARRATIVE:",
+        topic.narrative,
+        "",
+        f"GROUP [{group_aliases[group.group_id]}]: {group.text}",
+        "",
+        "ADVISORY CLAIM HINTS (ALL LINKED HINTS):",
+    ]
+    if claims:
+        for claim in claims:
+            claim_index = next(
+                index for index, candidate in enumerate(topic.claim_hints, start=1)
+                if candidate.claim_id == claim.claim_id
+            )
+            lines.append(f"[c{claim_index:03d}] {claim.text}")
+    else:
+        lines.append("(none)")
+    lines.extend(["", "SELECTED EVIDENCE (ALL GROUP PASSAGES):"])
+    for row in evidence:
+        lines.extend(
+            [
+                f"[{evidence_aliases[row.evidence_id]}] DOCID: {row.docid}",
+                row.text,
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "VALIDATED DRAFT (PRIVATE CANDIDATE):",
+            json.dumps(draft, ensure_ascii=False, sort_keys=True),
+            "",
+            "Return exactly the audit response JSON object described by the schema.",
+            "Allowed omission_type values: " + ", ".join(_AUDIT_OMISSION_TYPES) + ".",
+            "replacement_answer_index is optional and is zero-based when present.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _normalized_audit_detail(value: str) -> str:
+    return " ".join(value.split()).casefold().rstrip(".?!")
+
+
+def validate_group_audit(
+    topic: GenerationTopic,
+    *,
+    group_id: str,
+    payload: object,
+) -> tuple[dict[str, Any], ...]:
+    """Validate one strict audit payload and resolve all aliases locally."""
+
+    if not isinstance(topic, GenerationTopic):
+        raise TypeError("topic must be GenerationTopic")
+    group_aliases, evidence_aliases, evidence_groups = _audit_aliases(topic)
+    if group_id not in group_aliases:
+        raise ValueError(f"unknown audit group: {group_id!r}")
+    if not isinstance(payload, dict) or set(payload) != {"cards"}:
+        raise ValueError("audit response must contain exactly cards")
+    cards = payload["cards"]
+    if not isinstance(cards, list) or len(cards) > MAX_AUDIT_CARDS_PER_GROUP:
+        raise ValueError("audit cards must be an array of at most six items")
+    expected = {
+        "group_alias",
+        "missing_detail",
+        "evidence_aliases",
+        "importance",
+        "omission_type",
+        "rationale",
+    }
+    output: list[dict[str, Any]] = []
+    for index, item in enumerate(cards):
+        if not isinstance(item, dict):
+            raise ValueError(f"audit cards[{index}] must be an object")
+        if set(item) - (expected | {"replacement_answer_index"}):
+            raise ValueError(f"audit cards[{index}] has unexpected fields")
+        if set(item) != expected and set(item) != expected | {"replacement_answer_index"}:
+            raise ValueError(f"audit cards[{index}] is missing required fields")
+        alias = item.get("group_alias")
+        if alias != group_aliases[group_id]:
+            raise ValueError(f"audit cards[{index}] has invalid group_alias {alias!r}")
+        detail = item.get("missing_detail")
+        rationale = item.get("rationale")
+        if not isinstance(detail, str) or not detail.strip():
+            raise ValueError(f"audit cards[{index}] missing_detail must be nonempty text")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise ValueError(f"audit cards[{index}] rationale must be nonempty text")
+        evidence_alias_list = item.get("evidence_aliases")
+        if (
+            not isinstance(evidence_alias_list, list)
+            or not evidence_alias_list
+            or any(alias not in evidence_aliases.values() for alias in evidence_alias_list)
+            or len(set(evidence_alias_list)) != len(evidence_alias_list)
+        ):
+            raise ValueError(f"audit cards[{index}] has invalid evidence_aliases")
+        evidence_ids = tuple(
+            evidence_id
+            for evidence_id, alias_value in evidence_aliases.items()
+            if alias_value in evidence_alias_list
+        )
+        if any(evidence_groups[evidence_id] != group_id for evidence_id in evidence_ids):
+            raise ValueError(f"audit cards[{index}] cites evidence outside its group")
+        importance = item.get("importance")
+        if importance not in _AUDIT_IMPORTANCE:
+            raise ValueError(f"audit cards[{index}] has invalid importance")
+        omission_type = item.get("omission_type")
+        if omission_type not in _AUDIT_SPECIFICITY:
+            raise ValueError(f"audit cards[{index}] has invalid omission_type")
+        replacement_index = item.get("replacement_answer_index")
+        if replacement_index is not None and (
+            type(replacement_index) is not int or replacement_index < 0
+        ):
+            raise ValueError(f"audit cards[{index}] has invalid replacement_answer_index")
+        output.append(
+            {
+                "group_alias": alias,
+                "missing_detail": detail.strip(),
+                "evidence_aliases": tuple(evidence_alias_list),
+                "importance": importance,
+                "omission_type": omission_type,
+                "rationale": rationale.strip(),
+                "replacement_answer_index": replacement_index,
+            }
+        )
+    return tuple(output)
+
+
+def merge_audit_cards(
+    topic: GenerationTopic,
+    cards_by_group: dict[str, tuple[dict[str, Any], ...]],
+) -> tuple[dict[str, Any], ...]:
+    """Deduplicate, rank, and cap validated audit cards deterministically."""
+
+    if not isinstance(topic, GenerationTopic):
+        raise TypeError("topic must be GenerationTopic")
+    group_order = {group.group_id: index for index, group in enumerate(topic.groups)}
+    evidence_order = {
+        evidence.evidence_id: index for index, evidence in enumerate(topic.evidence)
+    }
+    group_aliases, evidence_aliases, _evidence_groups = _audit_aliases(topic)
+    del evidence_aliases
+    if any(group_id not in group_order for group_id in cards_by_group):
+        raise ValueError("audit cards contain an unknown group")
+    retained: list[tuple[tuple[int, int, int, int, int], dict[str, Any]]] = []
+    seen_details: set[str] = set()
+    ordinal = 0
+    for group in topic.groups:
+        for card in cards_by_group.get(group.group_id, ()):
+            if not isinstance(card, dict):
+                raise ValueError("audit cards must be objects")
+            if card.get("group_alias") != group_aliases[group.group_id]:
+                raise ValueError("audit card group alias does not match its group")
+            detail_key = _normalized_audit_detail(str(card.get("missing_detail", "")))
+            if not detail_key or detail_key in seen_details:
+                ordinal += 1
+                continue
+            seen_details.add(detail_key)
+            aliases = card.get("evidence_aliases")
+            evidence_ids = [
+                evidence_id
+                for evidence_id, alias in _audit_aliases(topic)[1].items()
+                if alias in aliases
+            ]
+            first_evidence = min(
+                (evidence_order[evidence_id] for evidence_id in evidence_ids),
+                default=len(evidence_order),
+            )
+            key = (
+                -_AUDIT_IMPORTANCE.get(str(card.get("importance")), 0),
+                -_AUDIT_SPECIFICITY.get(str(card.get("omission_type")), 0),
+                group_order[group.group_id],
+                first_evidence,
+                ordinal,
+            )
+            retained.append((key, dict(card)))
+            ordinal += 1
+    retained.sort(key=lambda item: item[0])
+    return tuple(card for _key, card in retained[:MAX_MERGED_AUDIT_CARDS])
 
 
 def _write_json(path: Path, value: object, *, api_key: str) -> None:
@@ -831,6 +1135,799 @@ async def _run_no_planner_control(
         raise
 
 
+def _bounded_private_root(config: Any, topic: GenerationTopic) -> Path:
+    return config.resolved_work_dir / "bounded_revision" / _safe_topic_name(topic.topic_id)
+
+
+def _bounded_identity(
+    config: Any,
+    handoff: GenerationHandoff,
+    topic: GenerationTopic,
+) -> dict[str, Any]:
+    return {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "handoff_schema_version": handoff.schema_version,
+        "handoff_manifest_sha256": handoff.manifest_sha256,
+        "topic_id": topic.topic_id,
+        "topic_context_sha256": topic.context_sha256,
+        "config_run_id": config.run_id,
+        "team_id": config.team_id,
+        "run_desc": config.run_desc,
+        "provider": config.provider,
+        "api_base": config.api_base,
+        "api_key_env": config.api_key_env,
+        "sol_model": config.model,
+        "sol_reasoning_effort": config.reasoning_effort,
+        "structured_output": config.structured_output,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "timeout_seconds": config.timeout_seconds,
+        "transport_max_attempts": config.transport_max_attempts,
+        "luna_model": LUNA_MODEL,
+        "luna_reasoning_effort": LUNA_REASONING_EFFORT,
+        "planner_prompt_sha256": _digest_text(render_planner_prompt(topic)),
+        "writer_system_prompt_sha256": _digest_text(SYSTEM_PROMPT),
+        "audit_system_prompt_sha256": _digest_text(
+            "You are an evidence-only omission auditor. Return only the requested JSON."
+        ),
+        "audit_schema_sha256": _digest_json(audit_response_schema()),
+        "writer_schema_sha256": _digest_json(output_schema()),
+    }
+
+
+def _bounded_write_state(root: Path, state: dict[str, Any]) -> None:
+    _atomic_write_text(
+        root / "state.json",
+        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def _bounded_read_state(root: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads((root / "state.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read bounded-revision state under {root}") from exc
+    if not isinstance(payload, dict) or payload.get("trial_contract_version") != TRIAL_CONTRACT_VERSION:
+        raise ValueError("bounded-revision state has an unsupported trial contract")
+    return payload
+
+
+def _bounded_register_file(root: Path, state: dict[str, Any], path: Path) -> None:
+    relative = str(path.relative_to(root))
+    state.setdefault("stage_hashes", {})[relative] = _digest_bytes(path.read_bytes())
+
+
+def _digest_bytes(value: bytes) -> str:
+    return sha256(value).hexdigest()
+
+
+def _bounded_revalidate_files(root: Path, state: dict[str, Any]) -> None:
+    for relative, expected in state.get("stage_hashes", {}).items():
+        path = root / relative
+        if not path.is_file() or _digest_bytes(path.read_bytes()) != expected:
+            raise ValueError(f"bounded-revision stage hash mismatch: {relative}")
+
+
+def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
+    changed = False
+    for reservation in state.get("sol_reservations", []):
+        if reservation.get("status") != "pending":
+            continue
+        receipt_path = root / str(reservation.get("receipt", ""))
+        terminal_transport = False
+        if receipt_path.is_file():
+            try:
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                receipt = {}
+            terminal_transport = receipt.get("outcome") == "terminal_transport_failure"
+        reservation["status"] = (
+            "terminal_transport_failure" if terminal_transport else "crash_consumed"
+        )
+        changed = True
+    if changed:
+        _bounded_write_state(root, state)
+
+
+def _bounded_semantic_reservations(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        reservation
+        for reservation in state.get("sol_reservations", [])
+        if reservation.get("status") != "terminal_transport_failure"
+    ]
+
+
+def _bounded_reserve_sol(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    role: str,
+    receipt_name: str,
+    has_validation_errors: bool = False,
+) -> int:
+    if role not in {"draft", "revision", "repair"}:
+        raise ValueError(f"unsupported Sol reservation role: {role}")
+    reservations = _bounded_semantic_reservations(state)
+    if len(reservations) >= MAX_SOL_RESERVATIONS:
+        raise ValueError("bounded-revision Sol reservation ceiling is exhausted")
+    if role == "repair" and not has_validation_errors:
+        raise ValueError("repair reservation requires deterministic validation errors")
+    if role != "repair" and len([item for item in reservations if item["role"] != "repair"]) >= 2:
+        raise ValueError("bounded-revision routine Sol reservation ceiling is exhausted")
+    if any(item["role"] == role for item in state.get("sol_reservations", [])):
+        raise ValueError(f"bounded-revision role already reserved: {role}")
+    ordinal = len(state.get("sol_reservations", [])) + 1
+    state.setdefault("sol_reservations", []).append(
+        {
+            "ordinal": ordinal,
+            "role": role,
+            "status": "pending",
+            "receipt": f"receipts/{receipt_name}.json",
+        }
+    )
+    _bounded_write_state(root, state)
+    return ordinal
+
+
+def _bounded_finish_sol(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    ordinal: int,
+    status: str,
+) -> None:
+    for reservation in state.get("sol_reservations", []):
+        if reservation.get("ordinal") == ordinal:
+            reservation["status"] = status
+            break
+    else:
+        raise ValueError(f"unknown Sol reservation ordinal: {ordinal}")
+    _bounded_write_state(root, state)
+
+
+def _bounded_usage(raw: object) -> tuple[dict[str, Any], float]:
+    if not isinstance(raw, dict):
+        return {}, 0.0
+    usage = raw.get("usage")
+    usage_value = dict(usage) if isinstance(usage, dict) else {}
+    cost_value = usage_value.get("cost", raw.get("cost", 0.0))
+    try:
+        cost = float(cost_value) if cost_value is not None else 0.0
+    except (TypeError, ValueError):
+        cost = 0.0
+    return usage_value, cost
+
+
+async def _bounded_provider_call(
+    generator: OpenRouterJsonGenerator,
+    *,
+    root: Path,
+    api_key: str,
+    topic_id: str,
+    stage: str,
+    model: str,
+    reasoning_effort: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_schema: dict[str, object],
+    executor: ThreadPoolExecutor,
+    reservation_ordinal: int | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    started = time.monotonic()
+    raw_response: object | None = None
+    payload: dict[str, Any] | None = None
+    error: str | None = None
+    outcome = "semantic_success"
+    transport_outcome = "response"
+    try:
+        payload, raw_response = await _complete(
+            generator,
+            topic_id=topic_id,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_schema=response_schema,
+            executor=executor,
+        )
+    except SemanticCompletionError as exc:
+        raw_response = exc.raw_response
+        error = f"{type(exc).__name__}: {exc}"
+        outcome = "semantic_error"
+    except (RuntimeError, OSError) as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        outcome = "terminal_transport_failure"
+        transport_outcome = "failure"
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        outcome = "semantic_error"
+    usage, cost = _bounded_usage(raw_response)
+    receipt = {
+        "stage": stage,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "prompt_sha256": _digest_text(user_prompt),
+        "system_prompt_sha256": _digest_text(system_prompt),
+        "schema_sha256": _digest_json(response_schema),
+        "reservation_ordinal": reservation_ordinal,
+        "latency_seconds": round(time.monotonic() - started, 6),
+        "usage": usage,
+        "provider_cost": cost,
+        "outcome": outcome,
+        "transport_outcome": transport_outcome,
+        "error": error,
+        "raw_response": raw_response,
+    }
+    _write_json(root / "receipts" / f"{stage}.json", receipt, api_key=api_key)
+    return payload, {
+        "stage": stage,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "prompt_sha256": receipt["prompt_sha256"],
+        "schema_sha256": receipt["schema_sha256"],
+        "reservation_ordinal": reservation_ordinal,
+        "outcome": outcome,
+        "latency_seconds": receipt["latency_seconds"],
+        "provider_cost": cost,
+        "usage": usage,
+        "transport_outcome": transport_outcome,
+        "error": error,
+    }
+
+
+def _bounded_candidate(
+    generated: dict[str, Any],
+    *,
+    topic: GenerationTopic,
+    config: Any,
+    run_id: str,
+) -> dict[str, Any]:
+    record = normalize_generated_record(
+        build_submission_record(
+            generated,
+            topic_id=topic.topic_id,
+            narrative=topic.narrative,
+            team_id=config.team_id,
+            run_id=run_id,
+            run_desc=config.run_desc,
+        ),
+        allowed_docids=list(topic.citation_docids),
+    )
+    _validate_generated_submission_record(
+        record,
+        topic_id=topic.topic_id,
+        narrative=topic.narrative,
+        allowed_docids=list(topic.citation_docids),
+        team_id=config.team_id,
+        run_id=run_id,
+        run_desc=config.run_desc,
+    )
+    _validate_exact_hint_citations(record, topic=topic)
+    return record
+
+
+def _bounded_write_candidate(root: Path, arm: str, record: dict[str, Any]) -> Path:
+    path = root / "evaluation" / arm / "submission.jsonl"
+    _atomic_write_text(path, json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return path
+
+
+def _bounded_write_identity(
+    root: Path,
+    *,
+    config: Any,
+    handoff: GenerationHandoff,
+    topic: GenerationTopic,
+    arm: str,
+) -> Path:
+    run_id = f"{config.run_id}-{arm}"
+    identity = _generation_identity(replace(config, run_id=run_id), handoff, (topic,))
+    path = root / "evaluation" / arm / "generation_identity.json"
+    _atomic_write_text(path, json.dumps(identity, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def _bounded_candidate_summary(root: Path, arm: str, record: dict[str, Any]) -> dict[str, Any]:
+    answer = record.get("answer", [])
+    words = sum(len(item.get("text", "").split()) for item in answer if isinstance(item, dict))
+    path = root / "evaluation" / arm / "submission.jsonl"
+    return {
+        "words": words,
+        "answer_objects": len(answer) if isinstance(answer, list) else 0,
+        "output_sha256": _digest_bytes(path.read_bytes()),
+    }
+
+
+def _bounded_revision_prompt(
+    topic: GenerationTopic,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+    *,
+    draft: dict[str, Any],
+    audit_cards: tuple[dict[str, Any], ...],
+) -> str:
+    context = _render_hybrid_writer_prompt(topic, blueprint, projection)
+    return context + "\n\n" + "\n".join(
+        [
+            "BOUNDED POST-DRAFT REVISION",
+            "Return a complete replacement organizer JSON object, never a patch.",
+            "Use the authenticated blueprint, all advisory hints, and all selected passages above.",
+            "Address the evidence-backed audit cards below by replacing generic or redundant",
+            "prose where possible; do not append blindly. Preserve supported details and remain",
+            "at or below 1,024 whitespace-separated words.",
+            "VALIDATED DRAFT:",
+            json.dumps(draft, ensure_ascii=False, sort_keys=True),
+            "MERGED AUDIT CARDS:",
+            json.dumps(list(audit_cards), ensure_ascii=False, sort_keys=True),
+        ]
+    )
+
+
+def _bounded_repair_prompt(
+    topic: GenerationTopic,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+    *,
+    invalid_candidate: dict[str, Any],
+    validation_errors: tuple[str, ...],
+) -> str:
+    context = _render_hybrid_writer_prompt(topic, blueprint, projection)
+    return context + "\n\n" + "\n".join(
+        [
+            "DETERMINISTIC VALIDATION REPAIR",
+            "Return the smallest complete-answer correction as one full organizer JSON object.",
+            "Do not discuss quality, coverage, scoring, gold data, or post-hoc metrics.",
+            "Change only what is required by these exact local validator errors.",
+            "INVALID FULL CANDIDATE:",
+            json.dumps(invalid_candidate, ensure_ascii=False, sort_keys=True),
+            "EXACT LOCAL VALIDATOR ERRORS:",
+            *validation_errors,
+        ]
+    )
+
+
+def _bounded_manifest(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    topic: GenerationTopic,
+    draft: dict[str, Any] | None,
+    final: dict[str, Any] | None,
+) -> dict[str, Any]:
+    reservations = state.get("sol_reservations", [])
+    by_role = {role: 0 for role in ("draft", "revision", "repair")}
+    for reservation in reservations:
+        by_role[reservation["role"]] += 1
+    transports: dict[str, int] = {}
+    total_cost = 0.0
+    for call in state.get("calls", []):
+        outcome = str(call.get("transport_outcome", "unknown"))
+        transports[outcome] = transports.get(outcome, 0) + 1
+        total_cost += float(call.get("provider_cost", 0.0) or 0.0)
+    manifest: dict[str, Any] = {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "topic_id": topic.topic_id,
+        "handoff_manifest_sha256": state["identity"]["handoff_manifest_sha256"],
+        "topic_context_sha256": state["identity"]["topic_context_sha256"],
+        "stage_completion": state.get("stages", {}),
+        "luna_call_count": sum(1 for call in state.get("calls", []) if call["model"] == LUNA_MODEL),
+        "sol_reservations_by_role": by_role,
+        "sol_reservation_count": len(reservations),
+        "http_transport_outcomes": transports,
+        "total_provider_reported_cost": round(total_cost, 12),
+        "draft": _bounded_candidate_summary(root, "draft", draft) if draft is not None else None,
+        "final": _bounded_candidate_summary(root, "final", final) if final is not None else None,
+        "failure": state.get("failure"),
+    }
+    return manifest
+
+
+async def _run_bounded_revision(
+    config: Any,
+    handoff: GenerationHandoff,
+    topic: GenerationTopic,
+    *,
+    api_key: str,
+    state_mode: str,
+) -> Path:
+    _validate_artifact_paths(config)
+    root = _bounded_private_root(config, topic)
+    if state_mode == "create":
+        if root.exists():
+            raise ValueError(f"bounded-revision state already exists: {root}")
+        root.mkdir(parents=True, exist_ok=False)
+        (root / "receipts").mkdir()
+        state: dict[str, Any] = {
+            "trial_contract_version": TRIAL_CONTRACT_VERSION,
+            "identity": _bounded_identity(config, handoff, topic),
+            "stages": {
+                "planner": False,
+                "draft": False,
+                "audit_groups": [],
+                "audit_merge": False,
+                "revision": False,
+                "final": False,
+            },
+            "stage_hashes": {},
+            "sol_reservations": [],
+            "calls": [],
+            "failure": None,
+        }
+        _bounded_write_state(root, state)
+    elif state_mode == "resume":
+        if not root.is_dir():
+            raise ValueError(f"bounded-revision state does not exist: {root}")
+        state = _bounded_read_state(root)
+        if state.get("identity") != _bounded_identity(config, handoff, topic):
+            raise ValueError("bounded-revision resume identity differs from create identity")
+        _bounded_revalidate_files(root, state)
+        _bounded_recover_pending(root, state)
+        if state.get("stages", {}).get("final") and (root / "manifest.json").is_file():
+            return root
+    else:
+        raise ValueError("state_mode must be create or resume")
+
+    luna = OpenRouterJsonGenerator(
+        api_base=config.api_base,
+        api_key=api_key,
+        model=LUNA_MODEL,
+        reasoning_effort=LUNA_REASONING_EFFORT,
+        structured_output=config.structured_output,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        timeout_seconds=config.timeout_seconds,
+        transport_max_attempts=config.transport_max_attempts,
+    )
+    sol = OpenRouterJsonGenerator(
+        api_base=config.api_base,
+        api_key=api_key,
+        model=config.model,
+        reasoning_effort=config.reasoning_effort,
+        structured_output=config.structured_output,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        timeout_seconds=config.timeout_seconds,
+        transport_max_attempts=config.transport_max_attempts,
+    )
+
+    blueprint: NarrativeBlueprint
+    projection: BlueprintProjection
+    planner_state_path = root / "blueprint.state.json"
+    planner_prompt = render_planner_prompt(topic)
+    planner_schema = planner_response_schema()
+    if state["stages"].get("planner"):
+        loaded = load_blueprint_state(
+            topic,
+            json.loads(planner_state_path.read_text(encoding="utf-8")),
+            planner_prompt_sha256=_digest_text(planner_prompt),
+        )
+        blueprint, projection = loaded
+    else:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-luna") as executor:
+            planner_payload, planner_call = await _bounded_provider_call(
+                luna,
+                root=root,
+                api_key=api_key,
+                topic_id=topic.topic_id,
+                stage="planner",
+                model=LUNA_MODEL,
+                reasoning_effort=LUNA_REASONING_EFFORT,
+                system_prompt=PLANNER_SYSTEM_PROMPT,
+                user_prompt=planner_prompt,
+                response_schema=planner_schema,
+                executor=executor,
+            )
+        state["calls"].append(planner_call)
+        state["luna_call_count"] = state.get("luna_call_count", 0) + 1
+        _bounded_write_state(root, state)
+        if planner_payload is None:
+            state["failure"] = "planner did not return an accepted semantic response"
+            _bounded_write_state(root, state)
+            _atomic_write_text(
+                root / "manifest.json",
+                json.dumps(_bounded_manifest(root, state, topic=topic, draft=None, final=None), indent=2) + "\n",
+            )
+            raise RuntimeError(state["failure"])
+        blueprint = validate_blueprint(topic, planner_payload)
+        projection = project_blueprint(topic, blueprint)
+        writer_context = render_blueprint_writer_context(topic, blueprint, projection)
+        planner_state = serialize_blueprint_state(
+            topic,
+            blueprint,
+            projection,
+            planner_prompt_sha256=_digest_text(planner_prompt),
+            writer_context_sha256=_digest_text(writer_context),
+        )
+        _write_json(planner_state_path, planner_state, api_key=api_key)
+        _bounded_register_file(root, state, planner_state_path)
+        state["stages"]["planner"] = True
+        _bounded_write_state(root, state)
+
+    draft: dict[str, Any] | None = None
+    draft_path = root / "draft.record.json"
+    draft_errors: tuple[str, ...] = ()
+    if state["stages"].get("draft") and draft_path.is_file():
+        draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    else:
+        draft_ordinal = _bounded_reserve_sol(root, state, role="draft", receipt_name="draft")
+        draft_prompt = _render_hybrid_writer_prompt(topic, blueprint, projection)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+            generated, draft_call = await _bounded_provider_call(
+                sol,
+                root=root,
+                api_key=api_key,
+                topic_id=topic.topic_id,
+                stage="draft",
+                model=config.model,
+                reasoning_effort=config.reasoning_effort,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=draft_prompt,
+                response_schema=output_schema(),
+                executor=executor,
+                reservation_ordinal=draft_ordinal,
+            )
+        state["calls"].append(draft_call)
+        _bounded_finish_sol(
+            root,
+            state,
+            ordinal=draft_ordinal,
+            status="semantic_returned" if generated is not None else draft_call["outcome"],
+        )
+        if generated is not None:
+            try:
+                draft = _bounded_candidate(
+                    generated, topic=topic, config=config, run_id=f"{config.run_id}-draft"
+                )
+            except (ValueError, RuntimeError, TypeError) as exc:
+                draft_errors = (f"{type(exc).__name__}: {exc}",)
+        if draft is not None:
+            _atomic_write_text(
+                draft_path,
+                json.dumps(draft, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
+            _bounded_register_file(root, state, draft_path)
+            draft_output = _bounded_write_candidate(root, "draft", draft)
+            identity_path = _bounded_write_identity(
+                root, config=config, handoff=handoff, topic=topic, arm="draft"
+            )
+            _bounded_register_file(root, state, draft_output)
+            _bounded_register_file(root, state, identity_path)
+            state["stages"]["draft"] = True
+        _bounded_write_state(root, state)
+
+    if draft is None:
+        if not draft_errors:
+            draft_errors = ("draft did not produce a valid candidate",)
+        repair_ordinal = _bounded_reserve_sol(
+            root,
+            state,
+            role="repair",
+            receipt_name="repair",
+            has_validation_errors=True,
+        )
+        repair_prompt = _bounded_repair_prompt(
+            topic,
+            blueprint,
+            projection,
+            invalid_candidate={},
+            validation_errors=draft_errors,
+        )
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+            repaired, repair_call = await _bounded_provider_call(
+                sol,
+                root=root,
+                api_key=api_key,
+                topic_id=topic.topic_id,
+                stage="repair",
+                model=config.model,
+                reasoning_effort=config.reasoning_effort,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=repair_prompt,
+                response_schema=output_schema(),
+                executor=executor,
+                reservation_ordinal=repair_ordinal,
+            )
+        state["calls"].append(repair_call)
+        _bounded_finish_sol(
+            root,
+            state,
+            ordinal=repair_ordinal,
+            status="semantic_returned" if repaired is not None else repair_call["outcome"],
+        )
+        if repaired is not None:
+            try:
+                draft = _bounded_candidate(
+                    repaired, topic=topic, config=config, run_id=f"{config.run_id}-final"
+                )
+            except (ValueError, RuntimeError, TypeError):
+                draft = None
+        if draft is None:
+            state["failure"] = "no valid candidate after draft repair"
+            _bounded_write_state(root, state)
+            _atomic_write_text(
+                root / "manifest.json",
+                json.dumps(_bounded_manifest(root, state, topic=topic, draft=None, final=None), indent=2) + "\n",
+            )
+            raise RuntimeError(state["failure"])
+        final_output = _bounded_write_candidate(root, "final", draft)
+        final_identity = _bounded_write_identity(
+            root, config=config, handoff=handoff, topic=topic, arm="final"
+        )
+        _bounded_register_file(root, state, final_output)
+        _bounded_register_file(root, state, final_identity)
+        state["stages"]["final"] = True
+        _bounded_write_state(root, state)
+        manifest = _bounded_manifest(root, state, topic=topic, draft=None, final=draft)
+        _atomic_write_text(root / "manifest.json", json.dumps(manifest, indent=2) + "\n")
+        return root
+
+    cards_by_group: dict[str, tuple[dict[str, Any], ...]] = {}
+    for group in topic.groups:
+        if group.group_id in state["stages"].get("audit_groups", []):
+            cards_path = root / "audit.cards.json"
+            all_cards = json.loads(cards_path.read_text(encoding="utf-8"))
+            cards_by_group[group.group_id] = tuple(all_cards.get(group.group_id, ()))
+            continue
+        audit_prompt = render_group_audit_prompt(topic, group_id=group.group_id, draft=draft)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-luna") as executor:
+            audit_payload, audit_call = await _bounded_provider_call(
+                luna,
+                root=root,
+                api_key=api_key,
+                topic_id=topic.topic_id,
+                stage=f"audit-{_audit_aliases(topic)[0][group.group_id]}",
+                model=LUNA_MODEL,
+                reasoning_effort=LUNA_REASONING_EFFORT,
+                system_prompt="You are an evidence-only omission auditor. Return only the requested JSON.",
+                user_prompt=audit_prompt,
+                response_schema=audit_response_schema(),
+                executor=executor,
+            )
+        state["calls"].append(audit_call)
+        try:
+            cards_by_group[group.group_id] = (
+                validate_group_audit(topic, group_id=group.group_id, payload=audit_payload)
+                if audit_payload is not None
+                else ()
+            )
+        except ValueError:
+            cards_by_group[group.group_id] = ()
+        state["stages"].setdefault("audit_groups", []).append(group.group_id)
+        _atomic_write_text(
+            root / "audit.cards.json",
+            json.dumps(
+                {key: list(value) for key, value in cards_by_group.items()},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        _bounded_register_file(root, state, root / "audit.cards.json")
+        _bounded_write_state(root, state)
+
+    audit_cards = merge_audit_cards(topic, cards_by_group)
+    merged_path = root / "audit.merged.json"
+    _atomic_write_text(merged_path, json.dumps(list(audit_cards), indent=2) + "\n")
+    _bounded_register_file(root, state, merged_path)
+    state["stages"]["audit_merge"] = True
+    _bounded_write_state(root, state)
+
+    final: dict[str, Any] | None = None
+    revision_errors: tuple[str, ...] = ()
+    revision_ordinal = _bounded_reserve_sol(root, state, role="revision", receipt_name="revision")
+    revision_prompt = _bounded_revision_prompt(
+        topic, blueprint, projection, draft=draft, audit_cards=audit_cards
+    )
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+        revised, revision_call = await _bounded_provider_call(
+            sol,
+            root=root,
+            api_key=api_key,
+            topic_id=topic.topic_id,
+            stage="revision",
+            model=config.model,
+            reasoning_effort=config.reasoning_effort,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=revision_prompt,
+            response_schema=output_schema(),
+            executor=executor,
+            reservation_ordinal=revision_ordinal,
+        )
+    state["calls"].append(revision_call)
+    _bounded_finish_sol(
+        root,
+        state,
+        ordinal=revision_ordinal,
+        status="semantic_returned" if revised is not None else revision_call["outcome"],
+    )
+    if revised is not None:
+        try:
+            final = _bounded_candidate(
+                revised, topic=topic, config=config, run_id=f"{config.run_id}-final"
+            )
+        except (ValueError, RuntimeError, TypeError) as exc:
+            revision_errors = (f"{type(exc).__name__}: {exc}",)
+
+    if final is None:
+        if not revision_errors:
+            revision_errors = ("revision did not produce a valid candidate",)
+        repair_ordinal = _bounded_reserve_sol(
+            root,
+            state,
+            role="repair",
+            receipt_name="repair",
+            has_validation_errors=True,
+        )
+        repair_prompt = _bounded_repair_prompt(
+            topic,
+            blueprint,
+            projection,
+            invalid_candidate=revised or {},
+            validation_errors=revision_errors,
+        )
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
+            repaired, repair_call = await _bounded_provider_call(
+                sol,
+                root=root,
+                api_key=api_key,
+                topic_id=topic.topic_id,
+                stage="repair",
+                model=config.model,
+                reasoning_effort=config.reasoning_effort,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=repair_prompt,
+                response_schema=output_schema(),
+                executor=executor,
+                reservation_ordinal=repair_ordinal,
+            )
+        state["calls"].append(repair_call)
+        _bounded_finish_sol(
+            root,
+            state,
+            ordinal=repair_ordinal,
+            status="semantic_returned" if repaired is not None else repair_call["outcome"],
+        )
+        if repaired is not None:
+            try:
+                final = _bounded_candidate(
+                    repaired, topic=topic, config=config, run_id=f"{config.run_id}-final"
+                )
+            except (ValueError, RuntimeError, TypeError):
+                final = None
+        if final is None:
+            final = draft
+
+    final_output = _bounded_write_candidate(root, "final", final)
+    final_identity = _bounded_write_identity(
+        root, config=config, handoff=handoff, topic=topic, arm="final"
+    )
+    _bounded_register_file(root, state, final_output)
+    _bounded_register_file(root, state, final_identity)
+    state["stages"]["revision"] = True
+    state["stages"]["final"] = True
+    _bounded_write_state(root, state)
+    manifest = _bounded_manifest(root, state, topic=topic, draft=draft, final=final)
+    _atomic_write_text(root / "manifest.json", json.dumps(manifest, indent=2) + "\n")
+    return root
+
+
+def _print_bounded_dry_run(config: Any, topic: GenerationTopic) -> None:
+    print(f"topic={topic.topic_id}")
+    print(
+        "counts="
+        f"groups:{len(topic.groups)},claims:{len(topic.claim_hints)},"
+        f"evidence_passages:{len(topic.evidence)},citation_docids:{len(topic.citation_docids)}"
+    )
+    print(
+        "calls="
+        f"planner:1,audit:{len(topic.groups)},luna_total:{1 + len(topic.groups)},provider:0"
+    )
+    print("sol_reservations=draft:1,revision:1,repair_only:1,total:3,max:3")
+    print(
+        "state="
+        f"{_bounded_private_root(config, topic)}; no provider calls; private outputs only"
+    )
+
+
 def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True, help="Prototype RAG YAML config.")
@@ -841,6 +1938,11 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print topic/count/size/budget statistics without provider calls.",
     )
     mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--bounded-revision",
+        action="store_true",
+        help="Run the bounded post-draft omission-audit revision trial.",
+    )
     mode_group.add_argument(
         "--no-planner-control",
         action="store_true",
@@ -863,6 +1965,12 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Maximum writer semantic attempts for this isolated invocation.",
     )
+    parser.add_argument(
+        "--state-mode",
+        choices=("create", "resume"),
+        default=None,
+        help="Bounded-revision durable state mode.",
+    )
     return parser.parse_args(argv)
 
 
@@ -871,6 +1979,30 @@ def main(argv: list[str] | None = None) -> None:
     config = load_rag_generation_config(args.config)
     handoff = load_generation_handoff(config.handoff_manifest_path)
     topic = _topic_for_cli(config, handoff, args.topic)
+    if args.bounded_revision:
+        if args.state_mode is None:
+            raise SystemExit("--bounded-revision requires --state-mode create|resume")
+        if args.writer_attempts is not None:
+            raise SystemExit("--bounded-revision does not accept --writer-attempts")
+        if args.dry_run:
+            _print_bounded_dry_run(config, topic)
+            return
+        repo_root = find_repo_root(args.config.resolve().parent)
+        load_repo_env(repo_root)
+        api_key = os.environ.get(config.api_key_env, "")
+        root = asyncio.run(
+            _run_bounded_revision(
+                config,
+                handoff,
+                topic,
+                api_key=api_key,
+                state_mode=args.state_mode,
+            )
+        )
+        print(f"completed bounded-revision topic={topic.topic_id} work={root}")
+        return
+    if args.state_mode is not None:
+        raise SystemExit("--state-mode requires --bounded-revision")
     if args.no_planner_control:
         if args.writer_attempts not in {None, 1}:
             raise SystemExit("--no-planner-control requires --writer-attempts 1")

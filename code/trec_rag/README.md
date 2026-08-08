@@ -1963,3 +1963,31 @@ Outputs: a six-column TREC run and one document row per topic, both shaped for
 query-relevant chunks via `trec_rag.chunking.SemanticTextChunker` instead of being left for the
 generator to head-truncate. Validation: ranks are dense and scores non-increasing so
 `load_trec_run` accepts the output, and duplicate docids are collapsed to their best rank.
+
+### Bounded narrative-revision prototype
+
+`narrative_blueprint_trial` has an opt-in, throwaway one-topic experiment for testing whether a
+post-draft, evidence-only omission audit followed by one bounded Sol revision improves paired
+nugget coverage. Run topics separately; this driver is not the production competition path and
+never reads gold nuggets, qrels, TREC runs, full-text archives, or RAGDoll results during
+generation.
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
+  --config configs/local/bounded-revision-233.yaml --topic 233 \
+  --bounded-revision --state-mode create --dry-run
+
+PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
+  --config configs/local/bounded-revision-233.yaml --topic 233 \
+  --bounded-revision --state-mode create
+
+# After an interruption, resume the same topic and config:
+PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
+  --config configs/local/bounded-revision-233.yaml --topic 233 \
+  --bounded-revision --state-mode resume
+```
+
+Private state, call receipts, manifests, draft/final submissions, and arm-specific generation
+identities live under `config.resolved_work_dir/bounded_revision/<topic>`. The normal path uses
+one Luna planner, one Luna audit per authenticated group, and two Sol reservations (draft and
+revision); one additional Sol reservation is permitted only for deterministic validation repair.
