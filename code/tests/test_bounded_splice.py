@@ -66,6 +66,14 @@ def test_splice_schema_is_strict() -> None:
     assert citation_schema["items"] == {"type": "string"}
 
 
+def test_provider_schema_uses_only_supported_keywords() -> None:
+    schema = splice_response_schema()
+
+    assert "allOf" not in schema
+    assert "if" not in schema
+    assert "then" not in schema
+
+
 def test_keep_draft_accepts_only_an_empty_operation_array() -> None:
     draft = _draft()
 

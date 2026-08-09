@@ -75,16 +75,6 @@ def splice_response_schema() -> dict[str, object]:
                 "items": operation,
             },
         },
-        "allOf": [
-            {
-                "if": {"properties": {"decision": {"const": "keep_draft"}}},
-                "then": {"properties": {"operations": {"maxItems": 0}}},
-            },
-            {
-                "if": {"properties": {"decision": {"const": "edit"}}},
-                "then": {"properties": {"operations": {"minItems": 1}}},
-            },
-        ],
     }
 
 
