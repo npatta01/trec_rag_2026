@@ -295,6 +295,29 @@ def _check_secret_presence(environ: Mapping[str, str]) -> None:
         )
 
 
+def _check_remote_scorer_environment(config: Any, environ: Mapping[str, str]) -> None:
+    scoring = config.passage.scoring
+    if scoring.backend != "runpod_flash":
+        return
+    names = (scoring.endpoint_id_env, scoring.api_key_env)
+    if any(not isinstance(name, str) or not name for name in names):
+        raise AgenticRunnerError(
+            "config_invalid",
+            "remote passage scorer environment names are invalid",
+        )
+    missing = tuple(
+        name
+        for name in names
+        if not isinstance(environ.get(name), str) or not environ[name].strip()
+    )
+    if missing:
+        raise AgenticRunnerError(
+            "missing_secrets",
+            "missing required remote passage scorer environment names: "
+            + ", ".join(missing),
+        )
+
+
 def _planned_topics(
     stored: AgenticRunPlan, official_topics: Sequence[Topic]
 ) -> tuple[Topic, ...]:
@@ -405,6 +428,10 @@ def _build_production_topic_executor(config: Any) -> Callable[[TopicExecutionReq
     from .document_store import DocumentStore
     from .facet_retrieval import build_pyserini_retriever
     from .mixedbread_passage_scorer import MixedbreadPassageScorer
+    from .runpod_passage_scorer import (
+        RunpodFlashPassagePredictor,
+        remote_scorer_identity,
+    )
     from .topic_records import TopicEvidenceSnapshot, TopicRecordsBuilder
 
     def execute(request: TopicExecutionRequest) -> TopicExecutionResult:
@@ -415,10 +442,35 @@ def _build_production_topic_executor(config: Any) -> Callable[[TopicExecutionReq
             hits=config.retrieval.documents_per_query,
             corpus_epoch=config.retrieval.corpus_epoch,
         )
-        passage_scorer = MixedbreadPassageScorer(
-            score_cache_root=config.passage.score_cache_dir,
-            device=config.passage.device,
-        )
+        configured_scorer_identity = None
+        if config.passage.scoring.backend == "runpod_flash":
+            scoring = config.passage.scoring
+            assert isinstance(scoring.endpoint_id_env, str)
+            assert isinstance(scoring.api_key_env, str)
+            assert isinstance(scoring.request_batch_size, int)
+            assert isinstance(scoring.timeout_seconds, int)
+            assert isinstance(scoring.max_retries, int)
+            predictor = RunpodFlashPassagePredictor(
+                endpoint_id=os.environ[scoring.endpoint_id_env],
+                api_key=os.environ[scoring.api_key_env],
+                request_batch_size=scoring.request_batch_size,
+                timeout_seconds=scoring.timeout_seconds,
+                max_retries=scoring.max_retries,
+            )
+            passage_scorer = MixedbreadPassageScorer(
+                score_cache_root=config.passage.score_cache_dir,
+                device=config.passage.device,
+                prediction_backend=predictor,
+                request_batch_size=scoring.request_batch_size,
+            )
+            configured_scorer_identity = remote_scorer_identity(
+                scoring.request_batch_size
+            )
+        else:
+            passage_scorer = MixedbreadPassageScorer(
+                score_cache_root=config.passage.score_cache_dir,
+                device=config.passage.device,
+            )
         chunker = SemanticTextChunker(
             ChunkingConfig(
                 max_characters=config.passage.chunk_max_characters,
@@ -438,6 +490,11 @@ def _build_production_topic_executor(config: Any) -> Callable[[TopicExecutionReq
             ),
             chunker=chunker,
         )
+        passage_search_options: dict[str, object] = {}
+        if configured_scorer_identity is not None:
+            passage_search_options["configured_scorer_identity"] = (
+                configured_scorer_identity
+            )
         passage_search = _build_topic_passage_search(
             request.topic,
             retriever=pyserini,
@@ -452,6 +509,7 @@ def _build_production_topic_executor(config: Any) -> Callable[[TopicExecutionReq
             passages_per_query=config.passage.passages_per_query,
             chunk_max_characters=config.passage.chunk_max_characters,
             chunk_overlap_characters=config.passage.chunk_overlap_characters,
+            **passage_search_options,
         )
         records = TopicRecordsBuilder(
             request.attempt.path / "topic_records",
@@ -617,6 +675,7 @@ def _run_agentic_retrieval(
     environment_loader(loaded.root_dir)
     runtime_environ = os.environ if environ is None else environ
     _check_secret_presence(runtime_environ)
+    _check_remote_scorer_environment(loaded, runtime_environ)
     binding = repository_probe(loaded.root_dir)
     if not isinstance(binding, AgenticRepositoryBinding):
         raise TypeError("repository_probe must return AgenticRepositoryBinding")

@@ -92,6 +92,22 @@ def _write_config(tmp_path: Path, text: str | None = None) -> Path:
     return path
 
 
+def _remote_config_text() -> str:
+    return _config_text().replace(
+        "  chunk_overlap_characters: 350\n",
+        """\
+  chunk_overlap_characters: 350
+  scoring:
+    backend: runpod_flash
+    endpoint_id_env: RUNPOD_PASSAGE_ENDPOINT_ID
+    api_key_env: RUNPOD_API_KEY
+    request_batch_size: 256
+    timeout_seconds: 900
+    max_retries: 3
+""",
+    )
+
+
 def test_canonical_agentic_config_loads_the_full_official_cohort() -> None:
     module = _agentic_module()
 
@@ -128,6 +144,85 @@ def test_canonical_config_pins_the_approved_production_limits() -> None:
     assert config.budget.no_progress_rounds == 2
     assert config.budget.soft_seconds is None
     assert config.budget.hard_seconds is None
+    assert config.passage.scoring.backend == "local"
+
+
+def test_config_accepts_remote_flash_scoring_without_embedding_endpoint_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _agentic_module()
+    monkeypatch.setattr(module, "find_repo_root", lambda _start: ROOT)
+
+    config = module.load_agentic_retrieval_config(
+        _write_config(tmp_path, _remote_config_text())
+    )
+
+    assert config.passage.scoring.backend == "runpod_flash"
+    assert config.passage.scoring.endpoint_id_env == "RUNPOD_PASSAGE_ENDPOINT_ID"
+    assert config.passage.scoring.api_key_env == "RUNPOD_API_KEY"
+    assert config.passage.scoring.request_batch_size == 256
+    assert config.passage.scoring.timeout_seconds == 900
+    assert config.passage.scoring.max_retries == 3
+    payload = config.resolved_payload(module.select_agentic_topics(config)[:1])
+    assert payload["passage"]["scoring"] == {
+        "backend": "runpod_flash",
+        "endpoint_id_env": "RUNPOD_PASSAGE_ENDPOINT_ID",
+        "api_key_env": "RUNPOD_API_KEY",
+        "request_batch_size": 256,
+        "timeout_seconds": 900,
+        "max_retries": 3,
+    }
+    assert "endpoint-1" not in repr(payload)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("request_batch_size: 256", "request_batch_size: 0", "request_batch_size"),
+        ("request_batch_size: 256", "request_batch_size: 257", "request_batch_size"),
+        ("timeout_seconds: 900", "timeout_seconds: 3601", "timeout_seconds"),
+        ("max_retries: 3", "max_retries: 6", "max_retries"),
+        (
+            "endpoint_id_env: RUNPOD_PASSAGE_ENDPOINT_ID",
+            "endpoint_id_env: lower-case-name",
+            "endpoint_id_env",
+        ),
+    ],
+)
+def test_remote_flash_scoring_rejects_invalid_bounds_and_environment_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    old: str,
+    new: str,
+    message: str,
+) -> None:
+    module = _agentic_module()
+    monkeypatch.setattr(module, "find_repo_root", lambda _start: ROOT)
+    text = _remote_config_text().replace(old, new)
+
+    with pytest.raises(ValueError, match=message):
+        module.load_agentic_retrieval_config(_write_config(tmp_path, text))
+
+
+def test_local_scoring_rejects_remote_only_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _agentic_module()
+    monkeypatch.setattr(module, "find_repo_root", lambda _start: ROOT)
+    text = _config_text().replace(
+        "  chunk_overlap_characters: 350\n",
+        """\
+  chunk_overlap_characters: 350
+  scoring:
+    backend: local
+    endpoint_id_env: RUNPOD_PASSAGE_ENDPOINT_ID
+""",
+    )
+
+    with pytest.raises(ValueError, match="remote-only"):
+        module.load_agentic_retrieval_config(_write_config(tmp_path, text))
 
 
 def test_config_accepts_two_topic_workers(

@@ -59,6 +59,7 @@ _BUDGET_LIMITS = {
 }
 
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_SAFE_ENVIRONMENT_NAME = re.compile(r"[A-Z][A-Z0-9_]*\Z")
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -116,6 +117,16 @@ class AgenticRetrievalSettings:
 
 
 @dataclass(frozen=True)
+class AgenticPassageScoringSettings:
+    backend: str
+    endpoint_id_env: str | None = None
+    api_key_env: str | None = None
+    request_batch_size: int | None = None
+    timeout_seconds: int | None = None
+    max_retries: int | None = None
+
+
+@dataclass(frozen=True)
 class AgenticPassageSettings:
     model: str
     revision: str
@@ -124,6 +135,7 @@ class AgenticPassageSettings:
     passages_per_query: int
     chunk_max_characters: int
     chunk_overlap_characters: int
+    scoring: AgenticPassageScoringSettings
 
 
 @dataclass(frozen=True)
@@ -169,6 +181,17 @@ class AgenticRetrievalConfig:
         topics = tuple(selected_topics)
         if any(not isinstance(topic, Topic) for topic in topics):
             raise TypeError("selected_topics must contain Topic values")
+        scoring: dict[str, object] = {"backend": self.passage.scoring.backend}
+        if self.passage.scoring.backend == "runpod_flash":
+            scoring.update(
+                {
+                    "endpoint_id_env": self.passage.scoring.endpoint_id_env,
+                    "api_key_env": self.passage.scoring.api_key_env,
+                    "request_batch_size": self.passage.scoring.request_batch_size,
+                    "timeout_seconds": self.passage.scoring.timeout_seconds,
+                    "max_retries": self.passage.scoring.max_retries,
+                }
+            )
         return {
             "schema_version": SCHEMA_VERSION,
             "retrieval_mode": self.retrieval_mode,
@@ -206,6 +229,7 @@ class AgenticRetrievalConfig:
                 "passages_per_query": self.passage.passages_per_query,
                 "chunk_max_characters": self.passage.chunk_max_characters,
                 "chunk_overlap_characters": self.passage.chunk_overlap_characters,
+                "scoring": scoring,
             },
             "snippets": {
                 "result_cache_dir": _portable_cache_path(
@@ -344,9 +368,70 @@ def load_agentic_retrieval_config(
             "passages_per_query",
             "chunk_max_characters",
             "chunk_overlap_characters",
+            "scoring",
         },
         "passage",
     )
+    scoring_value = passage_raw.get("scoring")
+    if scoring_value is None:
+        scoring = AgenticPassageScoringSettings(backend="local")
+    else:
+        scoring_raw = _strict_mapping(scoring_value, "passage.scoring")
+        backend = _require_text(scoring_raw, "backend", "passage.scoring")
+        if backend == "local":
+            remote_only = set(scoring_raw) - {"backend"}
+            if remote_only:
+                names = ", ".join(sorted(remote_only))
+                raise ValueError(
+                    "passage.scoring remote-only field(s) require runpod_flash: "
+                    + names
+                )
+            scoring = AgenticPassageScoringSettings(backend="local")
+        elif backend == "runpod_flash":
+            _reject_unknown(
+                scoring_raw,
+                {
+                    "backend",
+                    "endpoint_id_env",
+                    "api_key_env",
+                    "request_batch_size",
+                    "timeout_seconds",
+                    "max_retries",
+                },
+                "passage.scoring",
+            )
+            scoring = AgenticPassageScoringSettings(
+                backend=backend,
+                endpoint_id_env=_require_environment_name(
+                    scoring_raw, "endpoint_id_env", "passage.scoring"
+                ),
+                api_key_env=_require_environment_name(
+                    scoring_raw, "api_key_env", "passage.scoring"
+                ),
+                request_batch_size=_require_bounded_int(
+                    scoring_raw,
+                    "request_batch_size",
+                    "passage.scoring",
+                    minimum=1,
+                    maximum=256,
+                ),
+                timeout_seconds=_require_bounded_int(
+                    scoring_raw,
+                    "timeout_seconds",
+                    "passage.scoring",
+                    minimum=1,
+                    maximum=3_600,
+                ),
+                max_retries=_require_bounded_int(
+                    scoring_raw,
+                    "max_retries",
+                    "passage.scoring",
+                    minimum=0,
+                    maximum=5,
+                ),
+            )
+        else:
+            raise ValueError("passage.scoring.backend must be local or runpod_flash")
     passage = AgenticPassageSettings(
         model=_require_constant(
             passage_raw, "model", "passage", MIXEDBREAD_MODEL
@@ -377,6 +462,7 @@ def load_agentic_retrieval_config(
             "passage",
             CHUNK_OVERLAP_CHARACTERS,
         ),
+        scoring=scoring,
     )
 
     snippets_raw = _strict_mapping(raw.get("snippets"), "snippets")
@@ -545,6 +631,38 @@ def _require_positive_int(
     value = mapping.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{owner}.{key} must be a positive integer")
+    return value
+
+
+def _require_bounded_int(
+    mapping: dict[str, Any],
+    key: str,
+    owner: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = mapping.get(key)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or value > maximum
+    ):
+        raise ValueError(
+            f"{owner}.{key} must be an integer between {minimum} and {maximum}"
+        )
+    return value
+
+
+def _require_environment_name(
+    mapping: dict[str, Any],
+    key: str,
+    owner: str,
+) -> str:
+    value = _require_text(mapping, key, owner)
+    if _SAFE_ENVIRONMENT_NAME.fullmatch(value) is None:
+        raise ValueError(f"{owner}.{key} must be an uppercase environment variable name")
     return value
 
 

@@ -1430,6 +1430,7 @@ def _build_topic_passage_search(
     passages_per_query: int,
     chunk_max_characters: int,
     chunk_overlap_characters: int,
+    configured_scorer_identity: Mapping[str, object] | None = None,
     cache_only: bool = False,
     offline_source_document_store_root: Path | None = None,
 ) -> _TopicPassageSearchAdapter:
@@ -1467,6 +1468,7 @@ def _build_topic_passage_search(
         chunk_overlap_characters=chunk_overlap_characters,
         model=MIXEDBREAD_MODEL,
         device=device,
+        scorer_identity=configured_scorer_identity,
     )
     expected_scorer_identity = passage_identity["scorer"]
     if actual_scorer_identity != expected_scorer_identity:
@@ -2123,11 +2125,11 @@ def _configured_passage_search_identity(
     device: str,
     batch_size: int = 8,
     implementation_version: int = 1,
+    scorer_identity: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Return the config-bound shared-search identity used by both phases."""
-    return {
-        "schema_version": "topic-passage-search-v1",
-        "scorer": {
+    if scorer_identity is None:
+        configured_scorer: dict[str, object] = {
             "backend": PASSAGE_SCORER_BACKEND,
             "backend_version": PASSAGE_SCORER_BACKEND_VERSION,
             "model": model,
@@ -2139,7 +2141,23 @@ def _configured_passage_search_identity(
             "input_policy": PASSAGE_SCORER_INPUT_POLICY,
             "device": _choose_device(device),
             "implementation_version": implementation_version,
-        },
+        }
+    else:
+        configured_scorer = dict(scorer_identity)
+        if not configured_scorer:
+            raise ValueError("configured passage scorer identity must not be empty")
+        try:
+            json.dumps(
+                configured_scorer,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("configured passage scorer identity must be canonical JSON") from exc
+    return {
+        "schema_version": "topic-passage-search-v1",
+        "scorer": configured_scorer,
         "chunker": {
             "backend": "trec_rag.chunking.SemanticTextChunker",
             "max_characters": chunk_max_characters,

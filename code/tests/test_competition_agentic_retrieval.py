@@ -86,6 +86,7 @@ def _workspace(
     topic_count: int = 2,
     run_id: str = "agentic-cli-test",
     topic_workers: int = 1,
+    remote_scoring: bool = False,
 ) -> tuple[Path, tuple[Topic, ...]]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "AGENTS.md").write_text("# test root\n", encoding="utf-8")
@@ -113,6 +114,19 @@ def _workspace(
         encoding="utf-8",
     )
     config = tmp_path / "agentic.yaml"
+    scoring_block = (
+        """\
+  scoring:
+    backend: runpod_flash
+    endpoint_id_env: RUNPOD_PASSAGE_ENDPOINT_ID
+    api_key_env: RUNPOD_API_KEY
+    request_batch_size: 256
+    timeout_seconds: 900
+    max_retries: 3
+"""
+        if remote_scoring
+        else ""
+    )
     config.write_text(
         f"""\
 schema_version: agentic_retrieval_config_v1
@@ -140,7 +154,7 @@ passage:
   passages_per_query: 100
   chunk_max_characters: 3500
   chunk_overlap_characters: 350
-snippets:
+{scoring_block}snippets:
   result_cache_dir: cache/reranker/deepagent_snippets
   snippets_per_page: 10
 models:
@@ -465,6 +479,37 @@ def test_preflight_rejects_missing_secret_names_before_dependency_construction(
     assert all(value not in str(caught.value) for value in SECRETS.values())
 
 
+@pytest.mark.parametrize(
+    "missing_name",
+    ("RUNPOD_PASSAGE_ENDPOINT_ID", "RUNPOD_API_KEY"),
+)
+def test_remote_scorer_preflight_rejects_missing_environment_before_attempts(
+    tmp_path: Path,
+    missing_name: str,
+) -> None:
+    config, _topics = _workspace(tmp_path, remote_scoring=True)
+    built = 0
+
+    def factory(_config):
+        nonlocal built
+        built += 1
+        pytest.fail("live dependencies must not be constructed")
+
+    environ = {
+        **SECRETS,
+        "RUNPOD_PASSAGE_ENDPOINT_ID": "endpoint-1",
+        "RUNPOD_API_KEY": "runpod-secret-value",
+    }
+    environ.pop(missing_name)
+
+    with pytest.raises(AgenticRunnerError, match=missing_name) as caught:
+        _run(config, factory=factory, environ=environ)
+
+    assert built == 0
+    assert not (tmp_path / "outputs").exists()
+    assert "runpod-secret-value" not in str(caught.value)
+
+
 def test_preflight_rejects_dirty_or_changing_inputs_before_live_construction(
     tmp_path: Path,
 ) -> None:
@@ -734,16 +779,19 @@ def test_operational_failure_diagnostic_and_cli_output_never_leak_provider_text(
     assert provider_text not in diagnostic.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("remote_scoring", [False, True])
 def test_fake_provider_one_topic_run_uses_production_wiring_and_prints_json_receipt(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    remote_scoring: bool,
 ) -> None:
     import trec_rag.competition_retrieval as competition_retrieval
     import trec_rag.deepagent_retrieval as deepagent_retrieval
     import trec_rag.deepagent_snippets as deepagent_snippets
     import trec_rag.facet_retrieval as facet_retrieval
     import trec_rag.mixedbread_passage_scorer as mixedbread_passage_scorer
+    import trec_rag.runpod_passage_scorer as runpod_passage_scorer
     from trec_rag.deepagent_budget import BudgetSnapshot
     from trec_rag.deepagent_evidence import (
         EvidenceCoverageReport,
@@ -766,7 +814,11 @@ def test_fake_provider_one_topic_run_uses_production_wiring_and_prints_json_rece
         TopicRecordsBuilder,
     )
 
-    config, topics = _workspace(tmp_path, topic_count=1)
+    config, topics = _workspace(
+        tmp_path,
+        topic_count=1,
+        remote_scoring=remote_scoring,
+    )
     topic = topics[0]
     document = "Production-shaped offline evidence for the café narrative."
     document_sha256 = _digest(document)
@@ -826,6 +878,14 @@ def test_fake_provider_one_topic_run_uses_production_wiring_and_prints_json_rece
         def __new__(cls, **kwargs: object) -> object:
             constructed["score_cache"] = kwargs
             return scorer
+
+    class FakeRemotePredictor:
+        def __init__(self, endpoint_id: str, api_key: str, **kwargs: object) -> None:
+            assert api_key == "runpod-secret-value"
+            constructed["remote_predictor"] = {
+                "endpoint_id": endpoint_id,
+                **kwargs,
+            }
 
     class FakeSnippetRanker:
         def __init__(self, **kwargs: object) -> None:
@@ -969,6 +1029,11 @@ def test_fake_provider_one_topic_run_uses_production_wiring_and_prints_json_rece
         mixedbread_passage_scorer, "MixedbreadPassageScorer", FakePassageScorer
     )
     monkeypatch.setattr(
+        runpod_passage_scorer,
+        "RunpodFlashPassagePredictor",
+        FakeRemotePredictor,
+    )
+    monkeypatch.setattr(
         deepagent_snippets, "LocalMixedbreadSnippetRanker", FakeSnippetRanker
     )
     monkeypatch.setattr(
@@ -980,10 +1045,20 @@ def test_fake_provider_one_topic_run_uses_production_wiring_and_prints_json_rece
     monkeypatch.setattr(
         deepagent_retrieval, "DeepAgentRetriever", FakeProviderRetriever
     )
+    runtime_environ = dict(SECRETS)
+    if remote_scoring:
+        runtime_environ.update(
+            {
+                "RUNPOD_PASSAGE_ENDPOINT_ID": "endpoint-1",
+                "RUNPOD_API_KEY": "runpod-secret-value",
+            }
+        )
+        monkeypatch.setenv("RUNPOD_PASSAGE_ENDPOINT_ID", "endpoint-1")
+        monkeypatch.setenv("RUNPOD_API_KEY", "runpod-secret-value")
     runner = partial(
         _run_agentic_retrieval,
         environment_loader=lambda _root: None,
-        environ=SECRETS,
+        environ=runtime_environ,
         repository_probe=lambda _root: _binding(),
         topic_executor_factory=_build_production_topic_executor,
     )
@@ -999,10 +1074,30 @@ def test_fake_provider_one_topic_run_uses_production_wiring_and_prints_json_rece
     assert payload["executed_topic_ids"] == [topics[0].id]
     assert Path(payload["export_manifest"]).name == EXPORT_MANIFEST_FILENAME
     assert constructed["retrieval_cache_dir"] == tmp_path / "cache" / "retrieval" / "pyserini_remote"
-    assert constructed["score_cache"] == {
-        "score_cache_root": tmp_path / "cache" / "reranker",
-        "device": "auto",
-    }
+    if remote_scoring:
+        assert constructed["remote_predictor"] == {
+            "endpoint_id": "endpoint-1",
+            "request_batch_size": 256,
+            "timeout_seconds": 900,
+            "max_retries": 3,
+        }
+        assert constructed["score_cache"]["score_cache_root"] == (
+            tmp_path / "cache" / "reranker"
+        )
+        assert constructed["score_cache"]["device"] == "auto"
+        assert constructed["score_cache"]["request_batch_size"] == 256
+        assert isinstance(
+            constructed["score_cache"]["prediction_backend"],
+            FakeRemotePredictor,
+        )
+        assert constructed["passage_search"]["configured_scorer_identity"] == (
+            runpod_passage_scorer.remote_scorer_identity(256)
+        )
+    else:
+        assert constructed["score_cache"] == {
+            "score_cache_root": tmp_path / "cache" / "reranker",
+            "device": "auto",
+        }
     assert isinstance(constructed["records_builder"], TopicRecordsBuilder)
     records_path = (
         tmp_path
