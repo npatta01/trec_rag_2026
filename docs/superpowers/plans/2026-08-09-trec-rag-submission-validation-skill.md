@@ -45,15 +45,15 @@
 - Consumes: the real organizer-facing Retrieval TSV, official topics TSV, an available RAG JSONL, and the organizer AutoJudge command from the user-provided screenshot.
 - Produces: verbatim baseline behavior recorded under a `## Skill TDD Evidence` section in this plan, plus an initialized but not yet deployed skill directory.
 
-- [ ] **Step 1: Run a fresh-context baseline application scenario without the new skill**
+- [x] **Step 1: Run a fresh-context baseline application scenario without the new skill**
 
   Give one Luna xhigh agent only these inputs: the official topics TSV, one valid full Retrieval TSV, one malformed/incomplete RAG JSONL, and the instruction to validate both quickly using `autojudge-base>=0.4.3`. Require read-only behavior and a concrete verdict. Do not provide the intended routing rule or this design.
 
-- [ ] **Step 2: Verify RED and record the exact gap**
+- [x] **Step 2: Verify RED and record the exact gap**
 
   Record the agent's exact commands, verdicts, and rationale in this plan. RED is established if it sends Retrieval TSV to `report_tool`, omits Retrieval rank/score checks, reconstructs an ad hoc validator, cannot use the TSV topics with AutoJudge, or cannot produce one repeatable command for both tasks. If it succeeds fully, record the duplicated work or missing reusable interface that still motivates the deterministic skill.
 
-- [ ] **Step 3: Create an implementation branch inside the submodule**
+- [x] **Step 3: Create an implementation branch inside the submodule**
 
   Run:
 
@@ -64,7 +64,7 @@
 
   Expected: the new branch is active and the submodule worktree is clean.
 
-- [ ] **Step 4: Initialize the skill with the official scaffold tool**
+- [x] **Step 4: Initialize the skill with the official scaffold tool**
 
   Run:
 
@@ -80,7 +80,7 @@
 
   Expected: the skill folder, template `SKILL.md`, `agents/openai.yaml`, and empty `scripts/` directory are created. Do not treat the template as implemented or commit it yet.
 
-- [ ] **Step 5: Commit only the RED evidence update in the superproject**
+- [x] **Step 5: Commit only the RED evidence update in the superproject**
 
   ```bash
   git add docs/superpowers/plans/2026-08-09-trec-rag-submission-validation-skill.md
@@ -413,3 +413,14 @@
 - [ ] **Step 7: Final handoff**
 
   Report the skill path, supported commands, Retrieval/RAG validation evidence, submodule commit, superproject commit, and any warnings. Do not push, open a PR, or publish artifacts without separate authorization.
+
+## Skill TDD Evidence
+
+### RED baseline — 2026-08-09
+
+A fresh Luna xhigh agent received only the official topics TSV, one valid full Retrieval TSV, one malformed/incomplete RAG JSONL, and the organizer AutoJudge requirement. It remained read-only and reached the correct high-level verdicts, but only by reconstructing two one-off mechanisms:
+
+- It wrote an inline standard-library Retrieval parser to check six fields, `Q0`, exact 119-topic coverage, `shard_*_*` IDs, contiguous ranks, finite/non-increasing scores, and duplicates. That run passed with 4,246 rows and depths 1–121.
+- It manually converted the official topics TSV to temporary AutoJudge Request JSONL, then invoked isolated AutoJudge 0.4.4. The RAG file failed with a raw `JSONDecodeError` before submission checks ran.
+
+The baseline therefore demonstrated the target gap without a new skill: correct validation required ad hoc code and manual format adaptation, there was no stable combined command, and dependency/parser failures were not normalized into per-artifact results. The new skill must preserve the correct task routing while making it deterministic and repeatable.
