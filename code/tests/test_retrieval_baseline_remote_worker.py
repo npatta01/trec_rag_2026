@@ -17,6 +17,7 @@ from trec_rag.retrieval_baseline_input_bundle import (
     export_portable_score_cache,
     seal_input_directory,
 )
+from trec_rag.retrieval_baseline_collection import collect_remote_scoring
 from trec_rag.retrieval_baseline_remote_worker import (
     OFFICIAL_TOPIC_IDS,
     ordered_scoring_phases,
@@ -233,6 +234,12 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
         "trec_rag.retrieval_baseline_remote_worker.load_topic_input",
         topic_loader,
     )
+    monkeypatch.setattr(
+        "trec_rag.retrieval_baseline_collection.load_topic_input",
+        topic_loader,
+    )
+    source_revision = "b" * 40
+    monkeypatch.setenv("TREC_RAG_SOURCE_REVISION", source_revision)
     model = _Model()
     loader_calls = 0
 
@@ -274,3 +281,52 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
     assert (
         publication / "runs/narrative/r_output_trec_rag_2026.tsv"
     ).read_text(encoding="utf-8").count("\n") == 119
+
+    sums = publication / "SHA256SUMS"
+    lines = []
+    for path in sorted(
+        (path for path in publication.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(publication).as_posix(),
+    ):
+        relative = path.relative_to(publication).as_posix()
+        lines.append(f"{sha256(path.read_bytes()).hexdigest()}  ./{relative}\n")
+    sums.write_text("".join(lines), encoding="utf-8")
+    input_manifest_sha256 = sha256(
+        (input_dir / "input-manifest.json").read_bytes()
+    ).hexdigest()
+    publication_manifest = {
+        "input_manifest_sha256": input_manifest_sha256,
+        "remote_scoring_receipt_sha256": sha256(
+            (publication / "remote-scoring-receipt.json").read_bytes()
+        ).hexdigest(),
+        "schema_version": "retrieval-baseline-publication-v1",
+        "sha256s_sha256": sha256(sums.read_bytes()).hexdigest(),
+        "source_revision": source_revision,
+        "status": "complete",
+        "task_name": "candidate-core-all",
+    }
+    (publication / "publication-manifest.json").write_text(
+        json.dumps(publication_manifest, sort_keys=True, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    collected = collect_remote_scoring(
+        publication_dir=publication,
+        input_dir=input_dir,
+        expected_input_manifest_sha256=input_manifest_sha256,
+        expected_source_revision=source_revision,
+        shared_cache_root=tmp_path / "shared-cache",
+        work_root=tmp_path / "collection-work",
+        output_dir=tmp_path / "collection-output",
+        scorer_factory=lambda root: scorer_factory(root, True),
+    )
+
+    assert collected["status"] == "complete"
+    assert collected["fresh_replay"]["model_batches"] == 0
+    assert collected["shared_cache_final_replay"]["model_batches"] == 0
+    merge = json.loads(
+        (tmp_path / "collection-output/merge-receipt.json").read_text()
+    )
+    assert merge["before_row_count"] == 0
+    assert merge["after_row_count"] == merge["inserted_count"] == 238
