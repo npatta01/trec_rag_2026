@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
+import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,11 +18,21 @@ from trec_rag.generation_handoff import (
     TopicSourceReceipts,
 )
 from trec_rag.luna_splice_replay import (
+    _may_start_luna_call,
+    finalize_luna_splice_payload,
     assemble_luna_splice_candidate,
+    load_replay_source,
     luna_splice_response_schema,
     render_luna_splice_prompt,
 )
-from trec_rag.narrative_blueprint import project_blueprint, validate_blueprint
+from trec_rag.narrative_blueprint import (
+    project_blueprint,
+    render_blueprint_writer_context,
+    render_planner_prompt,
+    serialize_blueprint_state,
+    validate_blueprint,
+)
+from trec_rag.narrative_blueprint_trial import TRIAL_CONTRACT_VERSION
 
 
 def _topic() -> GenerationTopic:
@@ -181,3 +194,115 @@ def test_luna_splice_schema_and_local_validation_cap_operations_at_three() -> No
     too_many = {"decision": "edit", "operations": [deepcopy(operation) for _ in range(4)]}
     with pytest.raises(SpliceValidationError, match="at most three operations"):
         assemble_luna_splice_candidate(topic, draft, too_many)
+
+
+def _write_source_root(tmp_path, topic: GenerationTopic):
+    root = tmp_path / "source"
+    root.mkdir()
+    blueprint, projection = _blueprint(topic)
+    planner_hash = sha256(render_planner_prompt(topic).encode()).hexdigest()
+    writer_context = render_blueprint_writer_context(topic, blueprint, projection)
+    blueprint_state = serialize_blueprint_state(
+        topic,
+        blueprint,
+        projection,
+        planner_prompt_sha256=planner_hash,
+        writer_context_sha256=sha256(writer_context.encode()).hexdigest(),
+    )
+    files = {
+        "blueprint.state.json": blueprint_state,
+        "draft.record.json": _draft(topic),
+    }
+    hashes = {}
+    for name, value in files.items():
+        data = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        (root / name).write_text(data, encoding="utf-8")
+        hashes[name] = sha256(data.encode()).hexdigest()
+    state = {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "identity": {
+            "handoff_manifest_sha256": "h" * 64,
+            "topic_context_sha256": topic.context_sha256,
+        },
+        "stages": {"planner": True, "draft": True},
+        "stage_hashes": hashes,
+    }
+    (root / "state.json").write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_replay_source_loader_authenticates_handoff_topic_and_registered_files(tmp_path) -> None:
+    topic = _topic()
+    root = _write_source_root(tmp_path, topic)
+    config = SimpleNamespace(team_id="castorini", run_desc="replay", run_id="replay-run")
+    handoff = SimpleNamespace(manifest_sha256="h" * 64)
+
+    blueprint, projection, draft, source_hashes = load_replay_source(
+        root,
+        config=config,
+        handoff=handoff,
+        topic=topic,
+    )
+
+    assert blueprint == _blueprint(topic)[0]
+    assert projection == _blueprint(topic)[1]
+    assert draft["metadata"]["run_id"] == "replay-run-draft"
+    assert set(source_hashes) == {"state.json", "blueprint.state.json", "draft.record.json"}
+
+    bad_handoff = SimpleNamespace(manifest_sha256="x" * 64)
+    with pytest.raises(ValueError, match="handoff digest"):
+        load_replay_source(root, config=config, handoff=bad_handoff, topic=topic)
+
+    (root / "draft.record.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="stage hash mismatch"):
+        load_replay_source(root, config=config, handoff=handoff, topic=topic)
+
+
+def test_invalid_luna_payload_falls_back_to_validated_draft() -> None:
+    topic = _topic()
+    config = SimpleNamespace(team_id="castorini", run_desc="replay")
+    invalid = {
+        "decision": "edit",
+        "operations": [
+            {
+                "start_index": 1,
+                "delete_count": 0,
+                "new_object": {
+                    "text": "This citation is not linked to the named evidence alias.",
+                    "citations": ["DOC-B"],
+                },
+                "audit_card_ids": ["e001"],
+            }
+        ],
+    }
+
+    final, used_fallback, error = finalize_luna_splice_payload(
+        topic,
+        _draft(topic),
+        invalid,
+        config=config,
+        run_id="replay-run-final",
+    )
+
+    assert used_fallback is True
+    assert "linked audit-card evidence" in error
+    assert final["answer"] == _draft(topic)["answer"]
+    assert final["metadata"]["run_id"] == "replay-run-final"
+
+
+def test_resume_never_repeats_an_ambiguous_pending_semantic_call() -> None:
+    with pytest.raises(RuntimeError, match="ambiguous pending Luna call"):
+        _may_start_luna_call(
+            state_mode="resume",
+            reservation_status="pending",
+            receipt_outcome=None,
+        )
+
+    assert _may_start_luna_call(
+        state_mode="resume",
+        reservation_status="terminal_transport_failure",
+        receipt_outcome="terminal_transport_failure",
+    )
