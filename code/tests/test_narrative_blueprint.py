@@ -36,6 +36,8 @@ from trec_rag.narrative_blueprint import (
 )
 from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
+    _bounded_identity,
+    _bounded_private_root,
     _bounded_provider_call,
     _bounded_recover_pending,
     _bounded_manifest,
@@ -875,6 +877,143 @@ def test_recover_blueprint_for_deadline_keeps_unrelated_errors_fail_closed() -> 
 
     with pytest.raises(BlueprintValidationError, match="unknown claim alias"):
         recover_blueprint_for_deadline(_topic_fixture(), payload)
+
+
+def test_bounded_resume_reuses_and_records_deadline_planner_fallback(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    topic = _topic_fixture()
+    handoff = GenerationHandoff(
+        producer=HandoffProducer(
+            source_contract=SOURCE_CONTRACT,
+            retrieval_run_id="fixture-retrieval",
+            producer_revision="fixture-revision",
+        ),
+        topics=(topic,),
+    )
+    output_dir = tmp_path / "outputs/bounded-planner-fallback"
+    config = RagGenerationConfig(
+        schema_version="competition_rag_config_v2",
+        handoff_manifest_path=tmp_path / "handoff.json",
+        output_path=output_dir / "rag_output_trec_rag_2026.jsonl",
+        work_dir=output_dir / "work",
+        team_id="castorini",
+        run_id="bounded-planner-fallback",
+        run_desc="Bounded planner fallback fixture.",
+        topic_ids=(topic.topic_id,),
+        concurrency=1,
+        resume=True,
+        overwrite=False,
+        provider="openrouter",
+        api_base="https://openrouter.invalid/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        structured_output="strict_schema",
+        temperature=None,
+        max_tokens=12000,
+        timeout_seconds=30.0,
+        transport_max_attempts=1,
+    )
+    root = _bounded_private_root(config, topic)
+    (root / "receipts").mkdir(parents=True)
+    planner_payload = _valid_payload()
+    planner_payload["obligations"][0]["target_words"] = 360
+    planner_payload["obligations"][1]["target_words"] = 320
+    planner_payload["obligations"][2]["target_words"] = 320
+    state = {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "identity": _bounded_identity(config, handoff, topic),
+        "stages": {
+            "planner": False,
+            "draft": False,
+            "audit_groups": [],
+            "audit_merge": False,
+            "revision": False,
+            "operation_screen": False,
+            "final": False,
+        },
+        "stage_hashes": {},
+        "luna_reservations": [
+            {
+                "ordinal": 1,
+                "stage": "planner",
+                "status": "semantic_returned",
+                "receipt": "receipts/planner.json",
+            }
+        ],
+        "sol_reservations": [],
+        "recovered_payloads": {"planner": planner_payload},
+        "calls": [],
+        "failure": None,
+    }
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    valid_draft = {
+        "references": [topic.citation_docids[0]],
+        "answer": [
+            {
+                "text": "The recovered plan produced a valid answer.",
+                "citations": [topic.citation_docids[0]],
+            }
+        ],
+    }
+    payloads = {
+        "draft": valid_draft,
+        "audit-g001": {"cards": []},
+        "audit-g002": {"cards": []},
+        "revision": {"decision": "keep_draft", "operations": []},
+    }
+    invoked: list[str] = []
+
+    async def fake_provider_call(_generator, **kwargs):
+        stage = kwargs["stage"]
+        invoked.append(stage)
+        return payloads[stage], {
+            "stage": stage,
+            "model": kwargs["model"],
+            "reasoning_effort": kwargs["reasoning_effort"],
+            "prompt_sha256": _digest_text(kwargs["user_prompt"]),
+            "schema_sha256": _digest_json(kwargs["response_schema"]),
+            "reservation_ordinal": kwargs["reservation_ordinal"],
+            "outcome": "semantic_success",
+            "latency_seconds": 0.01,
+            "provider_cost": 0.0,
+            "usage": {},
+            "transport_outcome": "response",
+            "error": None,
+        }
+
+    monkeypatch.setattr(
+        narrative_blueprint_trial,
+        "_bounded_provider_call",
+        fake_provider_call,
+    )
+
+    completed_root = asyncio.run(
+        narrative_blueprint_trial._run_bounded_revision(
+            config,
+            handoff,
+            topic,
+            api_key="fixture-key",
+            state_mode="resume",
+        )
+    )
+
+    completed_state = json.loads(
+        (completed_root / "state.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(
+        (completed_root / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert invoked == ["draft", "audit-g001", "audit-g002", "revision"]
+    assert completed_state["stages"]["planner"] is True
+    assert completed_state["stages"]["final"] is True
+    assert completed_state["planner_fallback"] == {
+        "validator_error": "target_words total must be within 850-950",
+        "actions": ["target_words_scaled"],
+    }
+    assert manifest["planner_fallback"] == completed_state["planner_fallback"]
 
 
 def test_must_widens_to_full_selected_groups_but_should_stays_claim_linked() -> None:
