@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import fcntl
@@ -1598,6 +1599,7 @@ def validate_retrieval_topic_checkpoints(
     *,
     expected_retriever_identity: Mapping[str, object],
     expected_decomposition_producer_sha256: Mapping[str, str],
+    max_workers: int = 1,
 ) -> tuple[TopicProjectionReceipt, ...]:
     """Deeply validate and return selected projection receipts in topic order."""
     expected_identity = _require_expected_retriever_identity(
@@ -1606,6 +1608,8 @@ def validate_retrieval_topic_checkpoints(
     selected_topics = tuple(topics)
     if not selected_topics:
         return ()
+    if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
+        raise ValueError("max_workers must be a positive integer")
     _validate_topics(selected_topics)
     expected_producers = dict(expected_decomposition_producer_sha256)
     if set(expected_producers) != {topic.id for topic in selected_topics} or any(
@@ -1613,37 +1617,47 @@ def validate_retrieval_topic_checkpoints(
         for value in expected_producers.values()
     ):
         raise ValueError("expected decomposition producer seals are invalid")
-    receipts: list[TopicProjectionReceipt] = []
-    for topic in selected_topics:
-        try:
-            receipt = read_topic_projection_receipt(config, topic)
-            rebuilt = _load_topic_projection(
-                config,
-                topic,
-                config_sha256=dict(receipt.source_seals)["config_sha256"],
-                expected_retriever_identity=expected_identity,
-                decomposition_producer_sha256=expected_producers[topic.id],
-            )
-        except OSError as exc:
-            raise ValueError("sealed topic checkpoint is incomplete") from exc
-        organizer_rows = _projection_document_records(rebuilt)
-        if len(organizer_rows) != 1:
-            raise ValueError("rebuilt organizer projection row count changed")
-        organizer_bytes = _jsonl_bytes(organizer_rows)
-        if (
-            len(organizer_bytes) != receipt.projection_bytes
-            or sha256(organizer_bytes).hexdigest() != receipt.projection_sha256
-        ):
-            raise ValueError("rebuilt organizer projection differs from receipt")
-        generation_bytes = serialize_generation_topic(rebuilt.generation_topic)
-        if (
-            len(generation_bytes) != receipt.generation.projection_bytes
-            or sha256(generation_bytes).hexdigest()
-            != receipt.generation.projection_sha256
-        ):
-            raise ValueError("rebuilt generation projection differs from receipt")
-        receipts.append(receipt)
-    return tuple(receipts)
+    tasks = tuple(
+        (config, topic, expected_identity, expected_producers[topic.id])
+        for topic in selected_topics
+    )
+    if max_workers == 1 or len(tasks) == 1:
+        return tuple(_validate_retrieval_topic_checkpoint(task) for task in tasks)
+    with ProcessPoolExecutor(max_workers=min(max_workers, len(tasks))) as executor:
+        return tuple(executor.map(_validate_retrieval_topic_checkpoint, tasks))
+
+
+def _validate_retrieval_topic_checkpoint(
+    task: tuple[FacetPilotConfig, Topic, Mapping[str, object], str],
+) -> TopicProjectionReceipt:
+    config, topic, expected_identity, expected_producer = task
+    try:
+        receipt = read_topic_projection_receipt(config, topic)
+        rebuilt = _load_topic_projection(
+            config,
+            topic,
+            config_sha256=dict(receipt.source_seals)["config_sha256"],
+            expected_retriever_identity=expected_identity,
+            decomposition_producer_sha256=expected_producer,
+        )
+    except OSError as exc:
+        raise ValueError("sealed topic checkpoint is incomplete") from exc
+    organizer_rows = _projection_document_records(rebuilt)
+    if len(organizer_rows) != 1:
+        raise ValueError("rebuilt organizer projection row count changed")
+    organizer_bytes = _jsonl_bytes(organizer_rows)
+    if (
+        len(organizer_bytes) != receipt.projection_bytes
+        or sha256(organizer_bytes).hexdigest() != receipt.projection_sha256
+    ):
+        raise ValueError("rebuilt organizer projection differs from receipt")
+    generation_bytes = serialize_generation_topic(rebuilt.generation_topic)
+    if (
+        len(generation_bytes) != receipt.generation.projection_bytes
+        or sha256(generation_bytes).hexdigest() != receipt.generation.projection_sha256
+    ):
+        raise ValueError("rebuilt generation projection differs from receipt")
+    return receipt
 
 
 def build_topic_projection(
@@ -3622,7 +3636,7 @@ def _validate_original_only_scoring(
     if (
         cross_scores
         or any(document.selected_from_lane != "original" for document in selected)
-        or {lane_name for _docid, lane_name in lane_scores} != {"original"}
+        or any(lane_name != "original" for _docid, lane_name in lane_scores)
     ):
         raise ValueError("original-only fallback scoring contains downstream data")
 

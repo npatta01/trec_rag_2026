@@ -25,14 +25,20 @@ from .agentic_generation_export import AgenticTopicProjection
 from .agentic_run_state import (
     AgenticRunPlan,
     AgenticRunStateError,
+    RUN_PLAN_FILENAME,
+    RUN_PLAN_RECEIPT_FILENAME,
     SubmoduleRevision,
     TopicAttempt,
     allocate_topic_attempt,
     create_run_plan,
+    deserialize_run_plan,
+    install_run_plan,
+    install_run_plan_receipt,
     load_run_plan,
     resume_run_plan,
     seal_topic_success,
     select_run_topics,
+    serialize_run_plan,
 )
 from .topics import Topic
 
@@ -57,6 +63,10 @@ class AgenticRunnerError(RuntimeError):
             raise ValueError("runner error message must be non-empty text")
         super().__init__(message)
         self.code = code
+
+
+class AgenticWorkerError(AgenticRunnerError):
+    """Assigned-worker validation or execution failure."""
 
 
 class TopicOperationalError(RuntimeError):
@@ -144,6 +154,36 @@ class TopicExecutionResult:
 
 
 @dataclass(frozen=True)
+class AgenticTopicOutcome:
+    """Machine-readable result for one assigned topic."""
+
+    topic_id: str
+    status: str
+    stopping_reason: str
+    attempt_number: int | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.topic_id, str) or not self.topic_id:
+            raise ValueError("topic outcome requires a topic ID")
+        if self.status not in {"complete", "incomplete", "failed", "skipped"}:
+            raise ValueError("invalid topic outcome status")
+        if not isinstance(self.stopping_reason, str) or _SAFE_CODE.fullmatch(
+            self.stopping_reason
+        ) is None:
+            raise ValueError("topic outcome reason must be safe snake-case text")
+        if self.attempt_number is not None and self.attempt_number <= 0:
+            raise ValueError("topic outcome attempt number must be positive")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "topic_id": self.topic_id,
+            "status": self.status,
+            "stopping_reason": self.stopping_reason,
+            "attempt_number": self.attempt_number,
+        }
+
+
+@dataclass(frozen=True)
 class AgenticRunReceipt:
     """Concise, non-secret outcome for one create or resume invocation."""
 
@@ -180,6 +220,49 @@ class AgenticRunReceipt:
         if self.resume_command is not None:
             payload["resume_command"] = self.resume_command
         return payload
+
+
+@dataclass(frozen=True)
+class AgenticRunPlanReceipt:
+    """Machine-readable result of freezing an agentic run without execution."""
+
+    plan: AgenticRunPlan
+    output_dir: Path
+    plan_path: Path
+    receipt_path: Path
+
+    @property
+    def run_id(self) -> str:
+        return self.plan.run_id
+
+    @property
+    def run_plan(self) -> AgenticRunPlan:
+        return self.plan
+
+    @property
+    def plan_sha256(self) -> str:
+        return self.plan.plan_sha256
+
+    @property
+    def planned_topic_ids(self) -> tuple[str, ...]:
+        return self.plan.planned_topic_ids
+
+    @property
+    def complete(self) -> bool:
+        return True
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "status": "initialized",
+            "run_id": self.plan.run_id,
+            "output_dir": str(self.output_dir),
+            "plan_path": str(self.plan_path),
+            "receipt_path": str(self.receipt_path),
+            "plan_sha256": self.plan.plan_sha256,
+            "config_sha256": self.plan.config_sha256,
+            "topics_source_sha256": self.plan.topics_source_sha256,
+            "planned_topic_ids": list(self.plan.planned_topic_ids),
+        }
 
 
 def _run_git(repo: Path, arguments: Sequence[str]) -> str:
@@ -493,6 +576,195 @@ def _build_production_topic_executor(config: Any) -> Callable[[TopicExecutionReq
     return execute
 
 
+def initialize_agentic_run(
+    config: str | Path,
+    *,
+    topic_ids: Sequence[str] | None = None,
+    repository_probe: Callable[[Path], AgenticRepositoryBinding] | None = None,
+) -> AgenticRunPlanReceipt:
+    """Freeze and validate the run plan without constructing live dependencies."""
+
+    if topic_ids is None:
+        requested_ids: tuple[str, ...] = ()
+    else:
+        if isinstance(topic_ids, (str, bytes)):
+            raise TypeError("topic_ids must be a sequence of topic IDs")
+        requested_ids = tuple(topic_ids)
+        if any(not isinstance(topic_id, str) for topic_id in requested_ids):
+            raise TypeError("topic_ids must contain text identities")
+
+    config_path = Path(config).resolve()
+    config_bytes = _read_stable(config_path, label="agentic config")
+    try:
+        from .agentic_retrieval_config import (
+            load_agentic_retrieval_config,
+            select_agentic_topics,
+        )
+
+        loaded = load_agentic_retrieval_config(
+            config_path, source_bytes=config_bytes
+        )
+        topic_source_bytes = _read_stable(
+            loaded.topics_path, label="official topic source"
+        )
+        cohort = tuple(
+            select_agentic_topics(loaded, topic_ids=requested_ids)
+        )
+    except AgenticRunnerError:
+        raise
+    except Exception as exc:
+        raise AgenticRunnerError(
+            "config_invalid", "agentic configuration or topic source is invalid"
+        ) from exc
+    if not cohort:
+        raise AgenticRunnerError(
+            "topic_selection_empty", "initialization requires at least one selected topic"
+        )
+
+    # This is the sole source-binding check in initialization.  It reads Git
+    # metadata only; no environment or remote runtime dependency is needed.
+    probe = _probe_repository if repository_probe is None else repository_probe
+    binding = probe(loaded.root_dir)
+    if not isinstance(binding, AgenticRepositoryBinding):
+        raise TypeError("repository_probe must return AgenticRepositoryBinding")
+    _require_unchanged(config_path, config_bytes, label="agentic config")
+    _require_unchanged(
+        loaded.topics_path,
+        topic_source_bytes,
+        label="official topic source",
+    )
+    official_topics_sha256 = sha256(topic_source_bytes).hexdigest()
+    work_dir = loaded.output_dir / "work"
+    try:
+        plan = create_run_plan(
+            work_dir=work_dir,
+            run_id=loaded.run_id,
+            config_bytes=config_bytes,
+            topics=cohort,
+            official_topics_sha256=official_topics_sha256,
+            source_revision=binding.source_revision,
+            submodule_revisions=binding.submodule_revisions,
+            allow_existing_identical=True,
+        )
+        receipt_body = install_run_plan_receipt(
+            work_dir=work_dir,
+            plan=plan,
+        )
+    except AgenticRunStateError as exc:
+        raise AgenticRunnerError("run_state_invalid", str(exc)) from exc
+    except Exception as exc:
+        raise AgenticRunnerError(
+            "run_state_invalid", "unable to publish the authenticated run plan"
+        ) from exc
+    receipt_path = work_dir / RUN_PLAN_RECEIPT_FILENAME
+    if receipt_path.read_bytes() != receipt_body:
+        raise AgenticRunnerError(
+            "run_state_invalid", "published run plan receipt changed"
+        )
+    return AgenticRunPlanReceipt(
+        plan=plan,
+        output_dir=loaded.output_dir,
+        plan_path=work_dir / RUN_PLAN_FILENAME,
+        receipt_path=receipt_path,
+    )
+
+
+def _execute_agentic_topic_selection(
+    *,
+    loaded: Any,
+    work_dir: Path,
+    plan: AgenticRunPlan,
+    cohort: Sequence[Topic],
+    selection: Any,
+    official_topics_sha256: str,
+    topic_executor_factory: Callable[[Any], Callable[[TopicExecutionRequest], TopicExecutionResult]],
+) -> tuple[tuple[str, ...], tuple[AgenticTopicOutcome, ...]]:
+    """Execute only a validated selection; aggregate export is deliberately absent."""
+
+    topic_by_id = {topic.id: topic for topic in cohort}
+    outcomes: list[AgenticTopicOutcome] = [
+        AgenticTopicOutcome(topic_id, "skipped", "already_sealed", None)
+        for topic_id in selection.completed_topic_ids
+        if topic_id in topic_by_id
+    ]
+    executed: list[str] = []
+    if not selection.execute_topic_ids:
+        return tuple(executed), tuple(outcomes)
+    executor = topic_executor_factory(loaded)
+    if not callable(executor):
+        raise TypeError("topic_executor_factory must return a callable")
+    invoked: set[str] = set()
+    for topic_id in selection.execute_topic_ids:
+        if topic_id in invoked:
+            raise AgenticRunnerError(
+                "duplicate_execution", "one topic cannot execute twice in one invocation"
+            )
+        invoked.add(topic_id)
+        topic = topic_by_id[topic_id]
+        try:
+            attempt = allocate_topic_attempt(
+                work_dir=work_dir,
+                plan=plan,
+                topic_id=topic_id,
+            )
+        except AgenticRunStateError as exc:
+            raise AgenticRunnerError("run_state_invalid", str(exc)) from exc
+        request = TopicExecutionRequest(
+            topic=topic,
+            plan=plan,
+            attempt=attempt,
+            official_topics_sha256=official_topics_sha256,
+        )
+        executed.append(topic_id)
+        try:
+            result = executor(request)
+        except TopicOperationalError as exc:
+            attempt.write_artifact(
+                "failure.json", _failure_body(request, exc.reason)
+            )
+            outcomes.append(
+                AgenticTopicOutcome(
+                    topic_id, "failed", exc.reason, attempt.attempt_number
+                )
+            )
+            continue
+        if not isinstance(result, TopicExecutionResult):
+            raise TypeError("topic executor must return TopicExecutionResult")
+        if result.status == "incomplete":
+            attempt.write_artifact(
+                "failure.json",
+                _failure_body(request, result.stopping_reason),
+            )
+            outcomes.append(
+                AgenticTopicOutcome(
+                    topic_id,
+                    "incomplete",
+                    result.stopping_reason,
+                    attempt.attempt_number,
+                )
+            )
+            continue
+        try:
+            seal_topic_success(
+                work_dir=work_dir,
+                plan=plan,
+                projection=result.projection,
+                attempt=attempt,
+                status="complete",
+                stopping_reason=result.stopping_reason,
+                synthesis_outcome=result.synthesis_outcome,
+                records_receipt=result.records_receipt,
+            )
+        except AgenticRunStateError as exc:
+            raise AgenticRunnerError("topic_seal_invalid", str(exc)) from exc
+        outcomes.append(
+            AgenticTopicOutcome(
+                topic_id, "complete", result.stopping_reason, attempt.attempt_number
+            )
+        )
+    return tuple(executed), tuple(outcomes)
+
+
 def run_agentic_retrieval(
     config: str | Path,
     *,
@@ -636,63 +908,15 @@ def _run_agentic_retrieval(
         ) from exc
 
     os.environ["HF_HOME"] = str(loaded.caches.model_cache_dir)
-    topic_by_id = {topic.id: topic for topic in cohort}
-    executed: list[str] = []
-    if selection.execute_topic_ids:
-        executor = topic_executor_factory(loaded)
-        if not callable(executor):
-            raise TypeError("topic_executor_factory must return a callable")
-        invoked: set[str] = set()
-        for topic_id in selection.execute_topic_ids:
-            if topic_id in invoked:
-                raise AgenticRunnerError(
-                    "duplicate_execution", "one topic cannot execute twice in one invocation"
-                )
-            invoked.add(topic_id)
-            topic = topic_by_id[topic_id]
-            try:
-                attempt = allocate_topic_attempt(
-                    work_dir=work_dir,
-                    plan=plan,
-                    topic_id=topic_id,
-                )
-            except AgenticRunStateError as exc:
-                raise AgenticRunnerError("run_state_invalid", str(exc)) from exc
-            request = TopicExecutionRequest(
-                topic=topic,
-                plan=plan,
-                attempt=attempt,
-                official_topics_sha256=official_topics_sha256,
-            )
-            executed.append(topic_id)
-            try:
-                result = executor(request)
-            except TopicOperationalError as exc:
-                attempt.write_artifact(
-                    "failure.json", _failure_body(request, exc.reason)
-                )
-                continue
-            if not isinstance(result, TopicExecutionResult):
-                raise TypeError("topic executor must return TopicExecutionResult")
-            if result.status == "incomplete":
-                attempt.write_artifact(
-                    "failure.json",
-                    _failure_body(request, result.stopping_reason),
-                )
-                continue
-            try:
-                seal_topic_success(
-                    work_dir=work_dir,
-                    plan=plan,
-                    projection=result.projection,
-                    attempt=attempt,
-                    status="complete",
-                    stopping_reason=result.stopping_reason,
-                    synthesis_outcome=result.synthesis_outcome,
-                    records_receipt=result.records_receipt,
-                )
-            except AgenticRunStateError as exc:
-                raise AgenticRunnerError("topic_seal_invalid", str(exc)) from exc
+    executed, _outcomes = _execute_agentic_topic_selection(
+        loaded=loaded,
+        work_dir=work_dir,
+        plan=plan,
+        cohort=cohort,
+        selection=selection,
+        official_topics_sha256=official_topics_sha256,
+        topic_executor_factory=topic_executor_factory,
+    )
 
     try:
         final_selection = select_run_topics(
@@ -746,6 +970,7 @@ def _parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Create: %(prog)s CONFIG [--topic ID ...]\n"
+            "Initialize only: %(prog)s CONFIG --initialize-only [--topic ID ...]\n"
             "Resume all outstanding: %(prog)s CONFIG --resume\n"
             "Repair selected topics: %(prog)s CONFIG --resume --topic ID"
         ),
@@ -756,6 +981,11 @@ def _parser() -> argparse.ArgumentParser:
         "--resume",
         action="store_true",
         help="validate the existing run plan and execute outstanding topics",
+    )
+    parser.add_argument(
+        "--initialize-only",
+        action="store_true",
+        help="freeze and authenticate the run plan without executing topics",
     )
     parser.add_argument(
         "--topic",
@@ -776,13 +1006,26 @@ def _main(
 ) -> int:
     args = _parser().parse_args(argv)
     try:
-        receipt = runner(
-            args.config,
-            resume=args.resume,
-            topic_ids=(
-                None if args.topic_ids is None else tuple(args.topic_ids)
-            ),
-        )
+        if args.initialize_only:
+            if args.resume:
+                raise AgenticRunnerError(
+                    "invalid_arguments",
+                    "--initialize-only cannot be combined with --resume",
+                )
+            receipt = initialize_agentic_run(
+                args.config,
+                topic_ids=(
+                    None if args.topic_ids is None else tuple(args.topic_ids)
+                ),
+            )
+        else:
+            receipt = runner(
+                args.config,
+                resume=args.resume,
+                topic_ids=(
+                    None if args.topic_ids is None else tuple(args.topic_ids)
+                ),
+            )
     except AgenticRunnerError as exc:
         print(
             json.dumps(
@@ -820,11 +1063,17 @@ if __name__ == "__main__":
 
 __all__ = [
     "AgenticRepositoryBinding",
+    "AgenticRunPlanReceipt",
     "AgenticRunReceipt",
     "AgenticRunnerError",
+    "AgenticTopicOutcome",
+    "AgenticWorkerError",
     "TopicExecutionRequest",
     "TopicExecutionResult",
     "TopicOperationalError",
+    "deserialize_run_plan",
+    "install_run_plan",
+    "initialize_agentic_run",
     "main",
     "run_agentic_retrieval",
 ]

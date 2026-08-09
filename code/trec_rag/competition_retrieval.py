@@ -3023,6 +3023,49 @@ def _validated_existing_topic_job_receipt(
     )
 
 
+def _validated_existing_topic_job_envelope(
+    config: FacetPilotConfig,
+    topic: Topic,
+    sealed: TopicJobReceipt,
+    *,
+    expected_config_sha256: str,
+    planning_backend: Any | None,
+    operation_mode: str,
+) -> TopicJobReceipt:
+    """Validate cheap run-bound seals before the final deep checkpoint pass."""
+    if sealed.topic_id != topic.id:
+        raise ValueError("topic dispatch receipt topic identity changed")
+    projection = read_topic_projection_receipt(config, topic)
+    if (
+        projection.topic_id != topic.id
+        or projection.manifest_sha256 != sealed.projection_manifest_sha256
+    ):
+        raise ValueError("topic dispatch receipt differs from projection seal")
+    if (
+        projection.retrieval_status != sealed.status
+        or projection.retrieval_stopping_reason != sealed.stopping_reason
+    ):
+        raise ValueError("topic dispatch receipt completion differs from projection")
+    source_seals = dict(projection.source_seals)
+    if source_seals.get("config_sha256") != expected_config_sha256:
+        raise ValueError("projection config identity changed")
+    producer_sha256 = _decomposition_producer_sha256(
+        topic,
+        config.output_dir,
+        planning_backend,
+    )
+    if source_seals.get("decomposition_producer_sha256") != producer_sha256:
+        raise ValueError("projection decomposition producer identity changed")
+    _read_topic_cache_operation_receipt(
+        config=config,
+        topic=topic,
+        config_sha256=expected_config_sha256,
+        projection_manifest_sha256=projection.manifest_sha256,
+        mode=operation_mode,
+    )
+    return sealed
+
+
 def _run_production_topic_job(job: TopicJob) -> TopicJobReceipt:
     """Construct all live dependencies inside one topic worker process."""
     if not isinstance(job, TopicJob):
@@ -3482,16 +3525,15 @@ def _run_official(
         sealed = read_topic_receipt(job, missing_ok=True)
         if sealed is None:
             continue
-        recovered = _validated_existing_topic_job_receipt(
+        recovered = _validated_existing_topic_job_envelope(
             loaded_config,
             topic,
+            sealed,
             expected_config_sha256=job.config_sha256,
-            expected_retriever_identity=expected_retriever_identity,
             planning_backend=resume_planning_backend,
             operation_mode=(
                 "offline-cache-only" if job.offline_cache_only else "online"
             ),
-            allow_missing_operation_receipt=False,
         )
         if recovered != sealed:
             raise ValueError("topic dispatch receipt differs from validated projection")
@@ -3617,6 +3659,7 @@ def _run_official(
         selected_topics,
         expected_retriever_identity=expected_retriever_identity,
         expected_decomposition_producer_sha256=decomposition_producer_sha256s,
+        max_workers=min(8, os.cpu_count() or 1),
     )
     if len(dispatched_receipts) != len(ordered_receipts):
         raise RuntimeError(

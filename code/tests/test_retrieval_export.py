@@ -2897,6 +2897,7 @@ def test_projection_receipt_reader_roundtrips_and_checkpoint_validation_preserve
         expected_decomposition_producer_sha256={
             topic.id: _FIXTURE_DECOMPOSITION_PRODUCER_SHA256 for topic in topics
         },
+        max_workers=2,
     ) == (receipts[1], receipts[0])
 
 

@@ -44,6 +44,16 @@ def _require_text(value: str, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must be text without unsafe control characters")
 
 
+def _require_exact_content(value: str, *, field_name: str) -> None:
+    """Accept exact corpus/model content while requiring UTF-8 serializability."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be exact UTF-8 text")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} must be exact UTF-8 text") from exc
+
+
 def _require_docid(value: str) -> None:
     if not isinstance(value, str) or not value or _CONTROL.search(value):
         raise ValueError("docid must be non-empty text without control characters")
@@ -194,7 +204,7 @@ class EvidenceBundle:
         document_map: dict[str, BundleDocument] = {}
         for document in self.documents:
             _require_docid(document.docid)
-            _require_text(document.text, field_name="document text")
+            _require_exact_content(document.text, field_name="document text")
             _require_sha256(document.text_sha256, field_name="document text_sha256")
             if _digest(document.text) != document.text_sha256:
                 raise ValueError(f"document text_sha256 mismatch for {document.docid}")
@@ -317,7 +327,7 @@ class EvidenceBundle:
         for span in self.evidence:
             _require_identifier(span.evidence_id, field_name="evidence_id")
             _require_docid(span.docid)
-            _require_text(span.text, field_name="evidence text")
+            _require_exact_content(span.text, field_name="evidence text")
             _require_sha256(span.text_sha256, field_name="evidence text_sha256")
             _require_identifier(span.selector, field_name="evidence selector")
             _require_sha256(span.source_document_sha256, field_name="source_document_sha256")
@@ -354,7 +364,7 @@ class EvidenceBundle:
         nugget_map: dict[str, BundleNugget] = {}
         for nugget in self.nuggets:
             _require_identifier(nugget.nugget_id, field_name="nugget_id")
-            _require_text(nugget.text, field_name="nugget text")
+            _require_exact_content(nugget.text, field_name="nugget text")
             _require_sha256(nugget.text_sha256, field_name="nugget text_sha256")
             _require_identifier(nugget.nugget_kind, field_name="nugget_kind")
             if nugget.subnarrative_id is not None:

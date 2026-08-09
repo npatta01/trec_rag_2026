@@ -21,6 +21,7 @@ from trec_rag.agentic_retrieval_export import (
     RETRIEVAL_WITH_TEXT_FILENAME,
 )
 from trec_rag.agentic_run_state import SubmoduleRevision, load_run_plan
+import trec_rag.competition_agentic_retrieval as agentic_retrieval
 from trec_rag.competition_agentic_retrieval import (
     AgenticRepositoryBinding,
     AgenticRunnerError,
@@ -491,6 +492,90 @@ def test_create_writes_plan_before_executor_and_zero_grounded_waits_for_manual_r
         "schema_version": "agentic_topic_failure_v1",
         "topic_id": topics[0].id,
     }
+
+
+def test_initialize_only_freezes_selected_cohort_without_runtime_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, topics = _workspace(tmp_path, topic_count=2, run_id="init-only")
+    binding = _binding()
+
+    monkeypatch.setattr(agentic_retrieval, "_probe_repository", lambda _root: binding)
+    monkeypatch.setattr(
+        agentic_retrieval,
+        "_load_environment",
+        lambda _root: pytest.fail("initialization must not load runtime secrets"),
+    )
+    monkeypatch.setattr(
+        agentic_retrieval,
+        "_check_secret_presence",
+        lambda _env: pytest.fail("initialization must not require secrets"),
+    )
+    monkeypatch.setattr(
+        agentic_retrieval,
+        "_build_production_topic_executor",
+        lambda _config: pytest.fail("initialization must not construct providers"),
+    )
+
+    receipt = agentic_retrieval.initialize_agentic_run(
+        config, topic_ids=(topics[1].id, topics[0].id)
+    )
+
+    plan = load_run_plan(tmp_path / "outputs" / "init-only" / "work")
+    assert receipt.plan == plan
+    assert plan.planned_topic_ids == (topics[0].id, topics[1].id)
+    assert receipt.plan_path.read_bytes() == agentic_retrieval.serialize_run_plan(plan)
+    assert receipt.receipt_path.is_file()
+    receipt_body = receipt.receipt_path.read_bytes()
+    receipt_payload = json.loads(receipt_body)
+    assert receipt_body == (
+        json.dumps(receipt_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    assert receipt_payload["plan_sha256"] == plan.plan_sha256
+    assert not (tmp_path / "outputs" / "init-only" / "retrieval_export_manifest.json").exists()
+
+
+def test_initialize_only_is_identical_only_and_rejects_changed_cohort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, topics = _workspace(tmp_path, topic_count=2, run_id="init-idempotent")
+    monkeypatch.setattr(agentic_retrieval, "_probe_repository", lambda _root: _binding())
+
+    first = agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[0].id,))
+    second = agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[0].id,))
+    assert second.plan == first.plan
+    assert second.plan_path.read_bytes() == first.plan_path.read_bytes()
+
+    with pytest.raises(agentic_retrieval.AgenticRunnerError, match="cohort"):
+        agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[1].id,))
+
+
+def test_initialize_only_rejects_changed_config_under_same_experiment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, topics = _workspace(tmp_path, topic_count=2, run_id="init-config-drift")
+    monkeypatch.setattr(agentic_retrieval, "_probe_repository", lambda _root: _binding())
+
+    agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[0].id,))
+    config.write_text(config.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    with pytest.raises(agentic_retrieval.AgenticRunnerError, match="config"):
+        agentic_retrieval.initialize_agentic_run(config, topic_ids=(topics[0].id,))
+
+
+def test_initialize_only_cli_prints_machine_readable_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config, topics = _workspace(tmp_path, topic_count=2, run_id="init-cli")
+    monkeypatch.setattr(agentic_retrieval, "_probe_repository", lambda _root: _binding())
+    assert _main(
+        [str(config), "--initialize-only", "--topic", topics[0].id],
+        runner=agentic_retrieval.initialize_agentic_run,
+    ) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "initialized"
+    assert output["planned_topic_ids"] == [topics[0].id]
 
 
 def test_create_refuses_any_existing_run_namespace_without_building_dependencies(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from typing_extensions import TypedDict
 from trec_rag.deepagent_budget import ResearchTaskContext
 from trec_rag.deepagent_evidence import (
     MAX_DRAFT_NUGGETS_PER_NEED,
@@ -10,8 +11,14 @@ from trec_rag.deepagent_evidence import (
     SATURATION_ZERO_YIELD_PAGES,
     DocumentObservation,
     EvidenceCoverageState,
+    RetrievalStateDelta,
 )
 from trec_rag.deepagent_snippets import RelevantSnippet, SnippetPage
+
+
+def test_model_facing_delta_uses_backported_typed_dict() -> None:
+    """Pydantic 2 requires typing_extensions.TypedDict on Python 3.11."""
+    assert RetrievalStateDelta.__orig_bases__[0] is TypedDict
 
 
 def _state_with_snippet() -> EvidenceCoverageState:

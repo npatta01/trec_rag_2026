@@ -241,12 +241,20 @@ memory and use `1` on a memory-constrained single GPU. The runner intentionally
 does not impose a device-count ceiling because CPU and externally sharded topic
 workers use the same topic-first contract.
 
-A completed run publishes these three conventional files beneath the experiment
-directory:
+The checked-in full-run config sets `experiment.id: facet-deepseek-b40-v3`, so
+its canonical output namespace is `outputs/facet-deepseek-b40-v3/`. A completed
+run publishes these four conventional organizer and generation-handoff files
+beneath that directory:
 
 - `r_output_trec_rag_2026.tsv`: the variable-depth official evidence run;
 - `retrieval_with_text.jsonl.zip`: the mandatory full-text archive;
+- `generation_handoff_manifest.json`: the authenticated selected-evidence input
+  consumed by competition RAG generation;
 - `retrieval_export_manifest.json`: the manifest-last export seal.
+
+The same directory also contains `cache-operation-manifest.json`, which binds
+the per-topic cache-operation receipts to the sealed retrieval export for
+auditing and offline-replay verification.
 
 The official run and full-text archive are deterministic projections of each
 topic's validated Evidence Bundle. Candidate-pool, provenance, and resolved
@@ -281,6 +289,37 @@ post-seal evaluation. Outputs include source text and generated claims, so keep
 
 ### Sharding retrieval across dstack hosts
 
+#### Freeze once, execute assigned topics
+
+For distributed agentic retrieval, initialize the run plan on the coordinator
+before starting any worker. Initialization selects the cohort, authenticates the
+config/topic-source bytes and Git revisions, and performs no provider, Pyserini,
+reranker, cache, or runtime-secret calls:
+
+```bash
+.venv/bin/python -m trec_rag.competition_agentic_retrieval \
+  configs/rag26_competition_agentic_retrieval_v1.yaml \
+  --initialize-only
+```
+
+The resulting `outputs/<experiment-id>/work/run_plan.json` bytes are the only
+cohort authority. Copy those exact bytes to each worker and assign a disjoint
+subset of IDs; workers must not independently select a cohort. An assigned-only
+worker seals successful topics locally, preserves failed attempts and existing
+seals, and never performs run-level aggregate export:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_worker \
+  configs/rag26_competition_agentic_retrieval_v1.yaml \
+  --plan outputs/<experiment-id>/work/run_plan.json \
+  --topic rag2026-0 --topic rag2026-1
+```
+
+The worker prints a machine-readable receipt containing one outcome per assigned
+topic. A plan/config/source/revision mismatch or foreign/duplicate assignment
+fails closed before live dependencies are constructed. Aggregate export remains
+a coordinator-only action after every planned topic has a valid seal.
+
 Do not copy live cache directories or SQLite databases between machines. Pack
 each completed topic with `trec_rag.competition_cache_bundle`, publish the two
 immutable bundle files, verify them after download, and merge through the bundle
@@ -292,6 +331,53 @@ packer extracts the proposed archive in isolation, reconstructs its portable
 score databases, and runs the topic through a fresh cache-only replay with
 network and model loading disabled. The standalone verifier repeats that proof;
 a structurally valid but incomplete cache shard is rejected.
+
+#### dstack agentic worker
+
+The supported agentic worker is
+`.dstack/rag26-agentic-retrieval-worker.yaml`, launched only through
+`code/tools/apply_agentic_retrieval_worker.sh`. The launcher defaults to a
+credential-free preview; use `--launch` only after reviewing the offers. It
+requires dstack `0.20.29`, a clean branch with canonical upstream ancestry,
+and a committed source snapshot at the exact plan revision. It copies the
+already-frozen plan and canonical config into private ignored transport files;
+it never creates an ephemeral commit or changes the plan's Git `HEAD`.
+
+The plan digest and topic assignment are explicit. One topic is the normal
+task; a second topic is a sequential capacity-scarcity fallback. The remote
+wrapper validates the run/task identities, plan membership, Git and submodule
+revisions, and named secrets before constructing live dependencies. Each topic
+has isolated work, output, and cache paths and runs on the single requested
+GPU. The next topic starts only after the previous topic's archive and
+completion marker have both uploaded, listed, downloaded, byte-compared, and
+passed semantic verification.
+
+Use a private artifact prefix and pass the exact plan bytes and digest:
+
+```bash
+PLAN=outputs/<experiment-id>/work/run_plan.json
+PLAN_SHA256=<plan_sha256-from-the-plan>
+
+bash code/tools/apply_agentic_retrieval_worker.sh \
+  --preview \
+  --name agentic-rag2026-canary-0 \
+  --task-name canary-0 \
+  --run-id <experiment-id> \
+  --plan-sha256 "$PLAN_SHA256" \
+  --artifact-prefix hf://buckets/<private-bucket>/trec_rag_2026/experiments/<experiment-id> \
+  --plan "$PLAN" \
+  --config configs/rag26_competition_agentic_retrieval_v1.yaml \
+  --topic rag2026-0
+```
+
+The worker publishes submission-critical topic bundles under
+`topics/<topic-id>/`, archive first and `bundle-complete.json` last. It uses
+create-only Hugging Face operations (`--ignore-existing`) and writes a safe
+failure receipt under the run output and private `failures/` prefix. An
+optional cache shard is uploaded only after every assigned topic has completed.
+No remote deletion or overwrite path exists. Keep all bundles, plans, caches,
+provider material, and outputs private; import them with the agentic collector
+before the coordinator performs the final cohort-complete export.
 
 The checked-in dstack task template is
 `.dstack/rag26-retrieval-cache-shard.yaml`. Always invoke it through
