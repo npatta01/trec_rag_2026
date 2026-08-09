@@ -10,14 +10,16 @@
 
 ## Current Status
 
-- Tasks 1–4 are implemented: read-only document admission, the explicit
+- Tasks 1–5 are implemented: read-only document admission, the explicit
   cached-upstream rescore policy, authenticated structural comparison, and
-  frozen-plan paired nugget judging.
-- Latest focused evidence: 119 retrieval-coverage and segmentation-validation
+  frozen-plan paired nugget judging, plus strict private baseline/result
+  bundles.
+- Latest focused evidence: 133 retrieval-coverage, segmentation-validation,
+  and hostile bundle
   tests pass. The worktree environment does not include Ruff, so its optional
   lint command was unavailable; `git diff --check` passes.
-- Next action: implement and hostile-test the strict private baseline/result
-  bundle in Task 5. No private upload or dstack launch has occurred yet.
+- Next action: implement and fake-command-test the one-machine dstack workflow
+  in Task 6. No private upload or dstack launch has occurred yet.
 
 ## Global Constraints
 
