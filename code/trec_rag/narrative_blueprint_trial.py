@@ -76,6 +76,7 @@ provided local aliases. Return only the requested JSON object."""
 
 
 TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v2_splice"
+SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v1"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
 MAX_SOL_RESERVATIONS = 3
@@ -1201,6 +1202,8 @@ def _bounded_identity(
         "audit_schema_sha256": _digest_json(audit_response_schema()),
         "writer_schema_sha256": _digest_json(output_schema()),
         "splice_schema_sha256": _digest_json(splice_response_schema()),
+        "splice_prompt_contract_version": SPLICE_PROMPT_CONTRACT_VERSION,
+        "splice_prompt_contract_sha256": _digest_text(SPLICE_PROMPT_CONTRACT_VERSION),
     }
 
 
@@ -1398,11 +1401,26 @@ def _bounded_finish_luna(
 
 
 def _bounded_recovered_payload(
-    state: dict[str, Any], stage: str
+    state: dict[str, Any],
+    stage: str,
+    *,
+    expected_prompt_sha256: str | None = None,
+    expected_schema_sha256: str | None = None,
 ) -> tuple[bool, dict[str, Any] | None]:
     payloads = state.setdefault("recovered_payloads", {})
     if stage not in payloads:
         return False, None
+    if expected_prompt_sha256 is not None or expected_schema_sha256 is not None:
+        calls = [call for call in state.get("calls", []) if call.get("stage") == stage]
+        recorded = calls[-1] if calls else {}
+        if (
+            expected_prompt_sha256 is not None
+            and recorded.get("prompt_sha256") != expected_prompt_sha256
+        ) or (
+            expected_schema_sha256 is not None
+            and recorded.get("schema_sha256") != expected_schema_sha256
+        ):
+            raise ValueError(f"{stage} recovery hash mismatch")
     payload = payloads.pop(stage)
     if not isinstance(payload, dict):
         raise ValueError(f"recovered {stage} payload is not an object")
@@ -1723,29 +1741,6 @@ def _bounded_splice_repair_prompt(
     return context + "\n\n" + "\n".join(lines)
 
 
-def _bounded_repair_prompt(
-    topic: GenerationTopic,
-    blueprint: NarrativeBlueprint,
-    projection: BlueprintProjection,
-    *,
-    invalid_candidate: dict[str, Any],
-    validation_errors: tuple[str, ...],
-) -> str:
-    context = _render_hybrid_writer_prompt(topic, blueprint, projection)
-    return context + "\n\n" + "\n".join(
-        [
-            "DETERMINISTIC VALIDATION REPAIR",
-            "Return the smallest complete-answer correction as one full organizer JSON object.",
-            "Do not discuss quality, coverage, scoring, gold data, or post-hoc metrics.",
-            "Change only what is required by these exact local validator errors.",
-            "INVALID FULL CANDIDATE:",
-            json.dumps(invalid_candidate, ensure_ascii=False, sort_keys=True),
-            "EXACT LOCAL VALIDATOR ERRORS:",
-            *validation_errors,
-        ]
-    )
-
-
 def _bounded_manifest(
     root: Path,
     state: dict[str, Any],
@@ -1780,6 +1775,21 @@ def _bounded_manifest(
         "failure": state.get("failure"),
     }
     return manifest
+
+
+def _bounded_record_draft_failure(
+    root: Path,
+    state: dict[str, Any],
+    topic: GenerationTopic,
+    *,
+    reason: str,
+) -> None:
+    """Persist a sanitized draft failure without creating downstream stages."""
+
+    state["failure"] = reason
+    _bounded_write_state(root, state)
+    manifest = _bounded_manifest(root, state, topic=topic, draft=None, final=None)
+    _atomic_write_text(root / "manifest.json", json.dumps(manifest, indent=2) + "\n")
 
 
 async def _run_bounded_revision(
@@ -1925,7 +1935,6 @@ async def _run_bounded_revision(
     draft: dict[str, Any] | None = None
     draft_path = root / "draft.record.json"
     draft_errors: tuple[str, ...] = ()
-    invalid_draft_payload: dict[str, Any] | None = None
     if state["stages"].get("draft") and draft_path.is_file():
         draft = json.loads(draft_path.read_text(encoding="utf-8"))
     else:
@@ -1966,7 +1975,6 @@ async def _run_bounded_revision(
                 )
             except (ValueError, RuntimeError, TypeError) as exc:
                 draft_errors = (f"{type(exc).__name__}: {exc}",)
-                invalid_draft_payload = generated
         if draft is not None:
             _atomic_write_text(
                 draft_path,
@@ -1982,84 +1990,14 @@ async def _run_bounded_revision(
             state["stages"]["draft"] = True
         _bounded_write_state(root, state)
 
-    if draft is None and not draft_errors:
-        state["failure"] = "draft did not return a candidate that can be repaired"
-        _bounded_write_state(root, state)
-        _atomic_write_text(
-            root / "manifest.json",
-            json.dumps(_bounded_manifest(root, state, topic=topic, draft=None, final=None), indent=2) + "\n",
-        )
-        raise RuntimeError(state["failure"])
-
     if draft is None:
-        recovered, repaired = _bounded_recovered_payload(state, "repair")
-        if not recovered:
-            if _bounded_blocked_stage(state, stage="repair", luna=False):
-                raise RuntimeError("repair reservation was consumed without a reusable payload")
-            repair_ordinal = _bounded_reserve_sol(
-                root,
-                state,
-                role="repair",
-                receipt_name="repair",
-                has_validation_errors=True,
-            )
-            repair_prompt = _bounded_repair_prompt(
-                topic,
-                blueprint,
-                projection,
-                invalid_candidate=invalid_draft_payload or {},
-                validation_errors=draft_errors,
-            )
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
-                repaired, repair_call = await _bounded_provider_call(
-                    sol,
-                    root=root,
-                    api_key=api_key,
-                    topic_id=topic.topic_id,
-                    stage="repair",
-                    model=config.model,
-                    reasoning_effort=config.reasoning_effort,
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=repair_prompt,
-                    response_schema=output_schema(),
-                    executor=executor,
-                    reservation_ordinal=repair_ordinal,
-                )
-            state["calls"].append(repair_call)
-            _bounded_finish_sol(
-                root,
-                state,
-                ordinal=repair_ordinal,
-                status=(
-                    "semantic_returned" if repaired is not None else repair_call["outcome"]
-                ),
-            )
-        if repaired is not None:
-            try:
-                draft = _bounded_candidate(
-                    repaired, topic=topic, config=config, run_id=f"{config.run_id}-final"
-                )
-            except (ValueError, RuntimeError, TypeError):
-                draft = None
-        if draft is None:
-            state["failure"] = "no valid candidate after draft repair"
-            _bounded_write_state(root, state)
-            _atomic_write_text(
-                root / "manifest.json",
-                json.dumps(_bounded_manifest(root, state, topic=topic, draft=None, final=None), indent=2) + "\n",
-            )
-            raise RuntimeError(state["failure"])
-        final_output = _bounded_write_candidate(root, "final", draft)
-        final_identity = _bounded_write_identity(
-            root, config=config, handoff=handoff, topic=topic, arm="final"
+        failure = (
+            "draft candidate failed deterministic validation"
+            if draft_errors
+            else "draft did not return an accepted semantic response"
         )
-        _bounded_register_file(root, state, final_output)
-        _bounded_register_file(root, state, final_identity)
-        state["stages"]["final"] = True
-        _bounded_write_state(root, state)
-        manifest = _bounded_manifest(root, state, topic=topic, draft=None, final=draft)
-        _atomic_write_text(root / "manifest.json", json.dumps(manifest, indent=2) + "\n")
-        return root
+        _bounded_record_draft_failure(root, state, topic, reason=failure)
+        raise RuntimeError(failure)
 
     cards_by_group: dict[str, tuple[dict[str, Any], ...]] = {}
     for group in topic.groups:
@@ -2141,7 +2079,18 @@ async def _run_bounded_revision(
     final: dict[str, Any] | None = None
     revision_errors: tuple[str, ...] = ()
     initial_splice_payload: dict[str, Any] | None = None
-    recovered, splice_payload = _bounded_recovered_payload(state, "revision")
+    revision_prompt = _bounded_revision_prompt(
+        topic, blueprint, projection, draft=draft, audit_cards=audit_cards
+    )
+    revision_schema = splice_response_schema()
+    revision_prompt_sha256 = _digest_text(revision_prompt)
+    revision_schema_sha256 = _digest_json(revision_schema)
+    recovered, splice_payload = _bounded_recovered_payload(
+        state,
+        "revision",
+        expected_prompt_sha256=revision_prompt_sha256,
+        expected_schema_sha256=revision_schema_sha256,
+    )
     if not recovered:
         revision_status = _bounded_stage_status(state, stage="revision", luna=False)
         if revision_status in {"crash_consumed", "ambiguous_failure", "semantic_error"}:
@@ -2152,9 +2101,6 @@ async def _run_bounded_revision(
         else:
             revision_ordinal = _bounded_reserve_sol(
                 root, state, role="revision", receipt_name="revision"
-            )
-            revision_prompt = _bounded_revision_prompt(
-                topic, blueprint, projection, draft=draft, audit_cards=audit_cards
             )
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
                 splice_payload, revision_call = await _bounded_provider_call(
@@ -2167,7 +2113,7 @@ async def _run_bounded_revision(
                     reasoning_effort=config.reasoning_effort,
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=revision_prompt,
-                    response_schema=splice_response_schema(),
+                    response_schema=revision_schema,
                     executor=executor,
                     reservation_ordinal=revision_ordinal,
                 )
@@ -2242,7 +2188,7 @@ async def _run_bounded_revision(
                         reasoning_effort=config.reasoning_effort,
                         system_prompt=SYSTEM_PROMPT,
                         user_prompt=repair_prompt,
-                        response_schema=splice_response_schema(),
+                        response_schema=revision_schema,
                         executor=executor,
                         reservation_ordinal=repair_ordinal,
                     )

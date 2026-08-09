@@ -27,10 +27,15 @@ from trec_rag.narrative_blueprint import (
 )
 from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
+    _bounded_record_draft_failure,
+    _bounded_recovered_payload,
+    _digest_json,
+    _digest_text,
     _bounded_revision_prompt,
     audit_response_schema,
     merge_audit_cards,
 )
+from trec_rag.bounded_splice import splice_response_schema
 
 
 def _topic_fixture() -> GenerationTopic:
@@ -315,6 +320,69 @@ def test_splice_revision_prompt_indexes_draft_and_uses_audit_card_ids() -> None:
 
 def test_splice_trial_uses_a_new_contract_version() -> None:
     assert TRIAL_CONTRACT_VERSION != "bounded_narrative_revision_trial_v1"
+
+
+def test_recovered_revision_payload_requires_current_prompt_and_schema_hashes() -> None:
+    payload = {"decision": "keep_draft", "operations": []}
+    state = {
+        "recovered_payloads": {"revision": payload},
+        "calls": [
+            {
+                "stage": "revision",
+                "prompt_sha256": _digest_text("old splice prompt"),
+                "schema_sha256": _digest_json(splice_response_schema()),
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="revision recovery hash mismatch"):
+        _bounded_recovered_payload(
+            state,
+            "revision",
+            expected_prompt_sha256=_digest_text("current splice prompt"),
+            expected_schema_sha256=_digest_json(splice_response_schema()),
+        )
+
+    assert state["recovered_payloads"]["revision"] == payload
+
+
+def test_invalid_draft_failure_seals_without_repair_audit_or_revision(tmp_path) -> None:
+    root = tmp_path / "bounded"
+    root.mkdir()
+    topic = _topic_fixture()
+    state = {
+        "identity": {
+            "handoff_manifest_sha256": "h" * 64,
+            "topic_context_sha256": "t" * 64,
+        },
+        "stages": {
+            "planner": True,
+            "draft": False,
+            "audit_groups": [],
+            "audit_merge": False,
+            "revision": False,
+            "final": False,
+        },
+        "luna_reservations": [{"ordinal": 1, "stage": "planner"}],
+        "sol_reservations": [{"ordinal": 1, "role": "draft"}],
+        "calls": [],
+    }
+
+    _bounded_record_draft_failure(
+        root,
+        state,
+        topic,
+        reason="draft candidate failed deterministic validation",
+    )
+
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    assert state["failure"] == "draft candidate failed deterministic validation"
+    assert manifest["final"] is None
+    assert state["stages"]["audit_groups"] == []
+    assert state["stages"]["audit_merge"] is False
+    assert state["stages"]["revision"] is False
+    assert state["stages"]["final"] is False
+    assert [item["role"] for item in state["sol_reservations"]] == ["draft"]
 
 
 @pytest.mark.parametrize(

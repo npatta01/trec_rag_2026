@@ -1992,4 +1992,6 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
 Private state, call receipts, manifests, draft/final submissions, and arm-specific generation
 identities live under `config.resolved_work_dir/bounded_revision/<topic>`. The normal path uses
 one Luna planner, one Luna audit per authenticated group, and two Sol reservations (draft and
-revision); one additional Sol reservation is permitted only for deterministic validation repair.
+revision); one additional Sol reservation is permitted only for deterministic splice-patch
+validation repair. A draft that fails local validation seals a sanitized failure manifest and
+does not reserve repair, audit, or revision calls.
