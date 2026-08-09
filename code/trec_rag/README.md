@@ -2067,6 +2067,24 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.rerank_cache_promotion promote \
 The Modal and local paths differ, but the artifact rows, cache keys, validation
 rules, and pipeline consumer interface are the same.
 
+## Cached sentence re-segmentation validation
+
+`competition_retrieval --cached-upstream-rescore` is the fail-closed third
+execution policy for rebuilding only the sentence-scoring tail from portable
+caches. Planning, Pyserini retrieval, document admission, and passage scoring
+are cache-only/read-only; a miss aborts the topic. Sentence scoring, MiniLM
+similarity, and canonicalization remain writable. The per-topic operation
+receipt rejects any upstream cache miss, network/provider call, or model batch.
+
+`cached_segmentation_validation structural` compares an old and fixed run only
+after authenticating their decomposition, retrieval audit, selected-document
+receipts, generation handoffs, fixed TopicRecords database, and exact CAS
+sources. It reports old physical-line units, fixed production segmentation
+units, fixed candidates, selected evidence, representatives, and claim hints.
+The aggregate gate requires less fragmentation without any upstream identity
+change; topic 407 additionally must beat the measured old median of 11
+characters and 60.4% sub-40 rate. Keep its JSON and manifest private.
+
 ## Answer-quality evaluation
 
 `ragdoll_io.py` and `dev_rag_inputs.py` support scoring generated answers with the organizer
