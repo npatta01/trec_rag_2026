@@ -1142,6 +1142,7 @@ def generate_candidate_artifacts(
     scorer: object | None = None,
     facets: Sequence[FacetRecord] = (),
     passage_results: Sequence[PassageSearchResult] = (),
+    document_store: DocumentStore | None = None,
 ) -> CandidateArtifacts:
     """Generate and seal one topic records database from a typed handoff."""
     if not isinstance(paths, HandoffArtifacts):
@@ -1174,7 +1175,10 @@ def generate_candidate_artifacts(
     if handoff_manifest.get("requests_file") != input_path.name:
         raise ValueError("handoff manifest requests_file does not match input basename")
     document_store_root = Path(document_store_root)
-    document_store = DocumentStore(document_store_root)
+    if document_store is None:
+        document_store = DocumentStore(document_store_root)
+    elif not isinstance(document_store, DocumentStore):
+        raise TypeError("document_store must be a DocumentStore")
     audit = _audit_candidate_requests(
         input_path,
         document_store=document_store,

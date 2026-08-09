@@ -5,7 +5,11 @@ from threading import Barrier
 
 import pytest
 
-from trec_rag.document_store import DocumentStore, DocumentStoreIntegrityError
+from trec_rag.document_store import (
+    DocumentStore,
+    DocumentStoreIntegrityError,
+    ReadOnlyDocumentStore,
+)
 
 
 def test_document_store_preserves_exact_unicode_and_whitespace(tmp_path: Path) -> None:
@@ -70,3 +74,26 @@ def test_document_store_rejects_corrupt_object_on_admission_without_replacing_it
         DocumentStore(tmp_path).admit_text(text)
 
     assert object_path.read_bytes() == corrupt_bytes
+
+
+def test_read_only_store_admits_only_existing_exact_object(tmp_path: Path) -> None:
+    writable = DocumentStore(tmp_path)
+    receipt = writable.admit_text("cached document")
+    before = sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+
+    actual = ReadOnlyDocumentStore(tmp_path).admit_text(
+        "cached document",
+        expected_sha256=receipt.content_sha256,
+    )
+
+    assert actual == receipt
+    assert sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*")) == before
+
+
+def test_read_only_store_missing_object_creates_nothing(tmp_path: Path) -> None:
+    root = tmp_path / "missing-store"
+
+    with pytest.raises(DocumentStoreIntegrityError, match="unable to read"):
+        ReadOnlyDocumentStore(root).admit_text("not cached")
+
+    assert not root.exists()

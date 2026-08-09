@@ -128,3 +128,36 @@ class DocumentStore:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+
+class ReadOnlyDocumentStore(DocumentStore):
+    """Document store that can verify existing objects but never admit new ones."""
+
+    def admit_text(
+        self, text: str, *, expected_sha256: str | None = None
+    ) -> DocumentReceipt:
+        if expected_sha256 is not None:
+            self._validate_digest(expected_sha256)
+
+        try:
+            content = text.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise DocumentStoreIntegrityError("text is not valid UTF-8") from exc
+
+        receipt = DocumentReceipt(
+            content_sha256=hashlib.sha256(content).hexdigest(),
+            byte_count=len(content),
+            character_count=len(text),
+        )
+        if expected_sha256 is not None and expected_sha256 != receipt.content_sha256:
+            raise DocumentStoreIntegrityError(
+                "expected digest does not match admitted text: "
+                f"expected {expected_sha256}, got {receipt.content_sha256}"
+            )
+
+        stored_content, stored_receipt = self._read_verified(receipt.content_sha256)
+        if stored_content != content:
+            raise DocumentStoreIntegrityError(
+                "cached document object does not match admitted text"
+            )
+        return stored_receipt

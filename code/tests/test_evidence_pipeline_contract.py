@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import trec_rag.evidence_store as evidence_store_module
-from trec_rag.document_store import DocumentStore
+from trec_rag.document_store import DocumentStore, ReadOnlyDocumentStore
 from trec_rag.facet_evidence import (
     SENTENCE_SPLITTER_VERSION,
     CandidateSubnarrative,
@@ -1311,6 +1311,59 @@ def test_candidate_validation_opens_records_and_validates_all_sources(
         expected_topic_id=topic.id,
         required_candidate_keys=frozenset(),
     ) == {}
+
+
+def test_candidate_generation_uses_injected_read_only_document_store(
+    tmp_path: Path,
+) -> None:
+    topic = _topic()
+    decomposition = _decomposition(topic)
+    pilot_root = tmp_path / "pilot"
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=False)
+    handoff = materialize_candidate_inputs(
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / topic.id / "canonical" / "handoff",
+        code_commit="a" * 40,
+        official_topics_sha256="c" * 64,
+    )
+    store_root = tmp_path / "objects"
+    scorer = _FixedScorer(lambda pairs: tuple(1.0 for _ in pairs))
+
+    with pytest.raises(TopicRecordsIntegrityError, match="unable to bind document"):
+        generate_candidate_artifacts(
+            handoff,
+            run_id="test-run",
+            score_cache_root=tmp_path / "score-cache",
+            device="cpu",
+            scorer=scorer,
+            document_store_root=store_root,
+            document_store=ReadOnlyDocumentStore(store_root),
+        )
+
+    assert not store_root.exists()
+    assert not (tmp_path / topic.id / "records.sqlite3").exists()
+
+    request = json.loads(handoff.requests_path.read_bytes().splitlines()[0])
+    DocumentStore(store_root).admit_text(
+        request["source"],
+        expected_sha256=request["document_sha256"],
+    )
+    before = sorted(path.relative_to(store_root) for path in store_root.rglob("*"))
+
+    artifacts = generate_candidate_artifacts(
+        handoff,
+        run_id="test-run",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        scorer=scorer,
+        document_store_root=store_root,
+        document_store=ReadOnlyDocumentStore(store_root),
+    )
+
+    assert artifacts.records_path.is_file()
+    assert sorted(path.relative_to(store_root) for path in store_root.rglob("*")) == before
 
 
 def test_candidate_generation_rejects_request_hash_tamper_before_publication(
