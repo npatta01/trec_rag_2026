@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+import asyncio
+from hashlib import sha256
+import json
+from pathlib import Path
+
+from trec_rag.competition_rag import RagGenerationConfig
+from trec_rag.competition_rag_multistage import run_multistage_generation
+from trec_rag.generation_handoff import (
+    SOURCE_CONTRACT,
+    ClaimHint,
+    EvidenceGroup,
+    EvidencePassage,
+    EvidenceSourceSpan,
+    GenerationHandoff,
+    GenerationTopic,
+    HandoffProducer,
+    SelectedCluster,
+    TopicSourceReceipts,
+)
+from trec_rag.narrative_blueprint_trial import (
+    TRIAL_CONTRACT_VERSION,
+    _bounded_identity,
+    _bounded_private_root,
+)
+
+
+def _topic(index: int) -> GenerationTopic:
+    topic_id = f"rag2026-{index}"
+    group_id = f"{topic_id}-group"
+    evidence_id = f"{topic_id}-evidence"
+    cluster_id = f"{topic_id}-cluster"
+    docid = f"DOC-{index}"
+    text = f"Selected evidence for topic {index}."
+    return GenerationTopic(
+        topic_id=topic_id,
+        narrative=f"Explain topic {index}.",
+        groups=(
+            EvidenceGroup(
+                group_id=group_id,
+                kind="generated_subnarrative",
+                text=f"Topic {index} background",
+                selected_clusters=(
+                    SelectedCluster(
+                        cluster_id=cluster_id,
+                        ordinal=1,
+                        representative_evidence_id=evidence_id,
+                        evidence_ids=(evidence_id,),
+                    ),
+                ),
+            ),
+        ),
+        evidence=(
+            EvidencePassage(
+                evidence_id=evidence_id,
+                group_id=group_id,
+                cluster_id=cluster_id,
+                cluster_ordinal=1,
+                support_ordinal=1,
+                candidate_kind="extractive",
+                docid=docid,
+                document_rank=1,
+                text=text,
+                document_sha256=sha256(docid.encode()).hexdigest(),
+                source_span=EvidenceSourceSpan(
+                    start_char=0,
+                    end_char=len(text),
+                    start_byte=0,
+                    end_byte=len(text.encode()),
+                ),
+            ),
+        ),
+        claim_hints=(
+            ClaimHint(
+                claim_id=f"{topic_id}-claim",
+                group_id=group_id,
+                kind="canonical",
+                text=text,
+                evidence_ids=(evidence_id,),
+            ),
+        ),
+        source_receipts=TopicSourceReceipts(
+            official_topics_sha256="1" * 64,
+            retrieval_topic_sha256=sha256(topic_id.encode()).hexdigest(),
+        ),
+    )
+
+
+def _handoff() -> GenerationHandoff:
+    return GenerationHandoff(
+        producer=HandoffProducer(
+            source_contract=SOURCE_CONTRACT,
+            retrieval_run_id="fixture-retrieval",
+            producer_revision="fixture-revision",
+        ),
+        topics=(_topic(0), _topic(1)),
+    )
+
+
+def _config(tmp_path: Path) -> RagGenerationConfig:
+    output_dir = tmp_path / "outputs/multistage"
+    return RagGenerationConfig(
+        schema_version="competition_rag_config_v2",
+        handoff_manifest_path=tmp_path / "handoff.json",
+        output_path=output_dir / "rag_output_trec_rag_2026.jsonl",
+        work_dir=output_dir / "work",
+        team_id="castorini",
+        run_id="multistage-test",
+        run_desc="Frozen multi-stage test run.",
+        topic_ids=None,
+        concurrency=2,
+        resume=False,
+        overwrite=False,
+        provider="openrouter",
+        api_base="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        structured_output="strict_schema",
+        temperature=None,
+        max_tokens=12000,
+        timeout_seconds=900.0,
+        transport_max_attempts=3,
+    )
+
+
+def _write_completed_topic(
+    config: RagGenerationConfig,
+    handoff: GenerationHandoff,
+    topic: GenerationTopic,
+) -> Path:
+    root = _bounded_private_root(config, topic)
+    final_path = root / "evaluation/final/submission.jsonl"
+    final_path.parent.mkdir(parents=True)
+    record = {
+        "metadata": {
+            "team_id": config.team_id,
+            "narrative_id": topic.topic_id,
+            "narrative": topic.narrative,
+            "run_id": f"{config.run_id}-final",
+            "run_desc": config.run_desc,
+        },
+        "references": [topic.citation_docids[0]],
+        "answer": [{"text": topic.claim_hints[0].text, "citations": [0]}],
+    }
+    final_bytes = (
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode()
+    final_path.write_bytes(final_bytes)
+    state = {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "identity": _bounded_identity(config, handoff, topic),
+        "stages": {"final": True},
+        "stage_hashes": {
+            "evaluation/final/submission.jsonl": sha256(final_bytes).hexdigest(),
+        },
+    }
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    return root
+
+
+def test_create_publishes_all_validated_topics_in_handoff_order(tmp_path: Path) -> None:
+    handoff = _handoff()
+    config = _config(tmp_path)
+    invoked: list[tuple[str, str]] = []
+
+    async def fake_topic_runner(
+        runner_config: RagGenerationConfig,
+        runner_handoff: GenerationHandoff,
+        topic: GenerationTopic,
+        *,
+        api_key: str,
+        state_mode: str,
+    ) -> Path:
+        assert api_key == "fixture-key"
+        invoked.append((topic.topic_id, state_mode))
+        return _write_completed_topic(runner_config, runner_handoff, topic)
+
+    asyncio.run(
+        run_multistage_generation(
+            config,
+            handoff,
+            api_key="fixture-key",
+            topic_runner=fake_topic_runner,
+        )
+    )
+
+    rows = [
+        json.loads(line)
+        for line in config.output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert invoked == [("rag2026-0", "create"), ("rag2026-1", "create")]
+    assert [row["metadata"]["narrative_id"] for row in rows] == [
+        "rag2026-0",
+        "rag2026-1",
+    ]
+    assert all(
+        row["metadata"]["run_id"] == f"{config.run_id}-final" for row in rows
+    )
+    identity = json.loads(
+        (config.work_dir / "multistage_generation_identity.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert identity["handoff_manifest_sha256"] == handoff.manifest_sha256
