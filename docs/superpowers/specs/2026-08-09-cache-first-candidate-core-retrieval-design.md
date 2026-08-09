@@ -16,14 +16,11 @@ small, evidence-backed candidate core for each topic. Complete the narrative
 and subnarrative score matrix only within that core. Check the shared score
 cache before every model call and infer only genuine misses.
 
-Try the local ROCm GPU first. Continue locally only when a productive benchmark
-supports a conservative end-to-end ETA of at most two hours. Otherwise use one
-fast remote GPU after an exact declined dstack preview. Remote spending has a
-hard limit of USD 10.
-
-Whether scoring is local or remote, write new scores to an isolated cache. Only
-after complete validation, transactionally merge those scores into the shared
-local reranker cache and replay all topics cache-only.
+Run inference on one fast remote GPU after an exact declined dstack preview.
+Remote spending has a hard limit of USD 10. Write every new score to the
+worker's isolated cache. Only after complete remote and local validation,
+transactionally merge those scores into the shared local reranker cache and
+replay all topics cache-only.
 
 This specification supersedes the complete-union execution design in
 `2026-08-09-three-retrieval-baseline-runs-design.md`. The complete-union design
@@ -175,34 +172,29 @@ Rank `C_t` by:
 This replaces an arbitrary global top-100 passage limit and directly rewards
 documents with repeated strong passage support across subnarratives.
 
-## Local-versus-remote execution gate
+## Remote execution gate
 
 The sealed preflight computes exact all-topic cache hits and misses without
-model inference. Select the topic with the largest miss count as a productive
-local ROCm benchmark. Its scores and matrix are retained as final work.
+model inference and prepares one authenticated candidate-core input. Preview
+one on-demand H200 task with a two-hour maximum duration and a price ceiling
+that keeps its worst-case cost at or below USD 10. If H200 has no compatible
+offers, preview H100 under the same duration and aggregate cost ceiling. The
+task launches only after the exact declined preview is shown and confirmed.
 
-Measure sustained missing-pair throughput after model initialization. Project
-the remaining scoring, matrix assembly, cache export, cache-only replay,
-ranking, and validation time. Apply a 20% safety margin. Continue locally only
-when this conservative end-to-end projection is at most 120 minutes from the
-start of the productive benchmark.
-
-If the projection exceeds 120 minutes or local ROCm execution is incompatible,
-stop local scoring cleanly after the benchmark publication and use its verified
-cache delta in the remote input. Preview one on-demand H200 task with a
-two-hour maximum duration and a price ceiling that keeps its worst-case cost at
-or below USD 10. If H200 has no compatible offers, preview H100 under the same
-duration and aggregate cost ceiling. A remote task launches only after the
-exact declined preview is shown and confirmed.
+Within the one remote task, score `rag2026-1` and `rag2026-18` first as the
+canary phase. Immediately verify their candidate cores, pair accounting,
+matrices, cache export, and zero-model-batch cache-only replay. Abort and
+publish failure evidence if either canary fails. If both pass, continue through
+the remaining 117 topics on the same loaded model and isolated cache. This
+avoids a second machine startup while retaining a real two-topic cloud gate.
 
 ## Local cache merge
 
-Local and remote paths use the same merge protocol:
+The remote result uses this local merge protocol:
 
 1. finalize an immutable publication containing matrices, portable raw-score
    cache data, source identities, pair accounting, and file hashes;
-2. for a remote run, download the publication and verify every declared byte
-   and hash locally;
+2. download the publication and verify every declared byte and hash locally;
 3. import the portable scores into a fresh local replay cache;
 4. rebuild every selected topic matrix cache-only and require byte-identical
    matrices and zero model batches;
@@ -215,8 +207,8 @@ Local and remote paths use the same merge protocol:
 8. replay all 119 topics cache-only from the merged shared cache and verify the
    three final runs.
 
-The merge occurs locally even when inference is remote. Remote workers never
-write the shared local cache directly.
+The merge always occurs locally. Remote workers never write the shared local
+cache directly.
 
 ## Output and verification contract
 
@@ -236,9 +228,9 @@ one-subnarrative behavior, strong-passage breadth, deterministic ordering,
 portable-cache conflict rejection, cache-only replay, all 119 topic IDs,
 variable depths, and standard TREC formatting.
 
-Before any remote inference, the implementation receives an independent Sol
-review, the productive local benchmark is verified, and the exact dstack offer
-is previewed and confirmed.
+Before remote inference, the implementation receives an independent Sol
+review, the sealed all-topic preflight and real wrapper preflight pass, and the
+exact dstack offer is previewed and confirmed.
 
 ## Explicit tradeoff
 
