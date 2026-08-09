@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import gzip
 from hashlib import sha256
 import json
 import os
@@ -16,15 +17,22 @@ from typing import Mapping, Sequence
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
 from trec_rag.mixedbread_passage_scorer import MixedbreadPassageScorer
+from trec_rag.retrieval_candidate_core import (
+    candidate_core_from_dict,
+    candidate_core_to_dict,
+    derive_candidate_core,
+)
 from trec_rag.retrieval_baseline_runs import load_topic_input, topic_sort_key
 
 
-SCHEMA_VERSION = "retrieval-baseline-private-input-v1"
+SCHEMA_VERSION = "retrieval-baseline-private-input-v2"
 MANIFEST_NAME = "input-manifest.json"
 _TOPIC_ID = re.compile(r"rag2026-[0-9]+\Z")
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-_ALLOWED_ROOTS = {"source", "documents", "portable-scores"}
+_ALLOWED_ROOTS = {"source", "documents", "portable-scores", "candidate-cores"}
+_OFFICIAL_TOPIC_IDS = tuple(f"rag2026-{index}" for index in range(119))
+_CANARY_TOPIC_IDS = ("rag2026-1", "rag2026-18")
 _MAX_ARCHIVE_MEMBERS = 200_000
 _MAX_ARCHIVE_BYTES = 5_000_000_000
 _SOURCE_RELATIVE_PATHS = (
@@ -43,6 +51,19 @@ _SOURCE_RELATIVE_PATHS = (
     "canonical/retrieval-projection-manifest.json",
     "canonical/retrieval-projection.json",
 )
+_TOPIC_STAT_FIELDS = {
+    "cache_hits",
+    "cache_misses",
+    "candidate_core_sha256",
+    "candidate_count",
+    "chunk_count",
+    "document_semantic_pair_count",
+    "first_seen_cache_key_count",
+    "passage_pair_count",
+    "reused_prior_topic_key_count",
+    "semantic_unit_count",
+    "unique_cache_key_count",
+}
 
 
 class InputBundleError(ValueError):
@@ -79,6 +100,63 @@ def _file_receipt(path: Path) -> tuple[int, str]:
             size += len(block)
             digest.update(block)
     return size, digest.hexdigest()
+
+
+def _read_json_object(path: Path, *, label: str) -> tuple[dict[str, object], bytes]:
+    try:
+        body = Path(path).read_bytes()
+        value = json.loads(body, object_pairs_hook=_unique_object)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, InputBundleError) as exc:
+        raise InputBundleError(f"{label} is invalid") from exc
+    if not isinstance(value, dict):
+        raise InputBundleError(f"{label} must be a JSON object")
+    return value, body
+
+
+def _normalized_topic_stats(
+    topic_ids: tuple[str, ...],
+    topic_stats: Mapping[str, Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    if not isinstance(topic_stats, Mapping) or set(topic_stats) != set(topic_ids):
+        raise InputBundleError("topic statistics must exactly cover selected topics")
+    normalized: dict[str, dict[str, object]] = {}
+    for topic_id in topic_ids:
+        raw = topic_stats[topic_id]
+        if not isinstance(raw, Mapping) or set(raw) != _TOPIC_STAT_FIELDS:
+            raise InputBundleError("topic statistic fields changed")
+        row: dict[str, object] = {}
+        for name in sorted(_TOPIC_STAT_FIELDS):
+            value = raw[name]
+            if name == "candidate_core_sha256":
+                if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+                    raise InputBundleError("candidate-core statistic digest is invalid")
+                row[name] = value
+            else:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 0
+                ):
+                    raise InputBundleError("topic statistics must be nonnegative integers")
+                row[name] = value
+        if row["candidate_count"] == 0 or row["semantic_unit_count"] == 0:
+            raise InputBundleError("topic candidate and semantic-unit counts must be positive")
+        if row["cache_hits"] + row["cache_misses"] != row[
+            "first_seen_cache_key_count"
+        ]:
+            raise InputBundleError("topic first-seen cache accounting differs")
+        if row["first_seen_cache_key_count"] + row[
+            "reused_prior_topic_key_count"
+        ] != row["unique_cache_key_count"]:
+            raise InputBundleError("topic unique cache-key accounting differs")
+        if row["unique_cache_key_count"] > row["passage_pair_count"]:
+            raise InputBundleError("topic unique cache keys exceed passage pairs")
+        if row["document_semantic_pair_count"] != row["candidate_count"] * row[
+            "semantic_unit_count"
+        ]:
+            raise InputBundleError("topic document/semantic pair count differs")
+        normalized[topic_id] = row
+    return normalized
 
 
 def _create_or_verify(path: Path, body: bytes) -> None:
@@ -148,6 +226,8 @@ def seal_input_directory(
     topic_ids: tuple[str, ...],
     source_run_id: str,
     cache_stats: Mapping[str, int],
+    canary_topic_ids: tuple[str, ...],
+    topic_stats: Mapping[str, Mapping[str, object]],
 ) -> Path:
     """Seal all existing private members with a deterministic manifest."""
 
@@ -163,6 +243,16 @@ def seal_input_directory(
     ordered_topics = tuple(sorted(topic_ids, key=topic_sort_key))
     if _SAFE_RUN_ID.fullmatch(source_run_id) is None:
         raise InputBundleError("source run ID is invalid")
+    if (
+        len(set(canary_topic_ids)) != len(canary_topic_ids)
+        or any(topic_id not in ordered_topics for topic_id in canary_topic_ids)
+        or tuple(canary_topic_ids)
+        != tuple(topic_id for topic_id in _CANARY_TOPIC_IDS if topic_id in ordered_topics)
+    ):
+        raise InputBundleError("canary topics differ from the fixed selected subset")
+    normalized_topic_stats = _normalized_topic_stats(
+        ordered_topics, topic_stats
+    )
     normalized_stats: dict[str, int] = {}
     for name, value in cache_stats.items():
         if (
@@ -174,6 +264,79 @@ def seal_input_directory(
         ):
             raise InputBundleError("cache statistics are invalid")
         normalized_stats[name] = value
+    required_cache_stats = {
+        "candidate_documents",
+        "document_semantic_pairs",
+        "hits",
+        "misses",
+        "passage_pairs",
+        "portable_rows",
+        "unique_cache_keys",
+    }
+    if set(normalized_stats) != required_cache_stats:
+        raise InputBundleError("cache statistic fields changed")
+    if normalized_stats["hits"] + normalized_stats["misses"] != normalized_stats[
+        "unique_cache_keys"
+    ]:
+        raise InputBundleError("global unique cache-key accounting differs")
+    if normalized_stats["portable_rows"] != normalized_stats["hits"]:
+        raise InputBundleError("portable rows must equal existing cache hits")
+    if normalized_stats["candidate_documents"] != sum(
+        int(row["candidate_count"]) for row in normalized_topic_stats.values()
+    ):
+        raise InputBundleError("global candidate-document count differs")
+    if normalized_stats["document_semantic_pairs"] != sum(
+        int(row["document_semantic_pair_count"])
+        for row in normalized_topic_stats.values()
+    ):
+        raise InputBundleError("global document/semantic pair count differs")
+    if normalized_stats["passage_pairs"] != sum(
+        int(row["passage_pair_count"]) for row in normalized_topic_stats.values()
+    ):
+        raise InputBundleError("global passage-pair count differs")
+    if normalized_stats["hits"] != sum(
+        int(row["cache_hits"]) for row in normalized_topic_stats.values()
+    ) or normalized_stats["misses"] != sum(
+        int(row["cache_misses"]) for row in normalized_topic_stats.values()
+    ):
+        raise InputBundleError("global cache hit/miss accounting differs")
+
+    export_manifest_path = root / "source" / source_run_id / "retrieval_export_manifest.json"
+    export_manifest, export_manifest_body = _read_json_object(
+        export_manifest_path, label="source export manifest"
+    )
+    export_commit = export_manifest.get("export_code_commit")
+    if (
+        export_manifest.get("run_id") != source_run_id
+        or not isinstance(export_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", export_commit) is None
+    ):
+        raise InputBundleError("source export identity differs")
+    selected_export_topics = export_manifest.get("selected_topic_ids")
+    if (
+        not isinstance(selected_export_topics, list)
+        or any(not isinstance(item, str) for item in selected_export_topics)
+        or not set(ordered_topics).issubset(selected_export_topics)
+    ):
+        raise InputBundleError("source export does not contain every selected topic")
+
+    for topic_id in ordered_topics:
+        core_path = root / "candidate-cores" / f"{topic_id}.json"
+        core_value, core_body = _read_json_object(core_path, label="candidate core")
+        try:
+            core = candidate_core_from_dict(core_value)
+        except (TypeError, ValueError) as exc:
+            raise InputBundleError("candidate core is invalid") from exc
+        if core.topic_id != topic_id or core_body != _canonical_json(
+            candidate_core_to_dict(core)
+        ):
+            raise InputBundleError("candidate core identity or canonical bytes differ")
+        if normalized_topic_stats[topic_id]["candidate_count"] != len(
+            core.candidate_docids
+        ) or normalized_topic_stats[topic_id]["candidate_core_sha256"] != sha256(
+            core_body
+        ).hexdigest():
+            raise InputBundleError("candidate-core topic statistics differ")
 
     members: list[dict[str, object]] = []
     for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
@@ -192,11 +355,15 @@ def seal_input_directory(
         raise InputBundleError("input directory has no members")
     manifest = {
         "cache_stats": dict(sorted(normalized_stats.items())),
+        "canary_topic_ids": list(canary_topic_ids),
         "member_count": len(members),
         "members": members,
         "schema_version": SCHEMA_VERSION,
+        "source_export_code_commit": export_commit,
+        "source_export_manifest_sha256": sha256(export_manifest_body).hexdigest(),
         "source_run_id": source_run_id,
         "topic_ids": list(ordered_topics),
+        "topic_stats": normalized_topic_stats,
     }
     manifest_path = root / MANIFEST_NAME
     _create_or_verify(manifest_path, _canonical_json(manifest))
@@ -223,11 +390,15 @@ def verify_input_directory(
         raise InputBundleError("input manifest is invalid") from exc
     if not isinstance(value, dict) or set(value) != {
         "cache_stats",
+        "canary_topic_ids",
         "member_count",
         "members",
         "schema_version",
+        "source_export_code_commit",
+        "source_export_manifest_sha256",
         "source_run_id",
         "topic_ids",
+        "topic_stats",
     }:
         raise InputBundleError("input manifest fields changed")
     if body != _canonical_json(value) or value["schema_version"] != SCHEMA_VERSION:
@@ -242,10 +413,26 @@ def verify_input_directory(
         raise InputBundleError("input manifest topics are invalid")
     if expected_topics and list(sorted(expected_topics, key=topic_sort_key)) != topic_ids:
         raise InputBundleError("input manifest topic assignment differs")
+    canary_topic_ids = value["canary_topic_ids"]
+    if (
+        not isinstance(canary_topic_ids, list)
+        or any(not isinstance(item, str) for item in canary_topic_ids)
+        or canary_topic_ids
+        != [topic_id for topic_id in _CANARY_TOPIC_IDS if topic_id in topic_ids]
+    ):
+        raise InputBundleError("input manifest canary assignment differs")
     if not isinstance(value["source_run_id"], str) or _SAFE_RUN_ID.fullmatch(
         value["source_run_id"]
     ) is None:
         raise InputBundleError("input manifest source run is invalid")
+    if (
+        not isinstance(value["source_export_code_commit"], str)
+        or re.fullmatch(r"[0-9a-f]{40}", value["source_export_code_commit"])
+        is None
+        or not isinstance(value["source_export_manifest_sha256"], str)
+        or _SHA256.fullmatch(value["source_export_manifest_sha256"]) is None
+    ):
+        raise InputBundleError("input manifest source export identity is invalid")
     cache_stats = value["cache_stats"]
     if not isinstance(cache_stats, dict) or any(
         not isinstance(name, str)
@@ -256,6 +443,42 @@ def verify_input_directory(
         for name, count in cache_stats.items()
     ):
         raise InputBundleError("input manifest cache statistics are invalid")
+    normalized_topic_stats = _normalized_topic_stats(
+        tuple(topic_ids),
+        value["topic_stats"] if isinstance(value["topic_stats"], dict) else {},
+    )
+    if value["topic_stats"] != normalized_topic_stats:
+        raise InputBundleError("input manifest topic statistics are not canonical")
+    required_cache_stats = {
+        "candidate_documents",
+        "document_semantic_pairs",
+        "hits",
+        "misses",
+        "passage_pairs",
+        "portable_rows",
+        "unique_cache_keys",
+    }
+    if set(cache_stats) != required_cache_stats:
+        raise InputBundleError("input manifest cache statistic fields changed")
+    if (
+        cache_stats["hits"] + cache_stats["misses"]
+        != cache_stats["unique_cache_keys"]
+        or cache_stats["portable_rows"] != cache_stats["hits"]
+        or cache_stats["candidate_documents"]
+        != sum(int(row["candidate_count"]) for row in normalized_topic_stats.values())
+        or cache_stats["document_semantic_pairs"]
+        != sum(
+            int(row["document_semantic_pair_count"])
+            for row in normalized_topic_stats.values()
+        )
+        or cache_stats["passage_pairs"]
+        != sum(int(row["passage_pair_count"]) for row in normalized_topic_stats.values())
+        or cache_stats["hits"]
+        != sum(int(row["cache_hits"]) for row in normalized_topic_stats.values())
+        or cache_stats["misses"]
+        != sum(int(row["cache_misses"]) for row in normalized_topic_stats.values())
+    ):
+        raise InputBundleError("input manifest global cache accounting differs")
     members = value["members"]
     if (
         not isinstance(members, list)
@@ -311,6 +534,34 @@ def verify_input_directory(
                 raise InputBundleError("document member content address differs")
     if actual != set(expected):
         raise InputBundleError("input directory contains undeclared or missing files")
+    source_run_id = str(value["source_run_id"])
+    export_path = root / "source" / source_run_id / "retrieval_export_manifest.json"
+    export_manifest, export_body = _read_json_object(
+        export_path, label="source export manifest"
+    )
+    if (
+        sha256(export_body).hexdigest() != value["source_export_manifest_sha256"]
+        or export_manifest.get("run_id") != source_run_id
+        or export_manifest.get("export_code_commit")
+        != value["source_export_code_commit"]
+        or not set(topic_ids).issubset(export_manifest.get("selected_topic_ids", []))
+    ):
+        raise InputBundleError("source export identity differs from input manifest")
+    for topic_id in topic_ids:
+        core_path = root / "candidate-cores" / f"{topic_id}.json"
+        core_value, core_body = _read_json_object(core_path, label="candidate core")
+        try:
+            core = candidate_core_from_dict(core_value)
+        except (TypeError, ValueError) as exc:
+            raise InputBundleError("candidate core is invalid") from exc
+        topic_stat = normalized_topic_stats[topic_id]
+        if (
+            core.topic_id != topic_id
+            or core_body != _canonical_json(candidate_core_to_dict(core))
+            or sha256(core_body).hexdigest() != topic_stat["candidate_core_sha256"]
+            or len(core.candidate_docids) != topic_stat["candidate_count"]
+        ):
+            raise InputBundleError("candidate core differs from input manifest")
     return value
 
 
@@ -321,11 +572,21 @@ def build_input_directory(
     score_cache_root: Path,
     topic_ids: tuple[str, ...],
     output_dir: Path,
+    require_official_topic_set: bool = False,
 ) -> dict[str, object]:
-    """Build one immutable one- or two-topic worker input from existing artifacts."""
+    """Build one immutable candidate-only worker input from existing artifacts."""
 
-    if not topic_ids or len(topic_ids) > 2 or len(set(topic_ids)) != len(topic_ids):
-        raise InputBundleError("one or two unique topics are required")
+    if not isinstance(require_official_topic_set, bool):
+        raise TypeError("require_official_topic_set must be boolean")
+    if (
+        not topic_ids
+        or len(set(topic_ids)) != len(topic_ids)
+        or any(_TOPIC_ID.fullmatch(topic_id) is None for topic_id in topic_ids)
+    ):
+        raise InputBundleError("unique official topic identifiers are required")
+    ordered_topic_ids = tuple(sorted(topic_ids, key=topic_sort_key))
+    if require_official_topic_set and ordered_topic_ids != _OFFICIAL_TOPIC_IDS:
+        raise InputBundleError("production input requires the exact 119-topic set")
     source_dir = Path(source_dir).resolve()
     document_store_root = Path(document_store_root).resolve()
     output_dir = Path(output_dir).resolve()
@@ -333,17 +594,67 @@ def build_input_directory(
     if any(output_dir.iterdir()):
         raise InputBundleError("output directory must be empty")
     source_run_id = source_dir.name
+    export_manifest, export_body = _read_json_object(
+        source_dir / "retrieval_export_manifest.json",
+        label="source export manifest",
+    )
+    export_topics = export_manifest.get("selected_topic_ids")
+    if (
+        export_manifest.get("run_id") != source_run_id
+        or not isinstance(export_manifest.get("export_code_commit"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{40}", str(export_manifest.get("export_code_commit"))
+        )
+        is None
+        or not isinstance(export_topics, list)
+        or any(not isinstance(topic_id, str) for topic_id in export_topics)
+        or not set(ordered_topic_ids).issubset(export_topics)
+    ):
+        raise InputBundleError("source export identity or selected topics differ")
+    if require_official_topic_set and tuple(export_topics) != _OFFICIAL_TOPIC_IDS:
+        raise InputBundleError("source export does not authenticate the 119-topic set")
+    _copy_create_only(
+        source_dir / "retrieval_export_manifest.json",
+        output_dir / "source" / source_run_id / "retrieval_export_manifest.json",
+    )
     topics = tuple(
         load_topic_input(source_dir, topic_id, document_store_root)
-        for topic_id in sorted(topic_ids, key=topic_sort_key)
+        for topic_id in ordered_topic_ids
     )
+    candidate_cores = {}
     for topic in topics:
+        candidate_core = derive_candidate_core(
+            topic_id=topic.topic_id,
+            lane_scores_path=source_dir
+            / topic.topic_id
+            / "scoring/lane_scores.jsonl",
+            expected_lane_names=("original",)
+            + tuple(
+                f"facet:{row.subnarrative_id}:text"
+                for row in topic.subnarratives
+            ),
+            expected_docids=frozenset(row.docid for row in topic.documents),
+            best_retrieval_ranks={
+                row.docid: row.best_retrieval_rank for row in topic.documents
+            },
+        )
+        if candidate_core.lane_scores_sha256 != topic.source_sha256s.get(
+            "scoring/lane_scores.jsonl"
+        ):
+            raise InputBundleError("derived candidate core differs from source hash chain")
+        candidate_cores[topic.topic_id] = candidate_core
+        _create_or_verify(
+            output_dir / "candidate-cores" / f"{topic.topic_id}.json",
+            _canonical_json(candidate_core_to_dict(candidate_core)),
+        )
         for relative in _SOURCE_RELATIVE_PATHS:
             _copy_create_only(
                 source_dir / topic.topic_id / relative,
                 output_dir / "source" / source_run_id / topic.topic_id / relative,
             )
-        for document in topic.documents:
+        documents_by_id = {row.docid: row for row in topic.documents}
+        for docid in candidate_core.candidate_docids:
+            document = documents_by_id[docid]
             source = (
                 document_store_root
                 / "sha256"
@@ -371,33 +682,71 @@ def build_input_directory(
     seen_cache_keys: set[str] = set()
     hits = 0
     misses = 0
+    passage_pairs = 0
+    candidate_documents = 0
+    document_semantic_pairs = 0
+    topic_stats: dict[str, dict[str, object]] = {}
     try:
         for topic in topics:
+            candidate_core = candidate_cores[topic.topic_id]
+            documents_by_id = {row.docid: row for row in topic.documents}
+            candidate_documents_for_topic = tuple(
+                documents_by_id[docid] for docid in candidate_core.candidate_docids
+            )
             chunks = tuple(
                 chunk
-                for document in topic.documents
+                for document in candidate_documents_for_topic
                 for chunk in chunker.split_text(document.text, document_id=document.docid)
             )
             query_texts = (topic.narrative,) + tuple(
                 row.text for row in topic.subnarratives
             )
+            topic_pair_count = len(chunks) * len(query_texts)
+            topic_seen_keys: set[str] = set()
+            topic_hits = 0
+            topic_misses = 0
+            reused_prior_topic_keys = 0
             for query_text in query_texts:
                 pairs = tuple((query_text, chunk.text) for chunk in chunks)
                 results = scorer.score_cache.lookup_many(pairs)
-                unique: dict[str, tuple[tuple[str, str], float | None]] = {}
                 for pair, result in zip(pairs, results, strict=True):
                     cache_key = scorer.score_cache.cache_key(
                         query_text=pair[0], text=pair[1]
                     )
-                    if cache_key not in seen_cache_keys:
-                        unique[cache_key] = (pair, result)
-                        seen_cache_keys.add(cache_key)
-                for pair, result in unique.values():
+                    if cache_key in topic_seen_keys:
+                        continue
+                    topic_seen_keys.add(cache_key)
+                    if cache_key in seen_cache_keys:
+                        reused_prior_topic_keys += 1
+                        continue
+                    seen_cache_keys.add(cache_key)
                     if result is None:
                         misses += 1
+                        topic_misses += 1
                     else:
                         hits += 1
+                        topic_hits += 1
                         hit_pairs.append(pair)
+            candidate_count = len(candidate_core.candidate_docids)
+            semantic_unit_count = len(query_texts)
+            candidate_documents += candidate_count
+            document_semantic_pairs += candidate_count * semantic_unit_count
+            passage_pairs += topic_pair_count
+            core_path = output_dir / "candidate-cores" / f"{topic.topic_id}.json"
+            topic_stats[topic.topic_id] = {
+                "cache_hits": topic_hits,
+                "cache_misses": topic_misses,
+                "candidate_core_sha256": sha256(core_path.read_bytes()).hexdigest(),
+                "candidate_count": candidate_count,
+                "chunk_count": len(chunks),
+                "document_semantic_pair_count": candidate_count
+                * semantic_unit_count,
+                "first_seen_cache_key_count": topic_hits + topic_misses,
+                "passage_pair_count": topic_pair_count,
+                "reused_prior_topic_key_count": reused_prior_topic_keys,
+                "semantic_unit_count": semantic_unit_count,
+                "unique_cache_key_count": len(topic_seen_keys),
+            }
         portable_dir = output_dir / "portable-scores"
         portable_dir.mkdir(parents=True, exist_ok=True)
         portable_path = portable_dir / f"{scorer.score_cache.context_sha256}.jsonl"
@@ -408,15 +757,23 @@ def build_input_directory(
     finally:
         scorer.score_cache.close()
     cache_stats = {
+        "candidate_documents": candidate_documents,
+        "document_semantic_pairs": document_semantic_pairs,
         "hits": hits,
         "misses": misses,
+        "passage_pairs": passage_pairs,
         "portable_rows": int(export_receipt["row_count"]),
+        "unique_cache_keys": len(seen_cache_keys),
     }
     manifest_path = seal_input_directory(
         output_dir,
         topic_ids=tuple(topic.topic_id for topic in topics),
         source_run_id=source_run_id,
         cache_stats=cache_stats,
+        canary_topic_ids=tuple(
+            topic_id for topic_id in _CANARY_TOPIC_IDS if topic_id in ordered_topic_ids
+        ),
+        topic_stats=topic_stats,
     )
     verified = verify_input_directory(
         output_dir,
@@ -426,7 +783,9 @@ def build_input_directory(
         "manifest_sha256": sha256(manifest_path.read_bytes()).hexdigest(),
         "member_count": verified["member_count"],
         "source_run_id": source_run_id,
+        "source_export_manifest_sha256": sha256(export_body).hexdigest(),
         "topic_ids": list(topic.topic_id for topic in topics),
+        "topic_stats": verified["topic_stats"],
         "cache_stats": cache_stats,
     }
 
@@ -510,6 +869,77 @@ def import_portable_score_file(
         "inserted_count": receipt["inserted_count"],
         "source_row_count": receipt["source_row_count"],
         "source_sha256": receipt["source_sha256"],
+    }
+
+
+def create_input_archive(input_dir: Path, destination: Path) -> dict[str, object]:
+    """Create immutable byte-deterministic gzip/tar bytes for one sealed input."""
+
+    root = Path(input_dir)
+    verified = verify_input_directory(root)
+    destination = Path(destination)
+    if destination.is_symlink() or (
+        destination.exists() and not destination.is_file()
+    ):
+        raise InputBundleError("input archive destination must be a regular file")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with temporary.open("wb") as raw_stream:
+            with gzip.GzipFile(
+                filename="",
+                mode="wb",
+                compresslevel=9,
+                fileobj=raw_stream,
+                mtime=0,
+            ) as gzip_stream:
+                with tarfile.open(
+                    fileobj=gzip_stream,
+                    mode="w",
+                    format=tarfile.PAX_FORMAT,
+                ) as archive:
+                    paths = sorted(
+                        (path for path in root.rglob("*") if path.is_file()),
+                        key=lambda path: path.relative_to(root).as_posix(),
+                    )
+                    for path in paths:
+                        if path.is_symlink():
+                            raise InputBundleError("input archive source contains a symlink")
+                        relative = path.relative_to(root).as_posix()
+                        info = tarfile.TarInfo(relative)
+                        info.size = path.stat().st_size
+                        info.mode = 0o600
+                        info.uid = 0
+                        info.gid = 0
+                        info.uname = ""
+                        info.gname = ""
+                        info.mtime = 0
+                        with path.open("rb") as source:
+                            archive.addfile(info, source)
+            raw_stream.flush()
+            os.fsync(raw_stream.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if _file_receipt(temporary) != _file_receipt(destination):
+                raise InputBundleError(
+                    f"conflicting immutable input archive: {destination}"
+                ) from None
+    finally:
+        temporary.unlink(missing_ok=True)
+    archive_size, archive_sha256 = _file_receipt(destination)
+    return {
+        "archive_byte_count": archive_size,
+        "archive_sha256": archive_sha256,
+        "manifest_sha256": sha256((root / MANIFEST_NAME).read_bytes()).hexdigest(),
+        "member_count": verified["member_count"],
+        "topic_ids": verified["topic_ids"],
     }
 
 
@@ -619,6 +1049,7 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--score-cache", type=Path, required=True)
     build.add_argument("--output-dir", type=Path, required=True)
     build.add_argument("--topic", action="append", dest="topic_ids", required=True)
+    build.add_argument("--require-official-topic-set", action="store_true")
     verify = commands.add_parser("verify")
     verify.add_argument("input_dir", type=Path)
     verify.add_argument("--topic", action="append", dest="topic_ids", default=[])
@@ -631,6 +1062,9 @@ def _parser() -> argparse.ArgumentParser:
     import_cache = commands.add_parser("import-cache")
     import_cache.add_argument("--portable", type=Path, required=True)
     import_cache.add_argument("--score-cache", type=Path, required=True)
+    archive = commands.add_parser("create-archive")
+    archive.add_argument("--input-dir", type=Path, required=True)
+    archive.add_argument("--output", type=Path, required=True)
     extract = commands.add_parser("extract-archive")
     extract.add_argument("--archive", type=Path, required=True)
     extract.add_argument("--output-dir", type=Path, required=True)
@@ -648,6 +1082,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             score_cache_root=args.score_cache,
             topic_ids=tuple(args.topic_ids),
             output_dir=args.output_dir,
+            require_official_topic_set=args.require_official_topic_set,
         )
     elif args.command == "verify":
         verified = verify_input_directory(
@@ -669,6 +1104,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         receipt = export_portable_score_cache(args.score_cache, args.output)
     elif args.command == "import-cache":
         receipt = import_portable_score_file(args.portable, args.score_cache)
+    elif args.command == "create-archive":
+        receipt = create_input_archive(args.input_dir, args.output)
     else:
         receipt = extract_input_archive(
             args.archive,

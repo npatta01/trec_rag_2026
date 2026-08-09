@@ -562,6 +562,8 @@ def load_topic_input(
     source_dir: Path,
     topic_id: str,
     document_store_root: Path,
+    *,
+    selected_docids: tuple[str, ...] | None = None,
 ) -> TopicInput:
     """Load one complete source topic without opening organizer judgments."""
 
@@ -696,10 +698,24 @@ def load_topic_input(
         raise ValueError("selection union pool repeats a document")
     if set(union_docids) != set(document_bindings):
         raise ValueError("selection union pool differs from retrieval audit documents")
+    if selected_docids is None:
+        materialized_docids = tuple(union_docids)
+    else:
+        if (
+            not isinstance(selected_docids, tuple)
+            or not selected_docids
+            or len(set(selected_docids)) != len(selected_docids)
+            or any(not isinstance(docid, str) or not docid for docid in selected_docids)
+            or not set(selected_docids).issubset(document_bindings)
+        ):
+            raise ValueError(
+                "selected docids must be a nonempty unique subset of the union"
+            )
+        materialized_docids = selected_docids
 
     store = DocumentStore(Path(document_store_root))
     documents: list[SourceDocument] = []
-    for docid in sorted(union_docids, key=lambda value: value.encode("utf-8")):
+    for docid in sorted(materialized_docids, key=lambda value: value.encode("utf-8")):
         content_digest, rank = document_bindings[docid]
         text = store.read_text(content_digest)
         if not text.strip():
@@ -1891,11 +1907,16 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _score_topic_command(args: argparse.Namespace) -> dict[str, object]:
-    topic = load_topic_input(args.source_dir, args.topic, args.document_store)
     candidate_core_value, _candidate_core_body = _read_json_object(
         args.candidate_core
     )
     candidate_core = candidate_core_from_dict(candidate_core_value)
+    topic = load_topic_input(
+        args.source_dir,
+        args.topic,
+        args.document_store,
+        selected_docids=candidate_core.candidate_docids,
+    )
     scorer = MixedbreadPassageScorer(
         score_cache_root=args.score_cache,
         device=args.device,

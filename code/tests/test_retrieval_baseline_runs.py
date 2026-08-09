@@ -566,6 +566,38 @@ def test_load_topic_input_verifies_document_content_digest(tmp_path: Path) -> No
         load_topic_input(source, "rag2026-2", document_root)
 
 
+def test_load_topic_input_can_materialize_only_an_authenticated_candidate_subset(
+    tmp_path: Path,
+) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    audit = json.loads(
+        (source / "rag2026-2/retrieval/audit.json").read_text(encoding="utf-8")
+    )
+    second_digest = audit["lanes"][0]["candidates"][1]["text_sha256"]
+    (
+        document_root
+        / "sha256"
+        / second_digest[:2]
+        / f"{second_digest}.utf8"
+    ).unlink()
+
+    topic = load_topic_input(
+        source,
+        "rag2026-2",
+        document_root,
+        selected_docids=("d1",),
+    )
+
+    assert tuple(row.docid for row in topic.documents) == ("d1",)
+    with pytest.raises(ValueError, match="selected docids"):
+        load_topic_input(
+            source,
+            "rag2026-2",
+            document_root,
+            selected_docids=("ghost",),
+        )
+
+
 def test_topic_sort_key_orders_numeric_suffixes_naturally() -> None:
     assert sorted(["rag2026-10", "rag2026-2", "rag2026-1"], key=topic_sort_key) == [
         "rag2026-1",
