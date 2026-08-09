@@ -83,11 +83,11 @@ def test_dstack_template_is_pinned_private_and_gpu_bounded() -> None:
         "HF_CLI_MODE=direct",
     ]
     assert value["resources"]["gpu"]["count"] == 1
-    assert value["resources"]["gpu"]["name"] == ["B200"]
+    assert value["resources"]["gpu"]["name"] == ["H200"]
     assert value["resources"]["gpu"]["memory"] == "48GB.."
     assert value["spot_policy"] == "on-demand"
     assert value["idle_duration"] == "0s"
-    assert value["max_price"] == 7.0
+    assert value["max_price"] == 5.0
 
 
 def test_launcher_defaults_to_declined_preview_and_uses_clean_snapshot() -> None:

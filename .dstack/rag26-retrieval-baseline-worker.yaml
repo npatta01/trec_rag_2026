@@ -19,7 +19,7 @@ commands:
 
 resources:
   gpu:
-    name: [B200]
+    name: [H200]
     count: 1
     memory: 48GB..
   memory: 48GB..
@@ -27,7 +27,7 @@ resources:
 
 backends: [runpod, vastai]
 spot_policy: on-demand
-max_price: 7.0
+max_price: 5.0
 max_duration: 10h
 idle_duration: 0s
 retry:

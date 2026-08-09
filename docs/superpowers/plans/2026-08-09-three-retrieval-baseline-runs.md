@@ -132,7 +132,7 @@
 
 - [ ] **Step 4: Implement worker and launcher**
 
-  Use the digest-pinned CUDA image, direct `hf`, an on-demand `B200` with at least 48 GB VRAM/RAM, a hard `max_price`, and bounded native `no-capacity` retry. Keep scorer batch size explicit in the worker manifest.
+  Use the digest-pinned CUDA image, direct `hf`, an on-demand `H200` with at least 48 GB VRAM/RAM, a hard `max_price`, and bounded native `no-capacity` retry. Keep scorer batch size explicit in the worker manifest.
 
 - [ ] **Step 5: Run focused cloud-workflow tests**
 
