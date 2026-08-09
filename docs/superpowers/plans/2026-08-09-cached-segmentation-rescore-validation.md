@@ -26,7 +26,7 @@
   final review finding now also preserves any failed gate or interrupted run in
   a distinct marker-last, non-promotable diagnostic bundle.
 - Local verification passes: lock check, shell syntax, compile checks, diff
-  check, real wrapper/dstack-HF preflights, and 454 targeted tests. Next action:
+  check, real wrapper/dstack-HF preflights, and 456 targeted tests. Next action:
   finish the independent re-review, commit the fixes, then preview actual
   dstack offers. No dstack launch has occurred.
 

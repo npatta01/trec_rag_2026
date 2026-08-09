@@ -71,6 +71,16 @@ def test_wrapper_preflight_freezes_all22_and_zero_upstream_expectations() -> Non
     assert "warm_probe_topics=14,31" in result.stdout
 
 
+def test_live_wrapper_validates_topics_after_creating_the_locked_environment() -> None:
+    wrapper = WRAPPER.read_text()
+
+    assert 'validate_topic_order "$project_python"' in wrapper
+    assert 'validate_topic_order "$venv_python"' in wrapper
+    assert wrapper.index("uv sync --group cuda") < wrapper.index(
+        'validate_topic_order "$venv_python"'
+    )
+
+
 def test_task_uses_one_fast_bounded_on_demand_gpu_and_only_named_secrets() -> None:
     value = yaml.safe_load(TASK.read_text())
 

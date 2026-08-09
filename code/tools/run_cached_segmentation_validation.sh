@@ -63,11 +63,10 @@ source_config="$REPO_ROOT/$config_rel"
 for command_name in bash git python3 uv; do
   command -v "$command_name" >/dev/null || die "$command_name is required"
 done
-project_python="$REPO_ROOT/.venv/bin/python"
-[[ -x $project_python ]] || die "project Python is required"
-
 topics_csv=$(IFS=,; printf '%s' "${TOPICS[*]}")
-"$project_python" - "$source_config" "$topics_csv" <<'PY'
+validate_topic_order() {
+  local interpreter=$1
+  "$interpreter" - "$source_config" "$topics_csv" <<'PY'
 from pathlib import Path
 import sys
 from trec_rag.facet_pilot_config import load_facet_pilot_config, select_configured_topics
@@ -77,6 +76,13 @@ actual = tuple(topic.id for topic in select_configured_topics(load_facet_pilot_c
 if actual != tuple(expected.split(",")):
     raise SystemExit(f"configured topic order changed: {actual!r}")
 PY
+}
+
+project_python="$REPO_ROOT/.venv/bin/python"
+if $preflight; then
+  [[ -x $project_python ]] || die "project Python is required for preflight"
+  validate_topic_order "$project_python"
+fi
 
 source_prefix="hf://buckets/${BUCKET_ID}/${BUCKET_PREFIX}/experiments/${source_run_id}"
 result_prefix="hf://buckets/${BUCKET_ID}/${BUCKET_PREFIX}/experiments/${run_id}"
@@ -126,6 +132,7 @@ venv_python="$REPO_ROOT/.venv/bin/python"
 venv_hf="$REPO_ROOT/.venv/bin/hf"
 [[ -x $venv_python && -x $venv_hf ]] || die "locked environment setup failed"
 hf_cli() { "$venv_hf" "$@"; }
+validate_topic_order "$venv_python"
 
 work_root="/tmp/trec-rag-segmentation/${run_id}"
 bundle_root="$work_root/source-bundles"
