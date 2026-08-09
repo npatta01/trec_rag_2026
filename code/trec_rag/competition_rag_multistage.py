@@ -100,6 +100,32 @@ def _load_final_record(
     return record
 
 
+def _prepare_multistage_state(
+    config: RagGenerationConfig,
+    identity: dict[str, Any],
+) -> None:
+    if config.overwrite:
+        raise ValueError("multi-stage generation does not support experiment.mode: overwrite")
+
+    identity_path = config.resolved_work_dir / _IDENTITY_FILENAME
+    if config.resume:
+        try:
+            recorded = json.loads(identity_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("cannot read multi-stage generation identity") from exc
+        if recorded != identity:
+            raise ValueError("multi-stage resume identity differs from create identity")
+        return
+
+    if config.output_path.exists() or _work_has_artifacts(config.resolved_work_dir):
+        raise ValueError("multi-stage generation artifacts already exist")
+    config.resolved_work_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(
+        identity_path,
+        json.dumps(identity, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+
+
 async def _run_multistage_locked(
     config: RagGenerationConfig,
     handoff: GenerationHandoff,
@@ -108,31 +134,36 @@ async def _run_multistage_locked(
     api_key: str,
     topic_runner: TopicRunner,
 ) -> None:
-    if config.resume or config.overwrite:
-        raise ValueError("initial multi-stage implementation requires experiment.mode: create")
-    if config.output_path.exists() or _work_has_artifacts(config.resolved_work_dir):
-        raise ValueError("multi-stage generation artifacts already exist")
-
-    config.resolved_work_dir.mkdir(parents=True, exist_ok=True)
     identity = _multistage_identity(config, handoff, topics)
-    _atomic_write_text(
-        config.resolved_work_dir / _IDENTITY_FILENAME,
-        json.dumps(identity, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
+    _prepare_multistage_state(config, identity)
 
     semaphore = asyncio.Semaphore(config.concurrency)
 
     async def run_topic(topic: GenerationTopic) -> Path:
+        root = _bounded_private_root(config, topic)
+        state_mode = "resume" if root.exists() or root.is_symlink() else "create"
         async with semaphore:
             return await topic_runner(
                 config,
                 handoff,
                 topic,
                 api_key=api_key,
-                state_mode="create",
+                state_mode=state_mode,
             )
 
-    roots = await asyncio.gather(*(run_topic(topic) for topic in topics))
+    results = await asyncio.gather(
+        *(run_topic(topic) for topic in topics),
+        return_exceptions=True,
+    )
+    failure_count = sum(isinstance(result, BaseException) for result in results)
+    if failure_count:
+        raise RuntimeError(
+            "multi-stage topic execution failed for "
+            f"{failure_count} of {len(topics)} topics"
+        )
+    roots = [result for result in results if isinstance(result, Path)]
+    if len(roots) != len(topics):
+        raise RuntimeError("multi-stage topic runner returned an invalid result")
     records = [
         _load_final_record(
             root,

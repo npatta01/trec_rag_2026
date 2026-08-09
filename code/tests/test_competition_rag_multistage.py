@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path
 
+import pytest
+
 from trec_rag.competition_rag import RagGenerationConfig
-from trec_rag.competition_rag_multistage import run_multistage_generation
+from trec_rag.competition_rag_multistage import (
+    _multistage_identity,
+    run_multistage_generation,
+)
 from trec_rag.generation_handoff import (
     SOURCE_CONTRACT,
     ClaimHint,
@@ -204,3 +210,157 @@ def test_create_publishes_all_validated_topics_in_handoff_order(tmp_path: Path) 
         )
     )
     assert identity["handoff_manifest_sha256"] == handoff.manifest_sha256
+
+
+def test_resume_reuses_started_topic_and_creates_unstarted_topic(
+    tmp_path: Path,
+) -> None:
+    handoff = _handoff()
+    create_config = _config(tmp_path)
+    resume_config = replace(create_config, resume=True)
+    topics = handoff.topics
+    create_config.work_dir.mkdir(parents=True)
+    (create_config.work_dir / "multistage_generation_identity.json").write_text(
+        json.dumps(_multistage_identity(create_config, handoff, topics)),
+        encoding="utf-8",
+    )
+    existing_root = _write_completed_topic(create_config, handoff, topics[0])
+    invoked: list[tuple[str, str]] = []
+
+    async def fake_topic_runner(
+        runner_config: RagGenerationConfig,
+        runner_handoff: GenerationHandoff,
+        topic: GenerationTopic,
+        *,
+        api_key: str,
+        state_mode: str,
+    ) -> Path:
+        invoked.append((topic.topic_id, state_mode))
+        if topic == topics[0]:
+            assert state_mode == "resume"
+            return existing_root
+        assert state_mode == "create"
+        return _write_completed_topic(runner_config, runner_handoff, topic)
+
+    asyncio.run(
+        run_multistage_generation(
+            resume_config,
+            handoff,
+            api_key="fixture-key",
+            topic_runner=fake_topic_runner,
+        )
+    )
+
+    assert invoked == [("rag2026-0", "resume"), ("rag2026-1", "create")]
+    assert len(resume_config.output_path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_resume_refuses_changed_run_identity_before_dispatch(tmp_path: Path) -> None:
+    handoff = _handoff()
+    create_config = _config(tmp_path)
+    create_config.work_dir.mkdir(parents=True)
+    (create_config.work_dir / "multistage_generation_identity.json").write_text(
+        json.dumps(_multistage_identity(create_config, handoff, handoff.topics)),
+        encoding="utf-8",
+    )
+    changed_config = replace(
+        create_config,
+        resume=True,
+        model="openai/different-model",
+    )
+    invoked: list[str] = []
+
+    async def fake_topic_runner(*args: object, **kwargs: object) -> Path:
+        invoked.append("called")
+        raise AssertionError("topic runner must not be called")
+
+    with pytest.raises(ValueError, match="identity differs"):
+        asyncio.run(
+            run_multistage_generation(
+                changed_config,
+                handoff,
+                api_key="fixture-key",
+                topic_runner=fake_topic_runner,
+            )
+        )
+
+    assert invoked == []
+    assert not changed_config.output_path.exists()
+
+
+def test_missing_final_never_publishes_and_sibling_finishes(tmp_path: Path) -> None:
+    handoff = _handoff()
+    config = _config(tmp_path)
+    completed: list[str] = []
+
+    async def fake_topic_runner(
+        runner_config: RagGenerationConfig,
+        runner_handoff: GenerationHandoff,
+        topic: GenerationTopic,
+        *,
+        api_key: str,
+        state_mode: str,
+    ) -> Path:
+        if topic == handoff.topics[0]:
+            raise RuntimeError("provider detail that must not escape")
+        root = _write_completed_topic(runner_config, runner_handoff, topic)
+        completed.append(topic.topic_id)
+        return root
+
+    with pytest.raises(RuntimeError, match="1 of 2 topics") as exc_info:
+        asyncio.run(
+            run_multistage_generation(
+                config,
+                handoff,
+                api_key="fixture-key",
+                topic_runner=fake_topic_runner,
+            )
+        )
+
+    assert "provider detail" not in str(exc_info.value)
+    assert completed == ["rag2026-1"]
+    assert not config.output_path.exists()
+
+
+def test_incomplete_topic_state_never_publishes(tmp_path: Path) -> None:
+    handoff = _handoff()
+    config = _config(tmp_path)
+
+    async def fake_topic_runner(
+        runner_config: RagGenerationConfig,
+        runner_handoff: GenerationHandoff,
+        topic: GenerationTopic,
+        *,
+        api_key: str,
+        state_mode: str,
+    ) -> Path:
+        if topic == handoff.topics[1]:
+            return _write_completed_topic(runner_config, runner_handoff, topic)
+        root = _bounded_private_root(runner_config, topic)
+        root.mkdir(parents=True)
+        (root / "state.json").write_text(
+            json.dumps(
+                {
+                    "trial_contract_version": TRIAL_CONTRACT_VERSION,
+                    "identity": _bounded_identity(
+                        runner_config, runner_handoff, topic
+                    ),
+                    "stages": {"final": False},
+                    "stage_hashes": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return root
+
+    with pytest.raises(ValueError, match="topic is incomplete"):
+        asyncio.run(
+            run_multistage_generation(
+                config,
+                handoff,
+                api_key="fixture-key",
+                topic_runner=fake_topic_runner,
+            )
+        )
+
+    assert not config.output_path.exists()
