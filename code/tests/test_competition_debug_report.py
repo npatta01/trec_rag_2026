@@ -2668,12 +2668,7 @@ def test_standalone_topic_page_contains_one_complete_trace_and_relative_navigati
 
     assert page.startswith("<!doctype html>")
     assert "Topic rag2026-0" in page
-    for stage in (
-        "Narrative", "Subnarratives", "Generated answer", "Funnel overview",
-        "New documents", "Selected documents", "Top passages",
-        "Final selected nuggets", "Final retrieval",
-    ):
-        assert stage in page
+    assert _standalone_stage_ids(page) == _EXPECTED_STANDALONE_STAGE_IDS
     assert 'href="../index.html"' in page
     assert 'href="rag2026-0.html"' in page
     assert 'href="rag2026-2.html"' in page
@@ -2707,6 +2702,154 @@ def test_standalone_topic_page_omits_missing_boundary_links_and_escapes_text(
             total=1,
         ),
     )
+
+
+_EXPECTED_STANDALONE_STAGE_IDS = (
+    "stage-literal-rag2026-0-narrative",
+    "stage-literal-rag2026-0-subnarratives",
+    "stage-literal-rag2026-0-final-rag",
+    "stage-literal-rag2026-0-funnel-overview",
+    "stage-literal-rag2026-0-new-documents",
+    "stage-literal-rag2026-0-selected-documents",
+    "stage-literal-rag2026-0-top-passages",
+    "stage-literal-rag2026-0-final-selected-nuggets",
+    "stage-literal-rag2026-0-final-retrieval",
+)
+
+
+def _standalone_stage_ids(page: str) -> tuple[str, ...]:
+    topic_content = page.split('<div class="topic-content">', 1)[1]
+    return tuple(
+        re.findall(
+            r'<section id="(stage-literal-rag2026-0-[^"]+)"',
+            topic_content,
+        )
+    )
+
+
+@pytest.mark.parametrize("rag_supplied", (False, True))
+def test_standalone_topic_page_has_exact_stage_ids_for_rag_branches(
+    tmp_path: Path, rag_supplied: bool
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config = None
+    if rag_supplied:
+        rag_config, _rag_output, _output_sha256 = _write_rag_run(
+            tmp_path, retrieval_output
+        )
+    data = load_debug_report_data(config_path, rag_config_path=rag_config)
+
+    page = debug_report.render_debug_topic_page(
+        data.topics[0],
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html", position=1, total=1
+        ),
+    )
+
+    assert _standalone_stage_ids(page) == _EXPECTED_STANDALONE_STAGE_IDS
+
+
+@pytest.mark.parametrize(
+    ("position", "total"),
+    (
+        (1.5, 2.5),
+        (True, 2),
+        (1, True),
+        (0, 1),
+        (-1, 1),
+        (1, 0),
+        (1, -1),
+        (3, 2),
+    ),
+)
+def test_standalone_topic_page_requires_positive_integer_navigation(
+    tmp_path: Path, position: object, total: object
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+
+    with pytest.raises(ValueError, match="topic page position"):
+        debug_report.render_debug_topic_page(
+            topic,
+            navigation=debug_report.TopicPageNavigation(
+                summary_href="../index.html",
+                position=position,
+                total=total,
+            ),
+        )
+
+
+@pytest.mark.parametrize("window_size", ("1280,720", "390,844"))
+def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
+    tmp_path: Path, window_size: str
+) -> None:
+    """The raw topic nav remains visible after scrolling through a long trace."""
+    chrome = shutil.which("google-chrome") or shutil.which("chromium")
+    if chrome is None:
+        pytest.skip("headless Chrome is not available")
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    long_topic = replace(
+        topic,
+        narrative=" ".join(
+            f"long-narrative-word-{index}" for index in range(3000)
+        ),
+    )
+    page = debug_report.render_debug_topic_page(
+        long_topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html", position=1, total=1
+        ),
+    )
+    document_path = tmp_path / f"sticky-{window_size.replace(',', '-')}.html"
+    recorder = (
+        '<script>setTimeout(() => {'
+        'const target = document.getElementById("stage-literal-rag2026-0-final-retrieval");'
+        'document.documentElement.style.scrollBehavior = "auto";'
+        'window.scrollTo(0, target.offsetTop);'
+        'const nav = document.querySelector(".topic-page-nav");'
+        'const rect = nav.getBoundingClientRect();'
+        'document.documentElement.setAttribute("data-scroll-y", String(Math.round(scrollY)));'
+        'document.documentElement.setAttribute("data-target-top", String(Math.round(target.getBoundingClientRect().top)));'
+        'document.documentElement.setAttribute("data-nav-top", String(Math.round(rect.top)));'
+        'document.documentElement.setAttribute("data-nav-bottom", String(Math.round(rect.bottom)));'
+        'document.documentElement.setAttribute("data-viewport-height", String(innerHeight));'
+        '}, 150);</script>'
+    )
+    document_path.write_text(
+        page.replace("</body>", f"{recorder}</body>"), encoding="utf-8"
+    )
+    completed = subprocess.run(
+        [
+            chrome,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            f"--window-size={window_size}",
+            "--virtual-time-budget=500",
+            "--dump-dom",
+            f"{document_path.as_uri()}#stage-literal-rag2026-0-final-retrieval",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    scroll_y = re.search(r'data-scroll-y="(\d+)"', completed.stdout)
+    target_top = re.search(r'data-target-top="(-?\d+)"', completed.stdout)
+    nav_top = re.search(r'data-nav-top="(-?\d+)"', completed.stdout)
+    nav_bottom = re.search(r'data-nav-bottom="(-?\d+)"', completed.stdout)
+    viewport_height = re.search(
+        r'data-viewport-height="(\d+)"', completed.stdout
+    )
+    assert scroll_y is not None and target_top is not None
+    assert nav_top is not None and nav_bottom is not None
+    assert viewport_height is not None
+    assert int(scroll_y.group(1)) > 0
+    assert 0 <= int(target_top.group(1)) < int(viewport_height.group(1))
+    assert -1 <= int(nav_top.group(1)) <= 1
+    assert 44 <= int(nav_bottom.group(1)) <= int(viewport_height.group(1))
 
 
 def test_html_topics_use_one_open_native_panel_and_a_progressive_switcher(

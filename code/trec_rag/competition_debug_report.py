@@ -2825,6 +2825,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible { outline: .22rem s
 @media (prefers-color-scheme: dark) { :root { --page: #0d1320; --surface: #141d2d; --surface-soft: #1a263a; --ink: #edf3ff; --muted: #aebbd0; --line: #39475e; --accent: #7ca1ff; --accent-ink: #10182a; --focus: #fbbf24; } }
 @media (max-width: 42rem) { header, main, footer { padding: .75rem; } section { padding: .75rem; } nav li { flex: 1 1 calc(50% - .65rem); } .topic-tab, .topic-link-fallback { width: 100%; } .run-diagnostics dl { display: block; } .run-diagnostics dd { margin: 0 0 .75rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+html.topic-page-document, body.topic-page-document { overflow-x: clip; }
 .topic-page-nav { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: .65rem; margin: 1.25rem 0 0; padding: .75rem 0; background: color-mix(in srgb, var(--page) 92%, transparent); }
 .topic-page-link { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: .65rem 1rem; border-radius: 999px; border: 1px solid var(--line); font: inherit; font-weight: 750; color: var(--ink); background: var(--surface); text-decoration: none; }
 .topic-page-link:hover { color: var(--accent-ink); border-color: var(--accent); background: var(--accent); }
@@ -2912,8 +2913,9 @@ _LEGACY_TOPIC_SCRIPT = """(() => {
 
 def _render_html_document(title: str, header: str, main: str, script: str) -> str:
     script_markup = f"<script>\n{script}\n</script>" if script else ""
+    document_class = ' class="topic-page-document"' if not script else ""
     return f"""<!doctype html>
-<html lang="en">
+<html lang="en"{document_class}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2922,7 +2924,7 @@ def _render_html_document(title: str, header: str, main: str, script: str) -> st
 <style>
 {_DEBUG_REPORT_CSS}</style>
 </head>
-<body>
+<body{document_class}>
 {header}
 {main}
 <footer><p>Generated deterministically from sealed report data; no retrieval, model, or network calls were made.</p></footer>
@@ -2982,23 +2984,31 @@ def _topic_page_link(href: str | None, label: str) -> str:
 def render_debug_topic_page(
     topic: TopicReport, *, navigation: TopicPageNavigation
 ) -> str:
-    if navigation.total < 1 or not 1 <= navigation.position <= navigation.total:
+    if (
+        type(navigation.total) is not int
+        or navigation.total < 1
+        or type(navigation.position) is not int
+        or not 1 <= navigation.position <= navigation.total
+    ):
         raise ValueError("topic page position must belong to its total")
     header = (
         '<header><p class="eyebrow">Private raw trace</p>'
         f'<h1>Topic {_html(topic.topic_id)}</h1>'
         f'<p>Topic {_html(navigation.position)} of {_html(navigation.total)}</p>'
+        '</header>'
+    )
+    page_navigation = (
         '<nav class="topic-page-nav" aria-label="Report navigation">'
         f'{_topic_page_link(navigation.summary_href, "Back to summary")}'
         f'{_topic_page_link(navigation.previous_href, "Previous topic")}'
         f'{_topic_page_link(navigation.next_href, "Next topic")}'
-        '</nav></header>'
+        '</nav>'
     )
     return _render_html_document(
         title=f"{topic.topic_id} · Competition retrieval debug report",
         header=header,
         main=(
-            f"<main>{_render_pipeline_legend()}"
+            f"<main>{page_navigation}{_render_pipeline_legend()}"
             '<p class="stage-note">Generated answer appears in the Final RAG stage when supplied.</p>'
             f"{_render_topic_content(topic)}</main>"
         ),
