@@ -21,6 +21,7 @@ from trec_rag.facet_evidence import (
     SubnarrativeContext,
     _byte_offsets,
     _scoring_text_and_boundaries,
+    _source_spans,
     extract_document_candidates,
     select_subnarrative_candidates,
 )
@@ -362,6 +363,16 @@ def test_source_coordinate_cache_reuses_document_offsets() -> None:
     source = CountedText("Repeated source text.")
 
     assert _byte_offsets(source) == _byte_offsets(source)
+
+
+def test_source_spans_do_not_split_a_sentence_at_a_hard_line_wrap() -> None:
+    source = "Housing Costs:\nThe rental market has surged\nover two years. Prices rose."
+
+    spans = _source_spans(source, _byte_offsets(source))
+
+    assert [span.text for span in spans] == [
+        "Housing Costs:\nThe rental market has surged\nover two years. Prices rose."
+    ]
 
 
 def test_bounded_document_projection_cache_retains_only_current_document() -> None:
