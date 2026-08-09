@@ -10,13 +10,18 @@ Upload one `r_output_trec_rag_2026.tsv` file per Evalbase submission:
 
 | Suggested priority | Variant | Run ID | File |
 |---:|---|---|---|
-| 1 | Narrative + subnarrative | `r26-narrative-facet-v1` | `combo/r_output_trec_rag_2026.tsv` |
+| 1 | Narrative + subnarrative | `r26-narr-facet-v1` | `combo/r_output_trec_rag_2026.tsv` |
 | 2 | Subnarrative evidence breadth | `r26-facet-breadth-v1` | `breadth/r_output_trec_rag_2026.tsv` |
 | 3 | Narrative only | `r26-narrative-v1` | `narrative/r_output_trec_rag_2026.tsv` |
 
 The priority order is a recommendation, not an organizer rule. The current
 organizer page permits up to ten runs per task and requires participants to
 report a priority on each submission form.
+
+Start with the repository-wide [`submission ledger`](../../SUBMISSION_LEDGER.md).
+It links the exact upload file and copy/paste Evalbase response for each run.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the end-to-end design, formulas,
+runtime-model classification, and system boundaries.
 
 ## Shared candidate cutoff
 
@@ -65,14 +70,14 @@ Each run contains 4,246 rows. Depth ranges from 1 to 121 documents, with 61
 distinct values of `k` and no fallback topics. The document set for a given
 narrative is identical across the three runs.
 
-See `metadata.json` for the compact provenance record and
-`detailed-run-manifest.json` for authenticated per-topic cutoff statistics,
+See `metadata.json` for the compact provenance and Evalbase answer record, and
+`retrieval-baseline-runs-manifest.json` for authenticated per-topic cutoff statistics,
 source-pool hashes, matrix hashes, scorer identity, and run-file receipts.
 
 The successful remote publication was produced at source commit
 `22b9feef18dddb6111beedb35b8c021516fab552`. Commit
 `a2f5a5ffeebc6938dd946b2850876e3fc8f32903` subsequently made floating-point
-aggregation independent of Python 3.11/3.12 evaluation details. Regeneration
-with that fix produced all three run files byte-for-byte identically; the
-detailed manifest intentionally retains the immutable successful-publication
-module digest.
+aggregation independent of Python 3.11/3.12 evaluation details. Commit
+`c8caca97060664ad323e89b89375f3a75aae9ee1` shortened the combo run tag to the
+20-character Evalbase limit. The submission files and run manifest were
+then regenerated from the authenticated final matrices without model calls.

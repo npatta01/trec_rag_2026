@@ -22,6 +22,23 @@
     "evalbase_priority_required": true,
     "submission_url": "https://ir.nist.gov/evalbase/conf/trec-2026"
   },
+  "evalbase": {
+    "form_observed_at": "2026-08-09",
+    "run_tag_maximum_characters": 20,
+    "run_tag_pattern": "[A-Za-z0-9][A-Za-z0-9_.-]{0,19}",
+    "common_answers": {
+      "run_type": "automatic",
+      "submission_purpose": "real run",
+      "agents_used_during_development": "Yes",
+      "retrieval_access": "combination of both",
+      "retrieval_pipeline_category": "sparse/lexical",
+      "retrieval_staging": "multi-stage",
+      "uses_neural_networks": "Yes",
+      "uses_proprietary_models": "No",
+      "uses_open_weight_models": "Yes"
+    },
+    "classification_note": "Candidate documents came from the organizer's Pyserini REST API and a custom local scoring and selection system reranked them; no custom index was used. BM25 is the sparse candidate retriever, while neural planning and reranking are declared separately. Runtime models are open-weight. Codex agents assisted development but did not select documents at runtime."
+  },
   "source": {
     "retrieval_artifact": "outputs/facet-deepseek-b40-v3",
     "source_run_id": "facet-deepseek-b40-v3",
@@ -35,11 +52,22 @@
     "successful_publication_module_sha256": "6deea9cdaf2a5232b9c483545ecfa97a8faf5e715550030f7bd23a2fda7429fe",
     "python_portability_fix_commit": "a2f5a5ffeebc6938dd946b2850876e3fc8f32903",
     "python_portability_fix_tree": "393b7c4ad56a0aefb68ca03d25b82198b81b63b2",
-    "current_module_sha256": "53429459f14ff48c7d4e9166c2829aaea29927ecd710580b3fc002fc21ce977a",
+    "portal_projection_commit": "c8caca97060664ad323e89b89375f3a75aae9ee1",
+    "portal_projection_tree": "8336049ec3e024730abf183735f4c303edbc024b",
+    "current_module_sha256": "0d0b9606c7c5fe409ddeb9bc1dd9eeb383ef1a5e1866b109e82ad67d6a23b1e2",
     "portable_cache_sha256": "5de85b38a103ea0a129c7770f736ae57724b55af04b8f547622ee1ee1839057d"
+  },
+  "planner": {
+    "backend": "trec_rag.facet_extraction.OpenRouterDeepSeekFacetBackend",
+    "model": "deepseek/deepseek-v4-flash-20260423",
+    "prompt_version": "subnarrative_query_generator_v1",
+    "response_schema": "subnarrative_queries_v1",
+    "execution": "bounded one-shot planning before retrieval",
+    "weights_license": "MIT"
   },
   "candidate_selection": {
     "source_unit": "one authenticated original or facet:<subnarrative>:text retrieval lane",
+    "threshold_population": "documents present in that authenticated source lane",
     "positive_mad_rule": "A_u(d) >= median_u + 2.5 * 1.4826 * MAD_u",
     "zero_mad_rule": "A_u(d) > median_u",
     "combination": "union of original-narrative and every facet-text lane admission",
@@ -51,6 +79,7 @@
     "backend_version": "5.6.0",
     "model": "mixedbread-ai/mxbai-rerank-base-v2",
     "model_revision": "3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
+    "weights_license": "Apache-2.0",
     "input_policy": "topic_passage_query_text_v1",
     "score_representation": "raw_logits",
     "max_length": 1024,
@@ -67,18 +96,20 @@
     {
       "name": "combo",
       "suggested_priority": 1,
-      "run_id": "r26-narrative-facet-v1",
+      "run_id": "r26-narr-facet-v1",
       "path": "combo/r_output_trec_rag_2026.tsv",
+      "evalbase_response_path": "combo/EVALBASE.md",
       "ranking": "0.5 narrative percentile + 0.5 * (0.7 best facet percentile + 0.3 second-best facet percentile)",
-      "bytes": 256562,
+      "bytes": 235332,
       "line_count": 4246,
-      "sha256": "7cca71ee5495faf7c9606078af77b50f839063de8966a253ddb4237b4620ac18"
+      "sha256": "29bc0c29dd51a752d49c734db456926ef94ad5202102cabd92d7fbf3e9dd15e8"
     },
     {
       "name": "breadth",
       "suggested_priority": 2,
       "run_id": "r26-facet-breadth-v1",
       "path": "breadth/r_output_trec_rag_2026.tsv",
+      "evalbase_response_path": "breadth/EVALBASE.md",
       "ranking": "supported subnarrative count, strong passage count, combo score, retrieval rank, UTF-8 document ID",
       "bytes": 248070,
       "line_count": 4246,
@@ -89,6 +120,7 @@
       "suggested_priority": 3,
       "run_id": "r26-narrative-v1",
       "path": "narrative/r_output_trec_rag_2026.tsv",
+      "evalbase_response_path": "narrative/EVALBASE.md",
       "ranking": "narrative percentile, retrieval rank, UTF-8 document ID",
       "bytes": 231086,
       "line_count": 4246,
@@ -122,8 +154,8 @@
       "contains_credentials_or_private_urls": false
     }
   },
-  "detailed_manifest": {
-    "path": "detailed-run-manifest.json",
-    "sha256": "e94dded92a5b0c5224c4b798bb61b55c981d1dc75454de61ea7b1744edfb925d"
+  "run_manifest": {
+    "path": "retrieval-baseline-runs-manifest.json",
+    "sha256": "afde8c8143e86e025b5481c4a7330e2b5c9547f3a9086597f9be103f06150246"
   }
 }
