@@ -960,6 +960,27 @@ def score_topics(
     return tuple(matrices)
 
 
+def expected_cache_hit_count(matrix: TopicMatrix) -> int:
+    """Return cache observations for a complete replay, excluding duplicate keys."""
+
+    if not isinstance(matrix, TopicMatrix):
+        raise TypeError("matrix must be a TopicMatrix")
+    _validate_topic_matrix(matrix)
+    chunk_text_sha256 = {
+        (row.docid, row.start_char, row.end_char): row.text_sha256
+        for row in matrix.chunks
+    }
+    return len(
+        {
+            (
+                row.unit_id,
+                chunk_text_sha256[(row.docid, row.start_char, row.end_char)],
+            )
+            for row in matrix.passages
+        }
+    )
+
+
 def _validate_topic_matrix(matrix: TopicMatrix) -> None:
     if not isinstance(matrix, TopicMatrix):
         raise TypeError("matrix must be a TopicMatrix")
@@ -2046,6 +2067,7 @@ __all__ = [
     "breadth_counts",
     "build_rankings",
     "cutoff_decision",
+    "expected_cache_hit_count",
     "export_runs",
     "load_topic_input",
     "main",

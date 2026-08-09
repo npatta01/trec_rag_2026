@@ -21,6 +21,7 @@ from trec_rag.retrieval_baseline_input_bundle import (
 from trec_rag.retrieval_baseline_collection import collect_remote_scoring
 from trec_rag.retrieval_baseline_remote_worker import (
     OFFICIAL_TOPIC_IDS,
+    _compare_matrix_artifacts,
     ordered_scoring_phases,
     run_canary_gated_scoring,
     run_remote_scoring,
@@ -128,15 +129,17 @@ def _remote_fixture(
     ).hexdigest()
     stored = DocumentStore(input_dir / "documents/v1").admit_text("shared passage")
     empty_admissions = sha256(b"").hexdigest()
+    duplicate_admissions = sha256(b"doc\ndoc-copy\n").hexdigest()
     topic_stats: dict[str, dict[str, object]] = {}
     for topic_id in OFFICIAL_TOPIC_IDS:
+        duplicate_noncanary = topic_id == "rag2026-0"
         core = CandidateCore(
             topic_id=topic_id,
             lane_scores_sha256="c" * 64,
-            candidate_docids=("doc",),
-            pre_fallback_count=0,
-            fallback_used=True,
-            admission_multiplicity_histogram={},
+            candidate_docids=("doc", "doc-copy") if duplicate_noncanary else ("doc",),
+            pre_fallback_count=2 if duplicate_noncanary else 0,
+            fallback_used=not duplicate_noncanary,
+            admission_multiplicity_histogram={"1": 2} if duplicate_noncanary else {},
             lanes=(
                 CandidateLaneStat(
                     "original",
@@ -144,9 +147,9 @@ def _remote_fixture(
                     0.0,
                     0.0,
                     "strictly_greater_than",
-                    1,
-                    0,
-                    empty_admissions,
+                    2 if duplicate_noncanary else 1,
+                    2 if duplicate_noncanary else 0,
+                    duplicate_admissions if duplicate_noncanary else empty_admissions,
                 ),
                 CandidateLaneStat(
                     "facet:s1:text",
@@ -175,11 +178,11 @@ def _remote_fixture(
             "cache_hits": 0,
             "cache_misses": 2,
             "candidate_core_sha256": sha256(core_path.read_bytes()).hexdigest(),
-            "candidate_count": 1,
-            "chunk_count": 1,
-            "document_semantic_pair_count": 2,
+            "candidate_count": 2 if duplicate_noncanary else 1,
+            "chunk_count": 2 if duplicate_noncanary else 1,
+            "document_semantic_pair_count": 4 if duplicate_noncanary else 2,
             "first_seen_cache_key_count": 2,
-            "passage_pair_count": 2,
+            "passage_pair_count": 4 if duplicate_noncanary else 2,
             "reused_prior_topic_key_count": 0,
             "semantic_unit_count": 2,
             "unique_cache_key_count": 2,
@@ -198,11 +201,11 @@ def _remote_fixture(
         topic_ids=OFFICIAL_TOPIC_IDS,
         source_run_id=source_run_id,
         cache_stats={
-            "candidate_documents": 119,
-            "document_semantic_pairs": 238,
+            "candidate_documents": 120,
+            "document_semantic_pairs": 240,
             "hits": 0,
             "misses": 238,
-            "passage_pairs": 238,
+            "passage_pairs": 240,
             "portable_rows": 0,
             "unique_cache_keys": 238,
         },
@@ -217,7 +220,10 @@ def _remote_fixture(
         *,
         selected_docids: tuple[str, ...],
     ) -> TopicInput:
-        assert selected_docids == ("doc",)
+        expected_docids = (
+            ("doc", "doc-copy") if topic_id == "rag2026-0" else ("doc",)
+        )
+        assert selected_docids == expected_docids
         return TopicInput(
             topic_id=topic_id,
             narrative=f"narrative {topic_id}",
@@ -230,6 +236,19 @@ def _remote_fixture(
                     {},
                     "shared passage",
                 ),
+            )
+            + (
+                (
+                    SourceDocument(
+                        "doc-copy",
+                        stored.content_sha256,
+                        2,
+                        {},
+                        "shared passage",
+                    ),
+                )
+                if topic_id == "rag2026-0"
+                else ()
             ),
             source_sha256s={
                 "retrieval_export_manifest.json": source_export_manifest_sha256,
@@ -344,6 +363,65 @@ def test_canary_replay_failure_writes_redacted_receipt_and_stops(
     )
 
 
+def test_final_replay_failure_writes_recoverable_redacted_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        input_dir,
+        scorer_factory,
+        _model,
+        _counters,
+        source_revision,
+        source_tree,
+    ) = _remote_fixture(tmp_path, monkeypatch)
+    comparisons = 0
+
+    def fail_first_final(first: Path, second: Path) -> None:
+        nonlocal comparisons
+        comparisons += 1
+        if comparisons == 3:
+            raise ValueError("forced secret-bearing final mismatch detail")
+        _compare_matrix_artifacts(first, second)
+
+    monkeypatch.setattr(
+        "trec_rag.retrieval_baseline_remote_worker._compare_matrix_artifacts",
+        fail_first_final,
+    )
+    publication = tmp_path / "publication"
+
+    with pytest.raises(ValueError, match="secret-bearing"):
+        run_remote_scoring(
+            input_dir=input_dir,
+            work_root=tmp_path / "work",
+            publication_dir=publication,
+            scorer_factory=scorer_factory,
+        )
+
+    receipt_path = publication / "remote-scoring-failure-receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt == {
+        "canary_topic_ids": ["rag2026-1", "rag2026-18"],
+        "failure_stage": "final_replay",
+        "failure_type": "ValueError",
+        "input_manifest_sha256": sha256(
+            (input_dir / "input-manifest.json").read_bytes()
+        ).hexdigest(),
+        "schema_version": "retrieval-baseline-remote-failure-v2",
+        "scored_topic_ids": ["rag2026-1", "rag2026-18"]
+        + [
+            topic_id
+            for topic_id in OFFICIAL_TOPIC_IDS
+            if topic_id not in {"rag2026-1", "rag2026-18"}
+        ],
+        "source_revision": source_revision,
+        "source_tree": source_tree,
+        "status": "failed",
+    }
+    assert (publication / "portable-scores/complete.jsonl").is_file()
+    assert b"secret-bearing" not in receipt_path.read_bytes()
+
+
 def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -374,7 +452,28 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
     assert len(list((publication / "replay-receipts/final").glob("*.json"))) == 119
     assert (
         publication / "runs/narrative/r_output_trec_rag_2026.tsv"
-    ).read_text(encoding="utf-8").count("\n") == 119
+    ).read_text(encoding="utf-8").count("\n") == 120
+    duplicate_matrix_receipt = json.loads(
+        (publication / "matrices/rag2026-0/score-receipt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert duplicate_matrix_receipt["passage_pair_count"] == 4
+    assert duplicate_matrix_receipt["cache_stats"] == {
+        "cache_hits": 0,
+        "cache_misses": 2,
+        "model_batches": 2,
+    }
+    duplicate_replay_receipt = json.loads(
+        (publication / "replay-receipts/final/rag2026-0.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert duplicate_replay_receipt["cache_stats"] == {
+        "cache_hits": 2,
+        "cache_misses": 0,
+        "model_batches": 0,
+    }
 
     sums = publication / "SHA256SUMS"
     lines = []

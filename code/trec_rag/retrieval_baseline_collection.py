@@ -23,6 +23,7 @@ from trec_rag.retrieval_baseline_remote_worker import OFFICIAL_TOPIC_IDS
 from trec_rag.retrieval_baseline_runs import (
     TopicMatrix,
     export_runs,
+    expected_cache_hit_count,
     load_topic_input,
     read_topic_matrix,
     score_topic,
@@ -279,7 +280,8 @@ def replay_cache_only(
             if (
                 matrix.cache_stats.get("cache_misses") != 0
                 or matrix.cache_stats.get("model_batches") != 0
-                or matrix.cache_stats.get("cache_hits") != len(matrix.passages)
+                or matrix.cache_stats.get("cache_hits")
+                != expected_cache_hit_count(matrix)
             ):
                 raise ValueError("local replay was not completely cache-only")
             write_topic_matrix(matrix, output_dir / "matrices" / topic_id)

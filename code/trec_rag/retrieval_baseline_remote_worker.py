@@ -23,6 +23,7 @@ from trec_rag.retrieval_baseline_input_bundle import (
 from trec_rag.retrieval_baseline_runs import (
     TopicMatrix,
     export_runs,
+    expected_cache_hit_count,
     load_topic_input,
     read_topic_matrix,
     score_topic,
@@ -250,7 +251,8 @@ def run_remote_scoring(
                 if (
                     matrix.cache_stats.get("cache_misses") != 0
                     or matrix.cache_stats.get("model_batches") != 0
-                    or matrix.cache_stats.get("cache_hits") != len(matrix.passages)
+                    or matrix.cache_stats.get("cache_hits")
+                    != expected_cache_hit_count(matrix)
                 ):
                     raise ValueError("fresh-cache replay was not completely cache-only")
                 write_topic_matrix(matrix, replay_matrices_root / topic_id)
@@ -331,13 +333,30 @@ def run_remote_scoring(
     _write_new_json(
         publication_dir / "cache-export-receipt.json", cache_export_receipt
     )
-    replayed = replay_topics(
-        OFFICIAL_TOPIC_IDS,
-        portable_path=complete_scores,
-        replay_cache=work_root / "final-replay-cache",
-        replay_matrices_root=work_root / "final-replay-matrices",
-        receipt_phase="final",
-    )
+    try:
+        replayed = replay_topics(
+            OFFICIAL_TOPIC_IDS,
+            portable_path=complete_scores,
+            replay_cache=work_root / "final-replay-cache",
+            replay_matrices_root=work_root / "final-replay-matrices",
+            receipt_phase="final",
+        )
+    except Exception as exc:
+        _write_new_json(
+            publication_dir / "remote-scoring-failure-receipt.json",
+            {
+                "canary_topic_ids": list(CANARY_TOPIC_IDS),
+                "failure_stage": "final_replay",
+                "failure_type": type(exc).__name__,
+                "input_manifest_sha256": input_manifest_sha256,
+                "schema_version": "retrieval-baseline-remote-failure-v2",
+                "scored_topic_ids": list(live_matrices),
+                "source_revision": source_revision,
+                "source_tree": source_tree,
+                "status": "failed",
+            },
+        )
+        raise
     matrices = tuple(
         read_topic_matrix(matrices_root / topic_id) for topic_id in OFFICIAL_TOPIC_IDS
     )
