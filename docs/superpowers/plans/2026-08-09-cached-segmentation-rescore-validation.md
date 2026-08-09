@@ -491,7 +491,7 @@ explicitly ineligible for promotion.
 
 Use the pinned `huggingface/trl` image digest and launcher sentinel. Map secret
 names only. Configure one on-demand H200/H100 pool verified against dstack
-0.20.29, at least 80 GB VRAM, 24 CPU cores, 192 GB RAM, 100 GB disk, `max_duration: 2h50m`, a 2h40m wrapper deadline, hard
+0.20.29, at least 80 GB VRAM, 24 CPU cores, 192 GB RAM, 100 GB disk, `max_duration: 170m`, a 2h40m wrapper deadline, hard
 price cap, RunPod/Vast.ai, and bounded `no-capacity` retry.
 
 - [ ] **Step 6: Verify GREEN and commit**
