@@ -30,6 +30,11 @@ approval_fields_empty() {
   done
 }
 
+valid_instance_type() {
+  local pattern='^[A-Za-z0-9]([A-Za-z0-9 ._:+/-]{0,126}[A-Za-z0-9])?$'
+  [[ $1 =~ $pattern ]]
+}
+
 cleanup() {
   [[ -n $transport_tmp ]] || return 0
   case "$transport_tmp" in
@@ -87,7 +92,7 @@ else
     || die "--approved-backend is unsafe"
   [[ $approved_region =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
     || die "--approved-region is unsafe"
-  [[ $approved_instance_type =~ ^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}$ ]] \
+  valid_instance_type "$approved_instance_type" \
     || die "--approved-instance-type is unsafe"
   [[ $approved_gpu == H200 || $approved_gpu == H100 ]] \
     || die "--approved-gpu must be H200 or H100"

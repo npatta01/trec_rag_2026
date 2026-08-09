@@ -148,6 +148,36 @@ def test_launcher_preview_accepts_five_empty_approval_fields() -> None:
     assert populated.returncode == 1
 
 
+def test_launcher_accepts_safe_cloud_instance_names_with_spaces() -> None:
+    launcher = LAUNCHER.read_text()
+    match = re.search(
+        r"(?ms)^valid_instance_type\(\) \{\n.*?^\}\n",
+        launcher,
+    )
+    assert match is not None
+
+    valid = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"{match.group(0)}\nvalid_instance_type 'NVIDIA H100 80GB HBM3'",
+        ],
+        check=False,
+    )
+    leading_space = subprocess.run(
+        ["bash", "-c", f"{match.group(0)}\nvalid_instance_type ' unsafe'"],
+        check=False,
+    )
+    shell_syntax = subprocess.run(
+        ["bash", "-c", f"{match.group(0)}\nvalid_instance_type '$(unsafe)'"],
+        check=False,
+    )
+
+    assert valid.returncode == 0
+    assert leading_space.returncode == 1
+    assert shell_syntax.returncode == 1
+
+
 def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> None:
     wrapper = WRAPPER.read_text()
     launcher = LAUNCHER.read_text()
