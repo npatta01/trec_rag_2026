@@ -204,8 +204,10 @@ def test_checked_in_competition_configs_use_only_the_full_handoff(
     )
 
     assert config.topic_ids is None
-    assert config.handoff_manifest_path == (
-        retrieval.output_dir / "generation_handoff_manifest.json"
+    assert config.handoff_manifest_path.parts[-3:] == (
+        "outputs",
+        retrieval.experiment.id,
+        "generation_handoff_manifest.json",
     )
     assert not hasattr(config, "queries_path")
     assert not hasattr(config, "run_path")
@@ -2152,6 +2154,14 @@ def test_openrouter_uses_an_openai_compatible_http_transport() -> None:
     assert captured["body"]["provider"] == {"require_parameters": True}
     assert generated["answer"][0]["citations"] == ["climbmix-a"]
     assert raw["id"] == "response-1"
+
+
+def test_openrouter_generator_closes_its_owned_http_client() -> None:
+    generator = _openrouter_generator()
+
+    generator.close()
+
+    assert generator._http_client.is_closed
 
 
 def test_openrouter_honors_an_http_date_retry_after(

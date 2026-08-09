@@ -1140,6 +1140,85 @@ tests with:
   code/tests/test_competition_rag.py
 ```
 
+### Two RAG submissions from one completed retrieval
+
+The authenticated v3 handoff can feed two independent generation strategies without rerunning
+retrieval:
+
+```text
+outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
+├── trec_rag.competition_rag            -> single-pass submission
+└── trec_rag.competition_rag_multistage -> frozen multi-stage submission
+```
+
+Use the ignored local configs below. They deliberately have different experiment IDs, output
+directories, work state, run IDs, and JSONL files:
+
+```text
+configs/local/rag26-rag-singlepass-sol-final-v1.yaml
+configs/local/rag26-rag-multistage-sol-final-v1.yaml
+configs/local/rag26-rag-multistage-smoke-0-1-2.yaml
+```
+
+These files are ignored and do not survive a branch merge or worktree removal. Recreate them
+after merging by copying the tracked Sol config, then assign the exact experiment IDs and matching
+output directories shown by the filenames above:
+
+```bash
+mkdir -p configs/local
+cp configs/rag26_competition_rag_gpt_sol_v2.yaml \
+  configs/local/rag26-rag-singlepass-sol-final-v1.yaml
+cp configs/rag26_competition_rag_gpt_sol_v2.yaml \
+  configs/local/rag26-rag-multistage-sol-final-v1.yaml
+cp configs/local/rag26-rag-multistage-sol-final-v1.yaml \
+  configs/local/rag26-rag-multistage-smoke-0-1-2.yaml
+```
+
+Keep `mode: create` and the v3 handoff path. In the smoke file add
+`topic_ids: [rag2026-0, rag2026-1, rag2026-2]` under `experiment` and set concurrency to 2. The
+single-pass and multi-stage full files omit `topic_ids` and keep concurrency 4.
+
+The retrieval result is reused through the sealed handoff. Generated answers are not shared
+between strategies: single pass caches one validated row per topic under `work/rows/`, while the
+multi-stage runner caches its bounded stage state under `work/bounded_revision/`. Resume is valid
+only under the exact strategy-specific identity.
+
+First authenticate the full handoff and inspect the multi-stage call ceiling without writes or
+provider calls:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag_multistage \
+  --config configs/local/rag26-rag-multistage-sol-final-v1.yaml --dry-run
+```
+
+Run only the three-topic multi-stage smoke first:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag_multistage \
+  --config configs/local/rag26-rag-multistage-smoke-0-1-2.yaml
+```
+
+After reviewing that smoke, the two independent full runs are:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag \
+  --config configs/local/rag26-rag-singlepass-sol-final-v1.yaml
+
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag_multistage \
+  --config configs/local/rag26-rag-multistage-sol-final-v1.yaml
+```
+
+If a run is interrupted, change only its local config from `mode: create` to `mode: resume` and
+repeat the same command. Multi-stage resume authenticates the complete run identity, resumes an
+existing per-topic state, creates a topic that never started, and publishes no organizer JSONL
+until every selected final row passes local validation. Multi-stage `overwrite` is intentionally
+unsupported; use a fresh experiment ID for a materially different run. If any topic or final-row
+validation fails, the runner prints each topic ID and sanitized exception and records the same
+details in `work/failures.json`; resume remains the recovery path. If a process dies while an
+operation-screen call is in flight, resume cannot safely repeat that consumed Luna reservation.
+The topic therefore publishes its already validated draft fallback and records a loud per-topic
+`operation_screen_crash_fallback` warning in both stderr and `work/failures.json`.
+
 ## Private post-run competition debug report
 
 `trec_rag.competition_debug_report` explains an already completed competition
@@ -2319,6 +2398,48 @@ Outputs: a six-column TREC run and one document row per topic, both shaped for
 query-relevant chunks via `trec_rag.chunking.SemanticTextChunker` instead of being left for the
 generator to head-truncate. Validation: ranks are dense and scores non-increasing so
 `load_trec_run` accepts the output, and duplicate docids are collapsed to their best rank.
+
+### Bounded narrative revision
+
+`narrative_blueprint_trial` retains legacy throwaway experiment modes, but its opt-in bounded-
+revision state machine is also the supported per-topic engine used by
+`competition_rag_multistage`. The one-topic CLI is useful for smoke runs and diagnosis; the
+competition runner supplies full-run orchestration, concurrency, failure reporting, and atomic
+publication. The revision response is a strict `keep_draft`/`edit` splice contract;
+each new object must be one sentence intended to state one atomic claim, with one strongest
+citation by default and at most two. Each citation must be in the topic-wide authenticated domain
+and in the selected evidence linked to that operation's named audit cards. A structurally valid,
+nonempty operation set then receives one decisions-only Luna screen over the full narrative,
+surviving draft, named audit cards, and selected evidence. Local code applies only operations that
+pass all five support, atomicity, materiality, redundancy, and replacement-safety gates; malformed
+or unacceptable screen output preserves the validated draft. Old trial state cannot resume under
+a changed splice or screen contract. Give each experiment a new ignored local config and output
+namespace. The one-topic CLI runs topics separately; both it and the production multi-stage
+runner consume only the authenticated handoff and never read gold nuggets, qrels, TREC runs,
+full-text archives, or RAGDoll results during generation.
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
+  --config configs/local/bounded-revision-233.yaml --topic 233 \
+  --bounded-revision --state-mode create --dry-run
+
+PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
+  --config configs/local/bounded-revision-233.yaml --topic 233 \
+  --bounded-revision --state-mode create
+
+# After an interruption, resume the same topic and config:
+PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
+  --config configs/local/bounded-revision-233.yaml --topic 233 \
+  --bounded-revision --state-mode resume
+```
+
+Private state, call receipts, manifests, draft/final submissions, and arm-specific generation
+identities live under `config.resolved_work_dir/bounded_revision/<topic>`. The normal path uses
+one Luna planner, one Luna audit per authenticated group, at most one Luna operation screen, and
+two Sol reservations (draft and revision); one additional Sol reservation is permitted only for
+deterministic validation repair. If the initial draft fails local validation, that repair produces
+one corrected full candidate and then skips audit, revision, and screen calls. If a valid draft
+reaches revision, the repair can only correct the splice wrapper/subset and cannot rewrite prose.
 
 ### `retrieval_baseline_runs.py`
 
