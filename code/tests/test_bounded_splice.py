@@ -12,6 +12,10 @@ from trec_rag.bounded_splice import SpliceOperation, SpliceValidationError, spli
 
 ALLOWED_DOCIDS = ("doc-old-0", "doc-old-1", "doc-insert", "doc-replace", "doc-merge")
 ALLOWED_AUDIT_IDS = ("a001", "a002", "a003", "a004", "a005", "a006")
+AUDIT_CARD_DOCIDS = {
+    card_id: ALLOWED_DOCIDS
+    for card_id in ALLOWED_AUDIT_IDS
+}
 
 
 def _draft() -> dict[str, object]:
@@ -33,12 +37,13 @@ def _draft() -> dict[str, object]:
 
 def _validate(
     draft: dict[str, object], payload: object,
+    audit_card_docids: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[SpliceOperation, ...] | None:
     return bounded_splice.validate_splice_payload(
         draft,
         payload,
         ALLOWED_DOCIDS,
-        ALLOWED_AUDIT_IDS,
+        AUDIT_CARD_DOCIDS if audit_card_docids is None else audit_card_docids,
     )
 
 
@@ -62,8 +67,80 @@ def test_splice_schema_is_strict() -> None:
     answer_schema = operation_schema["properties"]["new_object"]
     citation_schema = answer_schema["properties"]["citations"]
     assert citation_schema["minItems"] == 1
-    assert citation_schema["maxItems"] == 3
+    assert citation_schema["maxItems"] == 2
     assert citation_schema["items"] == {"type": "string"}
+
+
+def test_new_object_must_be_one_terminal_sentence() -> None:
+    draft = _draft()
+
+    with pytest.raises(SpliceValidationError, match="one terminal sentence"):
+        _validate(
+            draft,
+            {
+                "decision": "edit",
+                "operations": [
+                    {
+                        "start_index": 0,
+                        "delete_count": 0,
+                        "new_object": {
+                            "text": "First supported claim. Second supported claim.",
+                            "citations": ["doc-insert"],
+                        },
+                        "audit_card_ids": ["a001"],
+                    }
+                ],
+            },
+        )
+
+    with pytest.raises(SpliceValidationError, match="terminal punctuation"):
+        _validate(
+            draft,
+            {
+                "decision": "edit",
+                "operations": [
+                    {
+                        "start_index": 0,
+                        "delete_count": 0,
+                        "new_object": {
+                            "text": "A supported but unterminated claim",
+                            "citations": ["doc-insert"],
+                        },
+                        "audit_card_ids": ["a001"],
+                    }
+                ],
+            },
+        )
+
+
+def test_new_object_citations_must_come_from_its_named_audit_cards() -> None:
+    draft = _draft()
+    payload = {
+        "decision": "edit",
+        "operations": [
+            {
+                "start_index": 0,
+                "delete_count": 0,
+                "new_object": {
+                    "text": "A card-linked claim.",
+                    "citations": ["doc-replace"],
+                },
+                "audit_card_ids": ["a001"],
+            }
+        ],
+    }
+
+    with pytest.raises(SpliceValidationError, match="linked audit-card evidence"):
+        _validate(draft, payload, {"a001": ("doc-insert",)})
+
+    payload["operations"][0]["audit_card_ids"] = ["a001", "a002"]
+    operations = _validate(
+        draft,
+        payload,
+        {"a001": ("doc-insert",), "a002": ("doc-replace",)},
+    )
+    assert operations is not None
+    assert operations[0].citations == ("doc-replace",)
 
 
 def test_provider_schema_uses_only_supported_keywords() -> None:
@@ -364,6 +441,24 @@ def test_single_operation_indexes_are_relative_to_three_object_literal_draft() -
             "duplicate",
         ),
         (
+            "three_citation_limit",
+            {
+                "decision": "edit",
+                "operations": [
+                    {
+                        "start_index": 0,
+                        "delete_count": 0,
+                        "new_object": {
+                            "text": "Too many citations.",
+                            "citations": ["doc-insert", "doc-replace", "doc-merge"],
+                        },
+                        "audit_card_ids": ["a001"],
+                    }
+                ],
+            },
+            "at most 2",
+        ),
+        (
             "unauthenticated_raw_docid",
             {
                 "decision": "edit",
@@ -402,6 +497,7 @@ def test_single_operation_indexes_are_relative_to_three_object_literal_draft() -
         "eight_touched_object_budget",
         "unknown_audit_card",
         "duplicate_raw_citations",
+        "three_citation_limit",
         "unauthenticated_raw_docid",
         "boolean_start_index",
     ],
@@ -457,7 +553,7 @@ def test_repaired_payload_can_only_reuse_initial_new_objects() -> None:
         repaired,
         initial_payload,
         ALLOWED_DOCIDS,
-        ALLOWED_AUDIT_IDS,
+        AUDIT_CARD_DOCIDS,
     )
     assert operations == (
         SpliceOperation(
@@ -477,7 +573,7 @@ def test_repaired_payload_can_only_reuse_initial_new_objects() -> None:
             changed_text,
             initial_payload,
             ALLOWED_DOCIDS,
-            ALLOWED_AUDIT_IDS,
+            AUDIT_CARD_DOCIDS,
         )
 
     changed_citations = deepcopy(repaired)
@@ -488,5 +584,5 @@ def test_repaired_payload_can_only_reuse_initial_new_objects() -> None:
             changed_citations,
             initial_payload,
             ALLOWED_DOCIDS,
-            ALLOWED_AUDIT_IDS,
+            AUDIT_CARD_DOCIDS,
         )

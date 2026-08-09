@@ -29,6 +29,7 @@ from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
     _bounded_record_draft_failure,
     _bounded_recovered_payload,
+    _audit_card_docids,
     _digest_json,
     _digest_text,
     _bounded_revision_prompt,
@@ -315,7 +316,38 @@ def test_splice_revision_prompt_indexes_draft_and_uses_audit_card_ids() -> None:
     assert "[0]" in prompt and "[1]" in prompt
     assert "a001" in prompt
     assert "operations" in prompt
+    assert "one self-contained sentence stating one atomic claim" in prompt
+    assert "single strongest citation" in prompt
+    assert "linked to that operation's named audit cards" in prompt
     assert "Return a complete replacement organizer JSON object" not in prompt
+
+
+def test_audit_card_docids_route_only_each_cards_linked_evidence() -> None:
+    topic = _topic_fixture()
+    cards = (
+        {
+            "card_id": "a001",
+            "evidence_aliases": ("e001",),
+        },
+        {
+            "card_id": "a002",
+            "evidence_aliases": ("e001", "e002"),
+        },
+    )
+
+    assert _audit_card_docids(topic, cards) == {
+        "a001": ("DOCID_SENTINEL_ALPHA",),
+        "a002": ("DOCID_SENTINEL_ALPHA", "DOCID_SENTINEL_BETA"),
+    }
+
+
+@pytest.mark.parametrize("evidence_aliases", [(), ("e999",)])
+def test_audit_card_docids_reject_invalid_evidence_aliases(evidence_aliases) -> None:
+    with pytest.raises(ValueError, match="evidence_aliases"):
+        _audit_card_docids(
+            _topic_fixture(),
+            ({"card_id": "a001", "evidence_aliases": evidence_aliases},),
+        )
 
 
 def test_splice_trial_uses_a_new_contract_version() -> None:

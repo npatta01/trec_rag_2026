@@ -75,8 +75,8 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
-TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v2_splice"
-SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v1"
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v3_splice_citation_bound"
+SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v2_citation_bound"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
 MAX_SOL_RESERVATIONS = 3
@@ -567,6 +567,33 @@ def merge_audit_cards(
         }
         for index, (_key, card) in enumerate(retained[:MAX_MERGED_AUDIT_CARDS], start=1)
     )
+
+
+def _audit_card_docids(
+    topic: GenerationTopic,
+    audit_cards: tuple[dict[str, Any], ...],
+) -> dict[str, tuple[str, ...]]:
+    """Bind each merged audit card to only its authenticated evidence docids."""
+
+    _group_aliases, evidence_aliases, _evidence_groups = _audit_aliases(topic)
+    docid_by_alias = {
+        evidence_aliases[evidence.evidence_id]: evidence.docid
+        for evidence in topic.evidence
+    }
+    routed: dict[str, tuple[str, ...]] = {}
+    for index, card in enumerate(audit_cards):
+        card_id = card.get("card_id")
+        if not isinstance(card_id, str) or not card_id or card_id in routed:
+            raise ValueError(f"audit cards[{index}] has invalid card_id")
+        aliases = card.get("evidence_aliases")
+        if (
+            not isinstance(aliases, (list, tuple))
+            or not aliases
+            or any(not isinstance(alias, str) or alias not in docid_by_alias for alias in aliases)
+        ):
+            raise ValueError(f"audit cards[{index}] has invalid evidence_aliases")
+        routed[card_id] = tuple(dict.fromkeys(docid_by_alias[alias] for alias in aliases))
+    return routed
 
 
 def _write_json(path: Path, value: object, *, api_key: str) -> None:
@@ -1691,8 +1718,11 @@ def _bounded_revision_prompt(
         "and 1,024 whitespace-separated assembled answer words. Audit cards are advisory candidates,",
         "not requirements. Prefer merge or replacement over unnecessary insertion, preserve caveats",
         "and balance, retain causal qualifications and planner `must` obligations, and do not create",
-        "a citation-by-citation inventory. New object citations must be raw docids from the full",
-        "authenticated citation domain above.",
+        "a citation-by-citation inventory. Every new object must be one self-contained sentence stating one atomic claim.",
+        "Prefer a single strongest citation; use a second only when it",
+        "independently supports the complete object. Use at most two unique raw docids, and every",
+        "citation must come from evidence linked to that operation's named audit cards as well as",
+        "the full authenticated citation domain above.",
         *_bounded_draft_objects_prompt(draft),
         "MERGED AUDIT CARDS (ADVISORY; stable IDs are authenticated allowlist values):",
     ]
@@ -1723,6 +1753,9 @@ def _bounded_splice_repair_prompt(
         "operations. You may correct only wrapper fields, indexes, ranges, budgets, or audit-card",
         "references. Every repaired `new_object` must exactly equal a `new_object` from the initial",
         "splice response; do not introduce or rewrite answer prose or citations.",
+        "Retain an operation only when its object is one self-contained sentence stating one atomic",
+        "claim, has at most two citations (prefer the single strongest), and every citation is linked",
+        "to that operation's named audit cards. Otherwise omit it or return `keep_draft`.",
         *_bounded_draft_objects_prompt(draft),
         "MERGED AUDIT CARDS (ADVISORY; stable IDs are authenticated allowlist values):",
     ]
@@ -2070,6 +2103,7 @@ async def _run_bounded_revision(
         _bounded_write_state(root, state)
 
     audit_cards = merge_audit_cards(topic, cards_by_group)
+    audit_card_docids = _audit_card_docids(topic, audit_cards)
     merged_path = root / "audit.merged.json"
     _atomic_write_text(merged_path, json.dumps(list(audit_cards), indent=2) + "\n")
     _bounded_register_file(root, state, merged_path)
@@ -2135,7 +2169,7 @@ async def _run_bounded_revision(
                 draft,
                 splice_payload,
                 tuple(topic.citation_docids),
-                tuple(card["card_id"] for card in audit_cards),
+                audit_card_docids,
             )
             if operations is None:
                 final = _bounded_rebind_candidate(
@@ -2208,7 +2242,7 @@ async def _run_bounded_revision(
                     repaired,
                     initial_splice_payload,
                     tuple(topic.citation_docids),
-                    tuple(card["card_id"] for card in audit_cards),
+                    audit_card_docids,
                 )
                 if operations is None:
                     final = _bounded_rebind_candidate(

@@ -135,11 +135,11 @@ gate passed with 35 tests, Ruff, `py_compile`, `git diff --check`, and a zero-ca
 - Generation cost: Luna `$0.007289625`; Sol `$0.476130000`; total `$0.483419625`.
 
 The Luna qualitative review preferred the final. Both arms covered all five top-level narrative
-obligations; the final added two relevant omissions without obvious discourse seams. A direct
-selected-passage check of the five citation links introduced by those objects found four fully
-supported, one partially supported, and zero unsupported. The partial result is a mild temporal
-qualifier that should be softened in a future prompt iteration, not grounds for a fourth Sol call
-or a manual edit to the sealed experiment.
+obligations; the final added two relevant omissions without obvious discourse seams. A preliminary
+claim-level selected-passage check found four of five introduced links fully supported and one
+partially supported. That check did **not** match the competition metric's unit: RAGDoll judges each
+citation against the complete answer object. The full-object support result below supersedes that
+preliminary citation characterization.
 
 ## Paired coverage result
 
@@ -169,10 +169,48 @@ The paired evaluator made 16 cheap hosted calls and cost `$0.009871000`. Topic 8
 `$0.493290625` including generation and coverage evaluation. Across all three live attempts in
 this report, the provider-reported total was `$1.106797385`.
 
+## Frozen topic-897 citation-support audit
+
+The frozen draft and final were subsequently judged with RAGDoll's full-answer-object support
+contract using DeepSeek V4 Flash at minimal thinking and the same authenticated selected-evidence
+view. The fail-closed adapter validated exactly one completed `FS`, `PS`, or `NS` judgment for all
+43 draft and 47 final citation tasks, with no missing or conflicting tasks.
+
+| Metric | Draft | Final | Delta |
+|---|---:|---:|---:|
+| Weighted first-citation precision | 0.809524 | 0.802326 | **-0.007198** |
+| Weighted all-citation precision | 0.809524 | 0.802326 | **-0.007198** |
+| Hard precision | 0.642857 | 0.627907 | **-0.014950** |
+| Full Support citations | 27 | 27 | 0 |
+| Partial Support citations | 15 | 19 | +4 |
+| No Support citations | 1 | 1 | 0 |
+| Citation tasks | 43 | 47 | +4 |
+
+Both retained edits were compound two-sentence objects. The replacement used three citations and
+the insertion used two; all five citations attached to those edited objects received only Partial
+Support because no individual passage supported the complete multi-claim object. The draft object
+that was replaced was already Partial Support, so the revision gained nuggets but added citation
+denominator without adding any Full Support judgments. This explains the small but real precision
+regression.
+
+The support judge made 43 calls for the draft and reused those cached judgments for the unchanged
+final objects; only the five changed citation tasks required new final-arm calls. The provider-cost
+CSV totals were `$0.007390` and `$0.000713`, or **`$0.008103`** combined. Including generation,
+nugget evaluation, and support evaluation, topic 897 cost `$0.501393625`; the three-attempt total
+recorded here is `$1.114900385`.
+
+This is a diagnosis of the old frozen output, not a live validation of the new contract. The
+hardened validator now requires each splice object to be one terminal sentence, permits at most two
+citations, and restricts citations to the union of evidence linked to the operation's named audit
+cards. The prompt also asks for one atomic claim and the single strongest citation by default. The
+exact two frozen topic-897 edits would therefore both be rejected, with the existing bounded repair
+allowed only to drop them or keep the validated draft—not rewrite them in a fourth Sol call.
+
 ## Deadline verdict
 
-**Prefer the topic-897 final and retain the bounded splice design as the best current approach.**
-It produced a meaningful, coverage-positive revision within the 1,024-word cap and the three-Sol
-ceiling. This is still one topic, not evidence of general reliability. The immediate production
-lesson is to keep the whole-narrative draft, use cheap per-group omission audits, and permit one
-atomic evidence-bound splice repair; do not add another open-ended rewrite pass.
+**Retain the bounded splice design, but do not promote the exact frozen edit behavior.** Topic 897
+showed a meaningful coverage gain within the 1,024-word cap and three-Sol ceiling, alongside a
+small citation-precision regression caused by compound objects. This is still one topic, not
+evidence of general reliability. The next representative run should keep the whole-narrative
+draft, use cheap per-group omission audits, enforce atomic audit-evidence-bound splice objects, and
+allow the existing splice-only repair; it should not add another open-ended rewrite pass.

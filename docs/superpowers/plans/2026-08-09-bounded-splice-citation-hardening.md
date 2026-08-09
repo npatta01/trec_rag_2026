@@ -8,6 +8,9 @@
 
 **Tech Stack:** Python 3.12, pytest, existing strict OpenRouter schema, existing RAGDoll CLI.
 
+**Status:** Complete on 2026-08-09. Focused verification passed with 41 tests; the frozen
+topic-897 support comparison completed with 43/43 draft and 47/47 final citation judgments.
+
 ## Global Constraints
 
 - Keep changes inside the throwaway bounded-splice path; do not modify the supported competition runner.
@@ -31,7 +34,7 @@
 - Consumes: immutable draft, parsed splice payload, authenticated topic docids, and `Mapping[str, tuple[str, ...]]` from audit-card ID to linked docids.
 - Produces: the existing `SpliceOperation` tuple or `None`, with sentence, citation-count, and card-routing guarantees.
 
-- [ ] **Step 1: Write the failing schema and routing tests**
+- [x] **Step 1: Write the failing schema and routing tests**
 
 Add literal tests asserting `splice_response_schema()` caps citations at two and that
 `validate_splice_payload` rejects:
@@ -47,7 +50,7 @@ as a compound object, rejects three citations, and rejects authenticated `doc-b`
 card maps only to `("doc-a",)`. Add one green-path fixture where two named cards map to `doc-a`
 and `doc-b` and both citations are accepted.
 
-- [ ] **Step 2: Run the selected tests and verify red**
+- [x] **Step 2: Run the selected tests and verify red**
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_bounded_splice.py \
@@ -56,7 +59,7 @@ PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_bounded_splice.py \
 
 Expected: failures show the current three-citation schema and flat card-ID interface.
 
-- [ ] **Step 3: Implement the minimal validator changes**
+- [x] **Step 3: Implement the minimal validator changes**
 
 Import `Mapping`, change both validator signatures to accept
 `audit_card_docids: Mapping[str, tuple[str, ...]]`, and pass that mapping into `_parse_operation`.
@@ -64,7 +67,7 @@ After validating card IDs, compute the union of their mapped docids and reject a
 it. Reject mapping entries with no linked docids. Change schema and runtime citation maximum to two.
 Add a focused helper that requires one terminal sentence and rejects an internal sentence boundary.
 
-- [ ] **Step 4: Run the focused suite and verify green**
+- [x] **Step 4: Run the focused suite and verify green**
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_bounded_splice.py -q
@@ -72,7 +75,7 @@ PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_bounded_splice.py -q
 
 Expected: every splice test passes.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add code/trec_rag/bounded_splice.py code/tests/test_bounded_splice.py
@@ -90,14 +93,14 @@ git commit -m "prototype: harden splice citation routing"
 - Consumes: `GenerationTopic`, merged cards containing `card_id` and `evidence_aliases`, and the existing deterministic audit alias order.
 - Produces: `_audit_card_docids(topic, audit_cards) -> dict[str, tuple[str, ...]]`, used identically by initial and repaired splice validation.
 
-- [ ] **Step 1: Write failing routing and prompt tests**
+- [x] **Step 1: Write failing routing and prompt tests**
 
 Use the existing three-evidence topic fixture and merged-card helper. Assert the mapping resolves
 each card's aliases to exact topic docids in card order, rejects an unknown alias, and rejects an
 empty alias list. Extend the revision-prompt test to require the phrases `one atomic claim`,
 `one strongest citation`, `at most two`, `complete object`, and `linked to`.
 
-- [ ] **Step 2: Run the selected tests and verify red**
+- [x] **Step 2: Run the selected tests and verify red**
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_narrative_blueprint.py \
@@ -106,7 +109,7 @@ PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_narrative_blueprint.p
 
 Expected: mapping helper is absent and prompt assertions fail.
 
-- [ ] **Step 3: Implement mapping and orchestration**
+- [x] **Step 3: Implement mapping and orchestration**
 
 Build alias→docid from `_audit_aliases(topic)`. For each merged card, require a nonempty tuple of
 known aliases and create an ordered unique docid tuple. Compute the mapping once after
@@ -114,12 +117,12 @@ known aliases and create an ordered unique docid tuple. Compute the mapping once
 `validate_repaired_splice_payload`. Update initial and repair prompt clauses. Increment the trial
 contract and prompt-contract versions because resume identity semantics changed.
 
-- [ ] **Step 4: Document the narrower splice contract**
+- [x] **Step 4: Document the narrower splice contract**
 
 Update only the bounded-revision README paragraph: one atomic sentence/claim, one strongest
 citation by default, maximum two, and card-linked document routing.
 
-- [ ] **Step 5: Run both focused suites**
+- [x] **Step 5: Run both focused suites**
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m pytest \
@@ -128,7 +131,7 @@ PYTHONPATH=code .venv/bin/python -m pytest \
 
 Expected: all tests pass without warnings.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```bash
 git add code/trec_rag/narrative_blueprint_trial.py code/tests/test_narrative_blueprint.py code/trec_rag/README.md
@@ -145,25 +148,25 @@ git commit -m "prototype: bind splice edits to audit evidence"
 - Consumes: frozen draft/final `support_input.jsonl` files only.
 - Produces: paired support metrics, evaluator call/cost receipt, and a privacy-reviewed report addendum.
 
-- [ ] **Step 1: Run the identical cheap support judge for each arm**
+- [x] **Step 1: Run the identical cheap support judge for each arm**
 
 For draft and final, run `ragdoll support judge` with
 `openrouter/deepseek/deepseek-v4-flash`, minimal thinking, separate raw-event/output paths, and the
 existing bounded retry behavior. Do not regenerate answers.
 
-- [ ] **Step 2: Validate complete judgments and compute metrics**
+- [x] **Step 2: Validate complete judgments and compute metrics**
 
 Rerun `trec_rag.ragdoll_io` with `--support-judgments` for each arm, then run
 `ragdoll support metrics`. Require exactly one completed result per expected citation task and no
 conflicts. Use `ragdoll cost` for provider-reported evaluation cost.
 
-- [ ] **Step 3: Record the paired verdict**
+- [x] **Step 3: Record the paired verdict**
 
 Append draft/final/delta values for weighted first-citation precision, weighted all-citation
 precision, hard precision, task counts, failures, and cost. Explicitly state that this diagnoses
 the old frozen output and does not validate the newly hardened contract.
 
-- [ ] **Step 4: Run final verification**
+- [x] **Step 4: Run final verification**
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m pytest \
@@ -176,7 +179,7 @@ PYTHONPATH=code .venv/bin/python -m pytest \
 git diff --check
 ```
 
-- [ ] **Step 5: Commit the report**
+- [x] **Step 5: Commit the report**
 
 ```bash
 git add docs/superpowers/reports/2026-08-08-bounded-splice-revision-results.md

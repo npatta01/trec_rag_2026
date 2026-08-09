@@ -11,7 +11,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -42,7 +43,7 @@ def splice_response_schema() -> dict[str, object]:
             "citations": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": 3,
+                "maxItems": 2,
                 "items": {"type": "string"},
             },
         },
@@ -89,6 +90,8 @@ _MAX_OPERATIONS = 6
 _MAX_INSERTIONS = 4
 _MAX_TOUCHED_OBJECTS = 8
 _MAX_WORDS = 1024
+_TERMINAL_PUNCTUATION = re.compile(r"[.!?](?:[\"')\]]*)$")
+_INTERNAL_SENTENCE_BOUNDARY = re.compile(r"[.!?](?:[\"')\]]*)\s+\S")
 
 
 def _canonical_json(value: object) -> str:
@@ -155,7 +158,7 @@ def _parse_operation(
     *,
     operation_index: int,
     allowed_docids: tuple[str, ...],
-    allowed_audit_card_ids: tuple[str, ...],
+    audit_card_docids: Mapping[str, tuple[str, ...]],
 ) -> SpliceOperation:
     operation = _require_exact_fields(
         raw,
@@ -184,11 +187,20 @@ def _parse_operation(
     text = answer["text"]
     if not isinstance(text, str) or not text.strip():
         raise SpliceValidationError(f"operation[{operation_index}] new_object text must be non-empty")
+    stripped_text = text.strip()
+    if not _TERMINAL_PUNCTUATION.search(stripped_text):
+        raise SpliceValidationError(
+            f"operation[{operation_index}] new_object text requires terminal punctuation"
+        )
+    if _INTERNAL_SENTENCE_BOUNDARY.search(stripped_text):
+        raise SpliceValidationError(
+            f"operation[{operation_index}] new_object text must be one terminal sentence"
+        )
     citations = _nonempty_strings(
         answer["citations"],
         label=f"operation[{operation_index}] citations",
         minimum=1,
-        maximum=3,
+        maximum=2,
     )
     allowed_docs = set(allowed_docids)
     foreign_docs = [docid for docid in citations if docid not in allowed_docs]
@@ -203,12 +215,23 @@ def _parse_operation(
         label=f"operation[{operation_index}] audit_card_ids",
         minimum=1,
     )
-    allowed_cards = set(allowed_audit_card_ids)
+    allowed_cards = set(audit_card_docids)
     unknown_cards = [card_id for card_id in audit_card_ids if card_id not in allowed_cards]
     if unknown_cards:
         raise SpliceValidationError(
             f"operation[{operation_index}] has unknown audit-card ID(s): "
             + ", ".join(unknown_cards)
+        )
+    linked_docids = {
+        docid
+        for card_id in audit_card_ids
+        for docid in audit_card_docids[card_id]
+    }
+    unlinked_docs = [docid for docid in citations if docid not in linked_docids]
+    if unlinked_docs:
+        raise SpliceValidationError(
+            f"operation[{operation_index}] citations are not linked audit-card evidence: "
+            + ", ".join(unlinked_docs)
         )
     return SpliceOperation(
         start_index=start_index,
@@ -280,7 +303,7 @@ def validate_splice_payload(
     draft: dict[str, Any],
     payload: object,
     allowed_docids: tuple[str, ...],
-    allowed_audit_card_ids: tuple[str, ...],
+    audit_card_docids: Mapping[str, tuple[str, ...]],
 ) -> tuple[SpliceOperation, ...] | None:
     """Validate a provider response against an immutable draft.
 
@@ -311,7 +334,7 @@ def validate_splice_payload(
             raw,
             operation_index=index,
             allowed_docids=allowed_docids,
-            allowed_audit_card_ids=allowed_audit_card_ids,
+            audit_card_docids=audit_card_docids,
         )
         for index, raw in enumerate(raw_operations)
     )
@@ -364,7 +387,7 @@ def validate_repaired_splice_payload(
     repaired_payload: object,
     initial_payload: object,
     allowed_docids: tuple[str, ...],
-    allowed_audit_card_ids: tuple[str, ...],
+    audit_card_docids: Mapping[str, tuple[str, ...]],
 ) -> tuple[SpliceOperation, ...] | None:
     """Validate a repair while preserving the initial response's answer objects."""
 
@@ -405,5 +428,5 @@ def validate_repaired_splice_payload(
         draft,
         repaired_payload,
         allowed_docids,
-        allowed_audit_card_ids,
+        audit_card_docids,
     )

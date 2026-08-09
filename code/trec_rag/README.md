@@ -1969,10 +1969,12 @@ generator to head-truncate. Validation: ranks are dense and scores non-increasin
 `narrative_blueprint_trial` has an opt-in, throwaway one-topic experiment for testing whether a
 post-draft, evidence-only omission audit followed by one bounded Sol splice revision improves
 paired nugget coverage. The revision response is a strict `keep_draft`/`edit` splice contract;
-old `bounded_narrative_revision_trial_v1` state cannot resume under this contract. Give each
-experiment a new ignored local config and output namespace. Run topics separately; this driver is
-not the production competition path and never reads gold nuggets, qrels, TREC runs, full-text
-archives, or RAGDoll results during generation.
+each new object must be one sentence intended to state one atomic claim, with one strongest
+citation by default and at most two. Each citation must be in the topic-wide authenticated domain
+and in the selected evidence linked to that operation's named audit cards. Old trial state cannot
+resume under a changed splice contract. Give each experiment a new ignored local config and output
+namespace. Run topics separately; this driver is not the production competition path and never
+reads gold nuggets, qrels, TREC runs, full-text archives, or RAGDoll results during generation.
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
