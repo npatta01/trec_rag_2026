@@ -31,7 +31,7 @@
 - Consumes: `RagGenerationConfig`, `GenerationHandoff`, selected `GenerationTopic` values, API key, and an injected async topic runner with the `_run_bounded_revision` signature.
 - Produces: `_multistage_identity(config, handoff, topics) -> dict[str, Any]`, `_load_final_record(root, config, topic) -> dict[str, Any]`, and `run_multistage_generation(config, handoff, *, api_key, topic_runner=_run_bounded_revision) -> None`.
 
-- [ ] **Step 1: Write the failing successful-run integration test**
+- [x] **Step 1: Write the failing successful-run integration test**
 
 Build a literal two-topic authenticated handoff fixture. The fake external topic runner writes a realistic v5 bounded state plus one registered `evaluation/final/submission.jsonl` for each topic. Call `run_multistage_generation` in create mode and assert:
 
@@ -46,7 +46,7 @@ assert json.loads((config.work_dir / "multistage_generation_identity.json").read
 
 The production change that makes this test pass is the new run-level orchestrator; wrong topic order, missing identity, early publication, or wrong final run ID must fail it.
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -57,7 +57,7 @@ PYTHONPATH=code .venv/bin/python -m pytest \
 
 Expected: collection fails because `trec_rag.competition_rag_multistage` does not exist.
 
-- [ ] **Step 3: Implement the minimal create path**
+- [x] **Step 3: Implement the minimal create path**
 
 Implement:
 
@@ -87,11 +87,11 @@ Create the work directory and identity before dispatch. Bound concurrent topic e
 artifacts, run the existing organizer and exact-hint validators, and publish with
 `_atomic_write_text` only after the complete ordered list is in memory.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run the Task 1 test command and require one pass with no warnings.
 
-- [ ] **Step 5: Commit the independently working create path**
+- [x] **Step 5: Commit the independently working create path**
 
 ```bash
 git add code/trec_rag/competition_rag_multistage.py \
@@ -111,7 +111,7 @@ git commit -m "feat: orchestrate full multistage RAG runs"
 - Consumes: the Task 1 identity and per-topic roots.
 - Produces: `_prepare_multistage_state(config, identity) -> None` and deterministic topic mode selection (`resume` for an existing root, `create` otherwise).
 
-- [ ] **Step 1: Write failing resume and failure tests**
+- [x] **Step 1: Write failing resume and failure tests**
 
 Add two tests:
 
@@ -128,7 +128,7 @@ def test_identity_change_or_missing_final_never_publishes(...):
 
 The production breaks caught are cross-run row mixing and partial submission publication.
 
-- [ ] **Step 2: Run the two tests and verify RED**
+- [x] **Step 2: Run the two tests and verify RED**
 
 Run:
 
@@ -139,7 +139,7 @@ PYTHONPATH=code .venv/bin/python -m pytest \
 
 Expected: the new resume/refusal assertions fail while Task 1 remains green.
 
-- [ ] **Step 3: Implement exact resume/refusal behavior**
+- [x] **Step 3: Implement exact resume/refusal behavior**
 
 On create, refuse an existing output or any work artifact. On resume, require and compare the full
 run identity. For each topic, inspect `_bounded_private_root(config, topic)` only to select create
@@ -147,11 +147,11 @@ or resume; let `_run_bounded_revision` authenticate the actual state. Gather top
 allow siblings to finish, and raise one sanitized summary before consolidation. Reject overwrite
 before any deletion or provider call.
 
-- [ ] **Step 4: Run all focused tests and verify GREEN**
+- [x] **Step 4: Run all focused tests and verify GREEN**
 
 Run the Task 2 test command and require all tests to pass.
 
-- [ ] **Step 5: Commit resume safety**
+- [x] **Step 5: Commit resume safety**
 
 ```bash
 git add code/trec_rag/competition_rag_multistage.py \
@@ -175,17 +175,17 @@ git commit -m "fix: make multistage generation safely resumable"
 - Consumes: `--config CONFIG [--dry-run]`.
 - Produces: a provider-free dry-run budget and a live CLI that loads secrets only after config and handoff authentication.
 
-- [ ] **Step 1: Write the failing dry-run/CLI test**
+- [x] **Step 1: Write the failing dry-run/CLI test**
 
 Invoke `main(["--config", str(config_path), "--dry-run"])` with a literal three-topic handoff and
 no API key. Assert output includes exact topic/group/Sol/Luna/concurrency/path values, no output or
 work path is created, and the injected provider runner is never called.
 
-- [ ] **Step 2: Run the dry-run test and verify RED**
+- [x] **Step 2: Run the dry-run test and verify RED**
 
 Run the named dry-run test and require failure because the CLI is absent.
 
-- [ ] **Step 3: Implement CLI and dry-run reporting**
+- [x] **Step 3: Implement CLI and dry-run reporting**
 
 Authenticate config, handoff, and selected topics first. For dry run print:
 
@@ -201,14 +201,14 @@ work=<path>
 For live execution, load repository environment files, require the configured API key without
 printing it, and call `asyncio.run(run_multistage_generation(...))`.
 
-- [ ] **Step 4: Create the three ignored configs and document commands**
+- [x] **Step 4: Create the three ignored configs and document commands**
 
 Copy the checked-in Sol config shape. Use distinct IDs/output directories, `mode: create`, the
 same v3 handoff, and topics `rag2026-0`, `rag2026-1`, `rag2026-2` only in the smoke config. Add
 README create/resume/dry-run commands and state explicitly that no cross-strategy generation rows
 are reusable.
 
-- [ ] **Step 5: Run focused tests and the real dry run**
+- [x] **Step 5: Run focused tests and the real dry run**
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m pytest \
@@ -222,7 +222,7 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag_multistage \
 
 Require no hosted calls, 119 topics, 691 groups, 238/357 Sol counts, and 810/929 Luna counts.
 
-- [ ] **Step 6: Commit the reusable CLI and runbook**
+- [x] **Step 6: Commit the reusable CLI and runbook**
 
 Stage only tracked code/tests/README; verify ignored configs are absent from the index.
 
@@ -243,7 +243,7 @@ git commit -m "feat: expose multistage competition RAG runner"
 - Consumes: the completed tracked tree and ignored local configs.
 - Produces: verified implementation evidence and the exact next live-run decision.
 
-- [ ] **Step 1: Run static and focused verification**
+- [x] **Step 1: Run static and focused verification**
 
 ```bash
 /home/npatta01/anaconda3/bin/ruff check \
@@ -259,7 +259,7 @@ PYTHONPATH=code .venv/bin/python -m pytest \
   code/tests/test_competition_rag.py -q
 ```
 
-- [ ] **Step 2: Run the full suite from an external temp root**
+- [x] **Step 2: Run the full suite from an external temp root**
 
 Use a fresh `/var/tmp/trec-rag-pytest.*` directory so path-discovery tests remain outside every
 repository marker and clone-heavy tests do not recursively copy their own temp tree:
@@ -269,13 +269,13 @@ TMPDIR=<fresh-var-tmp-dir> PYTHONPATH=code \
   .venv/bin/python -m pytest code/tests -q
 ```
 
-- [ ] **Step 3: Re-read the design and verify every invariant**
+- [x] **Step 3: Re-read the design and verify every invariant**
 
 Confirm unchanged single-pass code, unchanged prompt constants, exact run-level identity, no
 overwrite path, all-or-nothing publication, handoff ordering, strict final validation, separate
 configs, no tracked private artifacts, and zero hosted calls.
 
-- [ ] **Step 4: Record verification and commit**
+- [x] **Step 4: Record verification and commit**
 
 Update this plan's status/evidence, stage only the plan, and commit:
 
@@ -284,8 +284,30 @@ git add docs/superpowers/plans/2026-08-09-multistage-rag-full-run.md
 git commit -m "docs: record multistage runner verification"
 ```
 
-- [ ] **Step 5: Handoff live execution separately**
+- [x] **Step 5: Handoff live execution separately**
 
 Report the two full config paths, three-topic smoke config, exact call ceilings, fresh output
 directories, and expected cache misses. Do not start the smoke or either full hosted run without
 explicit live-run authorization.
+
+## Completion Evidence
+
+Completed 2026-08-09 in linked worktree `hardened-splice-three-topic` on branch
+`codex/hardened-splice-three-topic`.
+
+- TDD checkpoints: create-path RED/GREEN, resume/identity/failure RED/GREEN, and dry-run
+  RED/GREEN were observed before each production slice.
+- Provider-free real dry run authenticated the v3 handoff and reported 119 topics, 691 groups,
+  238 routine / 357 maximum Sol calls, 810 / 929 minimum/maximum Luna calls, and concurrency 4.
+- Static verification: Ruff passed for the new runner and tests; `git diff --check` passed.
+- Focused verification: 206 RAG, handoff, bounded-revision, and operation-screen tests passed.
+- Full verification: 2,787 tests passed, 19 skipped, and 60 subtests passed in 103.27 seconds.
+- A first full-suite attempt found six stale `/tmp/trec-rag-cache-shards/fixture-pytest-0-*`
+  collisions. After deleting only those generated fixtures, the clean rerun passed completely;
+  the regenerated disposable fixture and external temp directories were removed afterward.
+- Scope audit against pre-implementation commit `1e306fc8`: the single-pass runner and frozen
+  multi-stage prompt/state-machine module are unchanged. Only the new orchestrator, focused tests,
+  README/runbook, design, and plan are tracked.
+- Privacy audit: all three local configs remain ignored; no output, private state, handoff content,
+  or provider response was staged. No hosted model call was made during implementation or
+  verification.
