@@ -402,7 +402,7 @@ def test_bundle_rejects_a_topic_replaced_after_initial_validation(
                 topic_path.write_text("foreign topic bytes", encoding="utf-8")
 
     monkeypatch.setattr(bundle_module, "_validate_staging", replace_topic_before_final_reconciliation)
-    with pytest.raises(ValueError, match="(?:identity|hash|reconciliation|link)"):
+    with pytest.raises((ValueError, PermissionError)):
         debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
 
     assert not target.exists()
@@ -506,7 +506,7 @@ def test_bundle_rename_primitive_rechecks_page_after_outer_validation(
         real_rename(old_dir_fd, old_name, new_dir_fd, new_name, **kwargs)
 
     monkeypatch.setattr(bundle_module, "_rename_noreplace_fds", substitute_page)
-    with pytest.raises(ValueError, match="(?:identity|hash|reconciliation)"):
+    with pytest.raises((ValueError, PermissionError)):
         debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
 
     assert not target.exists()
@@ -650,6 +650,160 @@ def test_bundle_receipt_failure_still_cleans_registered_owned_files(
 
     assert not target.exists()
     assert list(fixture.retrieval_output.glob(f".{target.name}.*.tmp")) == []
+
+
+def test_bundle_freezes_pages_before_late_pinned_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    target = fixture.retrieval_output / "frozen-late-validation"
+    real_validate = bundle_module._validate_pinned_payload
+    mutation_errors: list[type[BaseException]] = []
+
+    def mutate_early_page_before_pinned_sweep(*args: object, **kwargs: object) -> None:
+        guardian_fd = args[0]
+        payload_name = args[1]
+        payload = Path(os.readlink(f"/proc/self/fd/{guardian_fd}")) / str(payload_name)
+        early = payload / "topics" / "alpha-topic.html"
+        try:
+            early.write_bytes(b"invalid late-scan mutation")
+        except BaseException as error:  # pragma: no cover - assertion below records it
+            mutation_errors.append(type(error))
+        else:
+            raise AssertionError("late validation mutated a frozen page")
+        real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bundle_module, "_validate_pinned_payload", mutate_early_page_before_pinned_sweep
+    )
+    receipt = debug_report.build_debug_report_bundle(
+        fixture.retrieval_config, output_dir=target
+    )
+
+    assert receipt.output_dir == target.resolve()
+    assert mutation_errors == [PermissionError]
+
+
+def test_bundle_freezes_pages_before_success_receipt_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    target = fixture.retrieval_output / "frozen-receipt-verification"
+    real_validate = bundle_module._validate_published_receipts
+    mutation_errors: list[type[BaseException]] = []
+
+    def mutate_early_page_before_receipt(*args: object, **kwargs: object) -> None:
+        published = Path(args[0])
+        early = published / "topics" / "alpha-topic.html"
+        try:
+            early.write_bytes(b"invalid receipt mutation")
+        except BaseException as error:  # pragma: no cover - assertion below records it
+            mutation_errors.append(type(error))
+        else:
+            raise AssertionError("success receipt verification mutated a frozen page")
+        real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bundle_module, "_validate_published_receipts", mutate_early_page_before_receipt
+    )
+    receipt = debug_report.build_debug_report_bundle(
+        fixture.retrieval_config, output_dir=target
+    )
+
+    assert receipt.output_dir == target.resolve()
+    assert mutation_errors == [PermissionError]
+
+
+def test_bundle_receipt_verification_reuses_prevalidated_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "receipt-reuses-hashes"
+    real_hash_matches = bundle_module._hash_matches
+    target_hash_calls: list[Path] = []
+
+    def observed_hash(path: Path, expected_sha256: str, expected_bytes: int) -> bool:
+        if target in path.parents:
+            target_hash_calls.append(path)
+        return real_hash_matches(path, expected_sha256, expected_bytes)
+
+    monkeypatch.setattr(bundle_module, "_hash_matches", observed_hash)
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert target_hash_calls == []
+
+
+@pytest.mark.parametrize("substitute", (False, True))
+def test_bundle_partial_write_failure_keeps_foreign_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, substitute: bool
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / f"partial-write-{'foreign' if substitute else 'owned'}"
+    real_fsync = bundle_module.os.fsync
+    foreign: list[Path] = []
+    triggered = False
+
+    def fail_write(descriptor: int) -> None:
+        nonlocal triggered
+        if not triggered:
+            triggered = True
+            written = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+            if substitute:
+                written.unlink()
+                written.write_text("foreign replacement", encoding="utf-8")
+                foreign.append(written)
+            raise OSError("forced partial write failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(bundle_module.os, "fsync", fail_write)
+    with pytest.raises(OSError, match="forced partial write failure"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    if substitute:
+        assert foreign
+        guardian = foreign[0].parents[1]
+        assert any(
+            path.read_text(encoding="utf-8") == "foreign replacement"
+            for path in guardian.rglob("index.html")
+        )
+    else:
+        assert list(fixture.retrieval_output.glob(f".{target.name}.*.tmp")) == []
+
+
+def test_bundle_publication_parent_fd_closes_on_libc_configuration_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "parent-fd-libc-failure"
+    real_cdll = bundle_module.ctypes.CDLL
+
+    def fail_cdll(*args: object, **kwargs: object):
+        raise OSError("forced libc configuration failure")
+
+    def output_fds() -> set[str]:
+        values: set[str] = set()
+        for entry in Path("/proc/self/fd").iterdir():
+            try:
+                value = os.readlink(entry)
+            except OSError:
+                continue
+            if value == str(fixture.retrieval_output):
+                values.add(value)
+        return values
+
+    monkeypatch.setattr(bundle_module.ctypes, "CDLL", fail_cdll)
+    before = output_fds()
+    with pytest.raises(OSError, match="forced libc configuration failure"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+    assert output_fds() == before
+    monkeypatch.setattr(bundle_module.ctypes, "CDLL", real_cdll)
 
 
 def test_bundle_rejects_broken_relative_cross_page_fragment(
