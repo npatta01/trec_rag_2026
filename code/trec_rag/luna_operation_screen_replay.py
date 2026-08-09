@@ -15,8 +15,6 @@ from typing import Any
 
 from trec_rag.bounded_splice import (
     SpliceOperation,
-    SpliceValidationError,
-    apply_splice_operations,
     splice_response_schema,
     validate_splice_payload,
 )
@@ -45,7 +43,8 @@ from trec_rag.narrative_blueprint import (
 )
 from trec_rag.narrative_blueprint_trial import (
     _audit_card_docids,
-    _bounded_draft_objects_prompt,
+    _bounded_finalize_operation_screen,
+    _bounded_operation_screen_prompt,
     _bounded_provider_call,
     _bounded_read_state,
     _bounded_revalidate_files,
@@ -54,26 +53,19 @@ from trec_rag.narrative_blueprint_trial import (
     _bounded_write_identity,
     _digest_json,
     _digest_text,
-    _render_hybrid_common_context,
     _topic_for_cli,
+    LUNA_OPERATION_SCREEN_SYSTEM_PROMPT,
     LUNA_MODEL,
     LUNA_REASONING_EFFORT,
 )
 from trec_rag.operation_screen import (
     OperationScreenResult,
-    OperationScreenValidationError,
-    operation_ids,
     operation_screen_response_schema,
-    validate_operation_screen_payload,
 )
 from trec_rag.repo_env import find_repo_root, load_repo_env
 
 
 OPERATION_SCREEN_REPLAY_CONTRACT_VERSION = "luna_operation_screen_replay_v1"
-LUNA_OPERATION_SCREEN_SYSTEM_PROMPT = (
-    "You are a strict selected-evidence operation judge. Judge every proposed edit, never "
-    "rewrite answer content, and return only the requested JSON."
-)
 
 
 @dataclass(frozen=True)
@@ -258,77 +250,20 @@ def load_operation_screen_source(
     )
 
 
-def _operation_payload(operation_id: str, operation: SpliceOperation) -> dict[str, Any]:
-    return {
-        "operation_id": operation_id,
-        "start_index": operation.start_index,
-        "delete_count": operation.delete_count,
-        "new_object": {
-            "text": operation.text,
-            "citations": list(operation.citations),
-        },
-        "audit_card_ids": list(operation.audit_card_ids),
-    }
-
-
 def render_operation_screen_prompt(
     topic: GenerationTopic,
     source: OperationScreenSource,
 ) -> str:
     """Render one whole-answer, decisions-only screen over frozen operations."""
 
-    context = _render_hybrid_common_context(topic, source.blueprint, source.projection)
-    cards_by_id = {str(card.get("card_id")): card for card in source.audit_cards}
-    selected_card_ids = tuple(
-        dict.fromkeys(
-            card_id
-            for operation in source.operations
-            for card_id in operation.audit_card_ids
-        )
+    return _bounded_operation_screen_prompt(
+        topic,
+        source.blueprint,
+        source.projection,
+        draft=source.draft,
+        audit_cards=source.audit_cards,
+        operations=source.operations,
     )
-    lines = [
-        "WHOLE-ANSWER OPERATION SCREEN",
-        "Judge the frozen Sol operations against the complete official narrative, surviving draft,",
-        "named audit cards, and authenticated selected evidence. Return decisions only; never rewrite",
-        "answer prose, citations, indexes, ranges, or audit-card IDs.",
-        "For each operation return every required boolean gate:",
-        "- `fully_supported`: every cited document's selected passages fully support the complete",
-        "  new sentence without outside knowledge; collective or partial support is false.",
-        "- `atomic`: the new sentence is one coherent claim at the answer-object citation unit.",
-        "- `material`: the edit materially improves the answer to the complete narrative.",
-        "- `nonredundant`: surviving draft prose does not already communicate the same point.",
-        "- `replacement_safe`: true for an insertion; for a replacement, true only when the new",
-        "  object is more useful than everything removed and loses no distinct caveat, causal",
-        "  qualification, tradeoff, or narrative-relevant detail.",
-        "Choose one coherent candidate subset among the otherwise supported, atomic, and material",
-        "operations. Judge `nonredundant` and `replacement_safe` in the draft that would result",
-        "from applying that subset, not against the unchanged draft one operation at a time. For",
-        "example, another retained operation may restore a distinct detail removed by a replacement;",
-        "the replacement may then be safe, and the restoring insertion is not redundant.",
-        "Local code accepts an operation only when all five gates are true. Do not optimize the",
-        "number accepted and do not infer an expected decision from the topic or operation ID.",
-        *_bounded_draft_objects_prompt(source.draft),
-        "FROZEN VALIDATED SOL OPERATIONS (stable IDs; immutable):",
-    ]
-    for operation_id, operation in zip(
-        operation_ids(source.operations), source.operations, strict=True
-    ):
-        lines.append(
-            f"[{operation_id}] "
-            + json.dumps(
-                _operation_payload(operation_id, operation),
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-    lines.append("NAMED MERGED AUDIT CARDS (advisory, not factual authority):")
-    for card_id in selected_card_ids:
-        card = cards_by_id.get(card_id)
-        if card is None:
-            raise ValueError(f"operation names missing audit card: {card_id}")
-        lines.append(f"[{card_id}] {json.dumps(card, ensure_ascii=False, sort_keys=True)}")
-    lines.append("Return exactly the strict JSON response; decisions only and never rewrite.")
-    return context + "\n\n" + "\n".join(lines)
 
 
 def finalize_operation_screen(
@@ -342,34 +277,14 @@ def finalize_operation_screen(
 ) -> tuple[dict[str, Any], OperationScreenResult | None, bool, str | None]:
     """Apply only accepted operations, or return the validated draft atomically."""
 
-    try:
-        result = validate_operation_screen_payload(payload, operations)
-        assembled = (
-            apply_splice_operations(draft, result.accepted_operations)
-            if result.accepted_operations
-            else draft
-        )
-        final = _rebind_replay_candidate(
-            assembled,
-            topic=topic,
-            config=config,
-            run_id=run_id,
-        )
-        return final, result, False, None
-    except (
-        OperationScreenValidationError,
-        SpliceValidationError,
-        ValueError,
-        RuntimeError,
-        TypeError,
-    ) as exc:
-        fallback = _rebind_replay_candidate(
-            draft,
-            topic=topic,
-            config=config,
-            run_id=run_id,
-        )
-        return fallback, None, True, f"{type(exc).__name__}: {exc}"
+    return _bounded_finalize_operation_screen(
+        topic,
+        draft,
+        operations,
+        payload,
+        config=config,
+        run_id=run_id,
+    )
 
 
 def _may_start_operation_screen_call(

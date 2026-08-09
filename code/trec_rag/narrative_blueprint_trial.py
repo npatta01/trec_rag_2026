@@ -47,6 +47,7 @@ from trec_rag.generation_handoff import (
     select_generation_topics,
 )
 from trec_rag.bounded_splice import (
+    SpliceOperation,
     SpliceValidationError,
     apply_splice_operations,
     splice_response_schema,
@@ -65,6 +66,13 @@ from trec_rag.narrative_blueprint import (
     serialize_blueprint_state,
     validate_blueprint,
 )
+from trec_rag.operation_screen import (
+    OperationScreenResult,
+    OperationScreenValidationError,
+    operation_ids,
+    operation_screen_response_schema,
+    validate_operation_screen_payload,
+)
 from trec_rag.repo_env import find_repo_root, load_repo_env
 
 
@@ -75,13 +83,18 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
-TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v4_splice_reference_normalized"
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v5_operation_screen"
 SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v2_citation_bound"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
 MAX_SOL_RESERVATIONS = 3
 MAX_AUDIT_CARDS_PER_GROUP = 6
 MAX_MERGED_AUDIT_CARDS = 24
+
+LUNA_OPERATION_SCREEN_SYSTEM_PROMPT = (
+    "You are a strict selected-evidence operation judge. Judge every proposed edit, never "
+    "rewrite answer content, and return only the requested JSON."
+)
 
 _AUDIT_IMPORTANCE = {"must": 3, "should": 2, "could": 1}
 _AUDIT_OMISSION_TYPES = (
@@ -1231,6 +1244,9 @@ def _bounded_identity(
         "splice_schema_sha256": _digest_json(splice_response_schema()),
         "splice_prompt_contract_version": SPLICE_PROMPT_CONTRACT_VERSION,
         "splice_prompt_contract_sha256": _digest_text(SPLICE_PROMPT_CONTRACT_VERSION),
+        "operation_screen_system_prompt_sha256": _digest_text(
+            LUNA_OPERATION_SCREEN_SYSTEM_PROMPT
+        ),
     }
 
 
@@ -1650,6 +1666,47 @@ def _bounded_rebind_candidate(
     return rebound
 
 
+def _bounded_finalize_operation_screen(
+    topic: GenerationTopic,
+    draft: dict[str, Any],
+    operations: tuple[SpliceOperation, ...],
+    payload: object,
+    *,
+    config: Any,
+    run_id: str,
+) -> tuple[dict[str, Any], OperationScreenResult | None, bool, str | None]:
+    """Apply the accepted subset, falling back atomically to the validated draft."""
+
+    try:
+        result = validate_operation_screen_payload(payload, operations)
+        assembled = (
+            apply_splice_operations(draft, result.accepted_operations)
+            if result.accepted_operations
+            else draft
+        )
+        final = _bounded_rebind_candidate(
+            assembled,
+            topic=topic,
+            config=config,
+            run_id=run_id,
+        )
+        return final, result, False, None
+    except (
+        OperationScreenValidationError,
+        SpliceValidationError,
+        ValueError,
+        RuntimeError,
+        TypeError,
+    ) as exc:
+        fallback = _bounded_rebind_candidate(
+            draft,
+            topic=topic,
+            config=config,
+            run_id=run_id,
+        )
+        return fallback, None, True, f"{type(exc).__name__}: {exc}"
+
+
 def _bounded_write_candidate(root: Path, arm: str, record: dict[str, Any]) -> Path:
     path = root / "evaluation" / arm / "submission.jsonl"
     _atomic_write_text(path, json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -1734,6 +1791,87 @@ def _bounded_revision_prompt(
     return context + "\n\n" + "\n".join(lines)
 
 
+def _bounded_operation_payload(
+    operation_id: str,
+    operation: SpliceOperation,
+) -> dict[str, Any]:
+    return {
+        "operation_id": operation_id,
+        "start_index": operation.start_index,
+        "delete_count": operation.delete_count,
+        "new_object": {
+            "text": operation.text,
+            "citations": list(operation.citations),
+        },
+        "audit_card_ids": list(operation.audit_card_ids),
+    }
+
+
+def _bounded_operation_screen_prompt(
+    topic: GenerationTopic,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+    *,
+    draft: dict[str, Any],
+    audit_cards: tuple[dict[str, Any], ...],
+    operations: tuple[SpliceOperation, ...],
+) -> str:
+    """Render one whole-answer, decisions-only screen over frozen operations."""
+
+    context = _render_hybrid_common_context(topic, blueprint, projection)
+    cards_by_id = {str(card.get("card_id")): card for card in audit_cards}
+    selected_card_ids = tuple(
+        dict.fromkeys(
+            card_id
+            for operation in operations
+            for card_id in operation.audit_card_ids
+        )
+    )
+    lines = [
+        "WHOLE-ANSWER OPERATION SCREEN",
+        "Judge the frozen Sol operations against the complete official narrative, surviving draft,",
+        "named audit cards, and authenticated selected evidence. Return decisions only; never rewrite",
+        "answer prose, citations, indexes, ranges, or audit-card IDs.",
+        "For each operation return every required boolean gate:",
+        "- `fully_supported`: every cited document's selected passages fully support the complete",
+        "  new sentence without outside knowledge; collective or partial support is false.",
+        "- `atomic`: the new sentence is one coherent claim at the answer-object citation unit.",
+        "- `material`: the edit materially improves the answer to the complete narrative.",
+        "- `nonredundant`: surviving draft prose does not already communicate the same point.",
+        "- `replacement_safe`: true for an insertion; for a replacement, true only when the new",
+        "  object is more useful than everything removed and loses no distinct caveat, causal",
+        "  qualification, tradeoff, or narrative-relevant detail.",
+        "Choose one coherent candidate subset among the otherwise supported, atomic, and material",
+        "operations. Judge `nonredundant` and `replacement_safe` in the draft that would result",
+        "from applying that subset, not against the unchanged draft one operation at a time. For",
+        "example, another retained operation may restore a distinct detail removed by a replacement;",
+        "the replacement may then be safe, and the restoring insertion is not redundant.",
+        "Local code accepts an operation only when all five gates are true. Do not optimize the",
+        "number accepted and do not infer an expected decision from the topic or operation ID.",
+        *_bounded_draft_objects_prompt(draft),
+        "FROZEN VALIDATED SOL OPERATIONS (stable IDs; immutable):",
+    ]
+    for operation_id, operation in zip(
+        operation_ids(operations), operations, strict=True
+    ):
+        lines.append(
+            f"[{operation_id}] "
+            + json.dumps(
+                _bounded_operation_payload(operation_id, operation),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+    lines.append("NAMED MERGED AUDIT CARDS (advisory, not factual authority):")
+    for card_id in selected_card_ids:
+        card = cards_by_id.get(card_id)
+        if card is None:
+            raise ValueError(f"operation names missing audit card: {card_id}")
+        lines.append(f"[{card_id}] {json.dumps(card, ensure_ascii=False, sort_keys=True)}")
+    lines.append("Return exactly the strict JSON response; decisions only and never rewrite.")
+    return context + "\n\n" + "\n".join(lines)
+
+
 def _bounded_splice_repair_prompt(
     topic: GenerationTopic,
     blueprint: NarrativeBlueprint,
@@ -1806,6 +1944,7 @@ def _bounded_manifest(
         "total_provider_reported_cost": round(total_cost, 12),
         "draft": _bounded_candidate_summary(root, "draft", draft) if draft is not None else None,
         "final": _bounded_candidate_summary(root, "final", final) if final is not None else None,
+        "operation_screen": state.get("operation_screen"),
         "failure": state.get("failure"),
     }
     return manifest
@@ -1850,6 +1989,7 @@ async def _run_bounded_revision(
                 "audit_groups": [],
                 "audit_merge": False,
                 "revision": False,
+                "operation_screen": False,
                 "final": False,
             },
             "stage_hashes": {},
@@ -2112,6 +2252,7 @@ async def _run_bounded_revision(
     _bounded_write_state(root, state)
 
     final: dict[str, Any] | None = None
+    operations_to_screen: tuple[SpliceOperation, ...] | None = None
     revision_errors: tuple[str, ...] = ()
     initial_splice_payload: dict[str, Any] | None = None
     revision_prompt = _bounded_revision_prompt(
@@ -2187,6 +2328,7 @@ async def _run_bounded_revision(
                     config=config,
                     run_id=f"{config.run_id}-final",
                 )
+                operations_to_screen = operations
         except (SpliceValidationError, ValueError, RuntimeError, TypeError) as exc:
             revision_errors = (f"{type(exc).__name__}: {exc}",)
     if revision_errors and initial_splice_payload is not None:
@@ -2260,6 +2402,7 @@ async def _run_bounded_revision(
                         config=config,
                         run_id=f"{config.run_id}-final",
                     )
+                    operations_to_screen = operations
             except (SpliceValidationError, ValueError, RuntimeError, TypeError):
                 final = None
         if final is None:
@@ -2276,6 +2419,92 @@ async def _run_bounded_revision(
             config=config,
             run_id=f"{config.run_id}-final",
         )
+
+    if operations_to_screen:
+        screen_prompt = _bounded_operation_screen_prompt(
+            topic,
+            blueprint,
+            projection,
+            draft=draft,
+            audit_cards=audit_cards,
+            operations=operations_to_screen,
+        )
+        screen_schema = operation_screen_response_schema(len(operations_to_screen))
+        screen_prompt_sha256 = _digest_text(screen_prompt)
+        screen_schema_sha256 = _digest_json(screen_schema)
+        recovered, screen_payload = _bounded_recovered_payload(
+            state,
+            "operation-screen",
+            expected_prompt_sha256=screen_prompt_sha256,
+            expected_schema_sha256=screen_schema_sha256,
+        )
+        screen_call: dict[str, Any] | None = None
+        if not recovered:
+            if _bounded_blocked_stage(state, stage="operation-screen", luna=True):
+                screen_payload = None
+            else:
+                screen_ordinal = _bounded_reserve_luna(
+                    root,
+                    state,
+                    stage="operation-screen",
+                )
+                with ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="bounded-luna",
+                ) as executor:
+                    screen_payload, screen_call = await _bounded_provider_call(
+                        luna,
+                        root=root,
+                        api_key=api_key,
+                        topic_id=topic.topic_id,
+                        stage="operation-screen",
+                        model=LUNA_MODEL,
+                        reasoning_effort=LUNA_REASONING_EFFORT,
+                        system_prompt=LUNA_OPERATION_SCREEN_SYSTEM_PROMPT,
+                        user_prompt=screen_prompt,
+                        response_schema=screen_schema,
+                        executor=executor,
+                        reservation_ordinal=screen_ordinal,
+                    )
+                state["calls"].append(screen_call)
+                _bounded_finish_luna(
+                    root,
+                    state,
+                    ordinal=screen_ordinal,
+                    status=(
+                        "semantic_returned"
+                        if screen_payload is not None
+                        else screen_call["outcome"]
+                    ),
+                )
+                if screen_call["outcome"] == "terminal_transport_failure":
+                    raise RuntimeError(
+                        "operation-screen transport failed; resume may retry it"
+                    )
+        final, screen_result, used_fallback, _ = _bounded_finalize_operation_screen(
+            topic,
+            draft,
+            operations_to_screen,
+            screen_payload,
+            config=config,
+            run_id=f"{config.run_id}-final",
+        )
+        state["operation_screen"] = {
+            "candidate_count": len(operations_to_screen),
+            "accepted_count": (
+                len(screen_result.accepted_operations)
+                if screen_result is not None
+                else 0
+            ),
+            "used_draft_fallback": used_fallback,
+        }
+    else:
+        state["operation_screen"] = {
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "used_draft_fallback": False,
+        }
+    state["stages"]["operation_screen"] = True
 
     final_output = _bounded_write_candidate(root, "final", final)
     final_identity = _bounded_write_identity(
@@ -2300,7 +2529,8 @@ def _print_bounded_dry_run(config: Any, topic: GenerationTopic) -> None:
     )
     print(
         "calls="
-        f"planner:1,audit:{len(topic.groups)},luna_total:{1 + len(topic.groups)},provider:0"
+        f"planner:1,audit:{len(topic.groups)},operation_screen_at_most:1,"
+        f"luna_total_at_most:{2 + len(topic.groups)},provider:0"
     )
     print("sol_reservations=draft:1,revision:1,repair_only:1,total:3,max:3")
     print(

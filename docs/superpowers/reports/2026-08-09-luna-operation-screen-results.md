@@ -2,8 +2,8 @@
 
 ## Verdict
 
-Promote the decisions-only Luna screen into the hardened generation design, after a normal
-integration pass. The frozen v2 replay passed its intended behavioral probes: it rejected the
+The decisions-only Luna screen is now promoted into the opt-in hardened bounded-revision path.
+The frozen v2 replay passed its intended behavioral probes: it rejected the
 known weak topic-`233` replacement, retained every topic-`300` insertion, and removed the one
 replacement on topic `499` that would have erased a distinct religious argument. It made no new
 Sol calls and did not rewrite answer prose.
@@ -81,26 +81,29 @@ inconsistently against the unchanged draft. The only prompt revision instructed 
 coherent candidate subset and judge redundancy/replacement safety in that resulting draft. The v2
 prompt was then frozen for all three reported topics.
 
-## Scope and Next Action
+## Frozen Scope
 
-The reusable strict screen and authenticated replay are implemented on the isolated
-`codex/hardened-splice-three-topic` branch. Production competition runners and checked-in configs
-remain unchanged. The next change should integrate the small decision contract at the existing
-post-revision boundary; the replay harness itself should remain experimental rather than becoming
-another production pipeline.
+The reusable strict screen now runs at the existing post-revision boundary in
+`narrative_blueprint_trial`. It adds at most one Luna-medium call, never adds a Sol call, and falls
+back to the validated draft on any screen semantic or local-validation problem. The trial contract
+was bumped so older state cannot resume under the new call graph. The authenticated replay remains
+an experimental diagnostic tool. Production `competition_rag.py` and checked-in competition
+configs remain unchanged. This is the frozen best attempt; no further AG prompt or model iteration
+is part of this release pass.
 
 ## Verification Boundary
 
-The change-focused suite passes, but the repository-wide suite is not green in this linked
-worktree. A fresh full run produced `2763 passed, 19 skipped, 18 failed`. The failures are outside
-the operation-screen code and fall into three pre-existing environment/path groups:
+The linked-worktree portability gaps were resolved without changing generation behavior: the
+worktree-local environment was installed from the repository setup script, private `.cache/`
+contents are ignored, and checked-in config tests now assert the authenticated handoff identity
+without depending on which checkout contains the existing private artifact.
 
-- 2 checked-in RAG config assertions compare an absolute main-checkout handoff path with the
-  linked-worktree retrieval path;
-- 1 portability assertion resolves the installed RAGDoll package from the main checkout instead
-  of this worktree's pinned submodule path;
-- 15 retrieval-cache wrapper tests lack a worktree-local `hf` command or copy a non-portable
-  `.venv/bin/python` link into temporary checkouts.
+- Focused operation-screen/blueprint checks: `33 passed`.
+- Retrieval portability/shard checks: `49 passed`.
+- Representative topic-`233` dry run: at most 6 Luna calls (planner + 4 group audits + screen),
+  at most 3 Sol reservations, and 0 provider calls during the dry run.
+- Fresh repository suite: `2781 passed, 19 skipped, 60 subtests passed` in `118.83s`.
+- Static checks: changed implementation files pass Ruff; `git diff --check` passes.
 
-Because the full integration gate is red, keep the worktree and branch; do not open the PR until
-those repository environment failures are resolved or explicitly accepted as the baseline.
+The integration and verification pass made zero hosted model calls and produced no new topic
+answers or evaluator judgments.

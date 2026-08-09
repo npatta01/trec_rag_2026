@@ -4,11 +4,11 @@
 
 **Goal:** Build and test a one-call Luna gate that filters already-validated Sol splice operations, then replay it on frozen topics `233`, `300`, and `499` with zero new Sol calls.
 
-**Status:** Implementation and frozen evaluation complete; PR integration gate blocked by the
-repository's existing linked-worktree environment failures. The v2 replay passed all three probes
-with 3 Luna calls, 0 Sol calls, and $0.007576 provider cost. One earlier topic-`233` diagnostic cost
-$0.002224 and led to the coherent-subset prompt correction documented in the design and result
-report.
+**Status:** Implementation, frozen evaluation, bounded-path integration, and repository verification
+complete. The v2 replay passed all three probes with 3 Luna calls, 0 Sol calls, and $0.007576
+provider cost. One earlier topic-`233` diagnostic cost $0.002224 and led to the coherent-subset
+prompt correction documented in the design and result report. The final repository suite passed
+`2781` tests plus `60` subtests with `19` skips; no new hosted calls were used for integration.
 
 **Architecture:** Put the strict decision schema and fail-closed operation filtering in a small provider-independent `operation_screen` module. Put authenticated frozen-source loading, prompt rendering, one-call OpenRouter execution, resume safety, final assembly, and manifest writing in a separate replay module. The replay reads but never mutates the source runs and does not change the production competition runner.
 

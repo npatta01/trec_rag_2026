@@ -1971,8 +1971,12 @@ post-draft, evidence-only omission audit followed by one bounded Sol splice revi
 paired nugget coverage. The revision response is a strict `keep_draft`/`edit` splice contract;
 each new object must be one sentence intended to state one atomic claim, with one strongest
 citation by default and at most two. Each citation must be in the topic-wide authenticated domain
-and in the selected evidence linked to that operation's named audit cards. Old trial state cannot
-resume under a changed splice contract. Give each experiment a new ignored local config and output
+and in the selected evidence linked to that operation's named audit cards. A structurally valid,
+nonempty operation set then receives one decisions-only Luna screen over the full narrative,
+surviving draft, named audit cards, and selected evidence. Local code applies only operations that
+pass all five support, atomicity, materiality, redundancy, and replacement-safety gates; malformed
+or unacceptable screen output preserves the validated draft. Old trial state cannot resume under
+a changed splice or screen contract. Give each experiment a new ignored local config and output
 namespace. Run topics separately; this driver is not the production competition path and never
 reads gold nuggets, qrels, TREC runs, full-text archives, or RAGDoll results during generation.
 
@@ -1993,7 +1997,7 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \
 
 Private state, call receipts, manifests, draft/final submissions, and arm-specific generation
 identities live under `config.resolved_work_dir/bounded_revision/<topic>`. The normal path uses
-one Luna planner, one Luna audit per authenticated group, and two Sol reservations (draft and
-revision); one additional Sol reservation is permitted only for deterministic splice-patch
-validation repair. A draft that fails local validation seals a sanitized failure manifest and
-does not reserve repair, audit, or revision calls.
+one Luna planner, one Luna audit per authenticated group, at most one Luna operation screen, and
+two Sol reservations (draft and revision); one additional Sol reservation is permitted only for
+deterministic splice-patch validation repair. A draft that fails local validation seals a sanitized
+failure manifest and does not reserve repair, audit, revision, or screen calls.
