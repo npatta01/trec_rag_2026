@@ -1754,7 +1754,7 @@ def build_rankings(
 
 _RUN_IDS = {
     "narrative": "r26-narrative-v1",
-    "combo": "r26-narrative-facet-v1",
+    "combo": "r26-narr-facet-v1",
     "breadth": "r26-facet-breadth-v1",
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -927,6 +928,15 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
     second = json.loads(second_manifest.read_text(encoding="utf-8"))
     assert first == second
     assert set(first["run_files"]) == {"narrative", "combo", "breadth"}
+    assert first["run_ids"] == {
+        "narrative": "r26-narrative-v1",
+        "combo": "r26-narr-facet-v1",
+        "breadth": "r26-facet-breadth-v1",
+    }
+    assert all(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,19}", run_id)
+        for run_id in first["run_ids"].values()
+    )
     for name, relative_path in first["run_files"].items():
         assert relative_path.endswith("/r_output_trec_rag_2026.tsv")
         first_body = (tmp_path / "first" / relative_path).read_bytes()
@@ -935,6 +945,7 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
         lines = first_body.decode("utf-8").splitlines()
         assert lines[0].startswith("rag2026-2 Q0 ")
         assert any(line.startswith("rag2026-10 Q0 ") for line in lines)
+        assert {line.split()[5] for line in lines} == {first["run_ids"][name]}
     assert [row["topic_id"] for row in first["topics"]] == [
         "rag2026-2",
         "rag2026-10",
