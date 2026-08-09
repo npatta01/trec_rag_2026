@@ -1299,21 +1299,6 @@ def _rename_noreplace_fds(
                 expected_receipts,
                 expected_topic_ids,
             )
-            # Linux requires the directory being moved to remain writable for
-            # renameat2.  Restore only that directory bit through its pinned
-            # descriptor after all content checks; topic and file entries stay
-            # read-only, and the following syscall is the only operation left.
-            payload_fd = _open_directory_fd_at(old_dir_fd, old_name)
-            try:
-                payload_record = os.fstat(payload_fd)
-                if (payload_record.st_dev, payload_record.st_ino) != expected_old_identity:
-                    raise ValueError("bundle staging payload identity changed before rename")
-                os.fchmod(payload_fd, 0o700)
-                payload_record = os.fstat(payload_fd)
-                if (payload_record.st_dev, payload_record.st_ino) != expected_old_identity:
-                    raise ValueError("bundle staging payload identity changed before rename")
-            finally:
-                os.close(payload_fd)
         if sys.platform != "linux":
             raise OSError(
                 errno.ENOTSUP,
@@ -1958,17 +1943,81 @@ def _validate_published_receipts(
     payload_identity: _FileIdentity,
     receipts: Sequence[_PageReceipt],
     file_identities: Mapping[str, _FileIdentity],
+    *,
+    topics_identity: _FileIdentity | None = None,
 ) -> None:
-    if not _identity_matches(target, payload_identity, directory=True):
-        raise ValueError("published bundle target identity changed before receipt")
-    for receipt in receipts:
-        path = target / Path(receipt.path)
-        identity = file_identities.get(receipt.path)
-        if identity is None or not _identity_matches(path, identity):
-            raise ValueError(f"published bundle receipt path changed for {receipt.path}")
-        record = path.lstat()
-        if not stat.S_ISREG(record.st_mode) or record.st_size != receipt.bytes:
-            raise ValueError(f"published bundle receipt size changed for {receipt.path}")
+    receipt_by_path = {receipt.path: receipt for receipt in receipts}
+    if len(receipt_by_path) != len(receipts):
+        raise ValueError("published bundle receipts contain duplicate paths")
+    if set(file_identities) != set(receipt_by_path):
+        raise ValueError("published bundle file coverage does not reconcile")
+
+    expected_files = {Path(relative_path) for relative_path in file_identities}
+    if any(
+        (not path.is_relative_to(Path(".")))
+        or any(part in ("", ".", "..") for part in path.parts)
+        or not (
+            (len(path.parts) == 1 and path.name in {"index.html", "bundle-manifest.json"})
+            or (len(path.parts) == 2 and path.parts[0] == "topics")
+        )
+        for path in expected_files
+    ):
+        raise ValueError("published bundle contains an unsafe file path")
+    expected_topic_names = {
+        path.name for path in expected_files if path.parts[:1] == ("topics",)
+    }
+    expected_direct_names = {
+        path.name for path in expected_files if len(path.parts) == 1
+    }
+    if expected_direct_names != {"index.html", "bundle-manifest.json"}:
+        raise ValueError("published bundle root file coverage does not reconcile")
+    expected_root_names = {"index.html", "topics", "bundle-manifest.json"}
+
+    def validate_coverage() -> None:
+        if not _identity_matches(target, payload_identity, directory=True):
+            raise ValueError("published bundle target identity changed before receipt")
+        actual_root_names = {entry.name for entry in target.iterdir()}
+        if actual_root_names != expected_root_names:
+            raise ValueError("published bundle root coverage does not reconcile")
+        topics_path = target / "topics"
+        actual_topics_identity = _lstat_identity(topics_path, directory=True)
+        if topics_identity is not None and actual_topics_identity != topics_identity:
+            raise ValueError("published bundle topics directory identity changed")
+        actual_topic_names = {entry.name for entry in topics_path.iterdir()}
+        if actual_topic_names != expected_topic_names:
+            raise ValueError("published bundle topic coverage does not reconcile")
+        for name in ("index.html", "bundle-manifest.json"):
+            _lstat_identity(target / name)
+        for name in actual_topic_names:
+            _lstat_identity(topics_path / name)
+
+    def validate_file_records() -> None:
+        for relative_path in sorted(file_identities):
+            receipt = receipt_by_path[relative_path]
+            path = target / Path(relative_path)
+            expected_identity = file_identities[relative_path]
+            try:
+                record = path.lstat()
+            except OSError as error:
+                raise ValueError(
+                    f"published bundle receipt path changed for {relative_path}"
+                ) from error
+            if (
+                stat.S_ISLNK(record.st_mode)
+                or not stat.S_ISREG(record.st_mode)
+                or (record.st_dev, record.st_ino) != expected_identity
+                or record.st_size != receipt.bytes
+            ):
+                raise ValueError(
+                    f"published bundle receipt identity or size changed for {relative_path}"
+                )
+
+    # This sequential pass checks each receipt, then the fast second sweep
+    # catches a replacement of an early entry made during the first pass.
+    validate_coverage()
+    validate_file_records()
+    validate_coverage()
+    validate_file_records()
 
 
 def build_bundle_from_data(
@@ -2128,7 +2177,11 @@ def build_bundle_from_data(
         _freeze_staging_tree(
             state.payload_fd,
             state.file_identities,
-            freeze_payload=True,
+            # Linux checks write permission on the directory being moved when
+            # renaming a directory.  The root is therefore frozen through its
+            # still-pinned descriptor immediately after the atomic move; files
+            # and the topics directory are already frozen for the scan.
+            freeze_payload=False,
         )
         _fsync_directory(topics_dir)
         _fsync_directory(payload)
@@ -2160,6 +2213,9 @@ def build_bundle_from_data(
             approved_roots=approved_roots,
         )
         state.payload_published = True
+        # Keep the published root read-only.  The descriptor still points at
+        # the renamed inode, so this cannot be redirected by a path swap.
+        os.fchmod(state.payload_fd, 0o500)
         _remove_guardian_path(guardian, guardian_identity)
         try:
             if publication_parent_fd is None:
@@ -2172,19 +2228,19 @@ def build_bundle_from_data(
                     raise ValueError("bundle target parent identity changed after publication")
             _fsync_directory_fd(publication_parent_fd)
         except Exception as error:
-            if isinstance(error, ValueError):
-                raise
             raise OSError(
                 "bundle published but target parent durability fsync failed"
             ) from error
         finally:
-            os.close(publication_parent_fd)
-            publication_parent_fd = None
+            if isinstance(publication_parent_fd, int):
+                os.close(publication_parent_fd)
+                publication_parent_fd = None
         _validate_published_receipts(
             target,
             payload_identity,
             (*pages, manifest_receipt),
             state.file_identities,
+            topics_identity=state.topics_identity,
         )
         all_bytes = sum(page.bytes for page in pages) + manifest_receipt.bytes
         return DebugReportBundleReceipt(
@@ -2227,7 +2283,7 @@ def build_bundle_from_data(
                     except OSError:
                         pass
                     _remove_guardian_path(guardian, guardian_identity)
-            if publication_parent_fd is not None:
+            if isinstance(publication_parent_fd, int):
                 os.close(publication_parent_fd)
 
 

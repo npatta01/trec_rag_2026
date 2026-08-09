@@ -10,6 +10,7 @@ from html.parser import HTMLParser
 import os
 from pathlib import Path
 import socket
+import stat
 import weakref
 
 import pytest
@@ -90,6 +91,13 @@ def test_build_bundle_writes_summary_topics_and_manifest_with_matching_receipt(
     assert receipt.bundle_manifest_sha256 == _file_sha256(receipt.manifest_path)
     assert receipt.total_bytes == sum(
         path.stat().st_size for path in target.rglob("*") if path.is_file()
+    )
+    assert stat.S_IMODE(target.stat().st_mode) == 0o500
+    assert stat.S_IMODE((target / "topics").stat().st_mode) == 0o500
+    assert all(
+        stat.S_IMODE(path.stat().st_mode) == 0o400
+        for path in target.rglob("*")
+        if path.is_file()
     )
 
 
@@ -720,6 +728,98 @@ def test_bundle_freezes_pages_before_success_receipt_verification(
     assert mutation_errors == [PermissionError]
 
 
+def test_bundle_freezes_root_against_unlisted_file_during_receipt_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "frozen-root-coverage"
+    real_validate = bundle_module._validate_published_receipts
+    mutation_errors: list[type[BaseException]] = []
+
+    def add_unlisted_file(*args: object, **kwargs: object) -> None:
+        published = Path(args[0])
+        try:
+            (published / "unlisted.txt").write_text("foreign", encoding="utf-8")
+        except BaseException as error:  # pragma: no cover - assertion below records it
+            mutation_errors.append(type(error))
+        else:
+            raise AssertionError("receipt verification mutated the frozen bundle root")
+        real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bundle_module, "_validate_published_receipts", add_unlisted_file
+    )
+    receipt = debug_report.build_debug_report_bundle(
+        fixture.retrieval_config, output_dir=target
+    )
+
+    assert receipt.output_dir == target.resolve()
+    assert mutation_errors == [PermissionError]
+    assert set(path.name for path in target.iterdir()) == {
+        "index.html",
+        "topics",
+        "bundle-manifest.json",
+    }
+
+
+def test_bundle_freezes_topics_directory_during_receipt_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "frozen-topics-coverage"
+    real_validate = bundle_module._validate_published_receipts
+    mutation_errors: list[type[BaseException]] = []
+
+    def replace_topics_directory(*args: object, **kwargs: object) -> None:
+        published = Path(args[0])
+        topics = published / "topics"
+        try:
+            topics.rename(published / "topics-replaced")
+            topics.mkdir()
+        except BaseException as error:  # pragma: no cover - assertion below records it
+            mutation_errors.append(type(error))
+        else:
+            raise AssertionError("receipt verification replaced the frozen topics directory")
+        real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bundle_module, "_validate_published_receipts", replace_topics_directory
+    )
+    receipt = debug_report.build_debug_report_bundle(
+        fixture.retrieval_config, output_dir=target
+    )
+
+    assert receipt.output_dir == target.resolve()
+    assert mutation_errors == [PermissionError]
+    assert (target / "topics" / "alpha-topic.html").is_file()
+
+
+def test_bundle_closes_its_page_fds_before_validation_and_freeze(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "closed-page-fds"
+    real_validate = bundle_module._validate_staging
+    observed_page_fds: list[str] = []
+
+    def observe_closed_page_fds(*args: object, **kwargs: object) -> None:
+        staging = Path(args[0])
+        page_paths = {staging / "index.html", staging / "topics" / "alpha-topic.html"}
+        for entry in Path("/proc/self/fd").iterdir():
+            try:
+                opened = Path(os.readlink(entry))
+            except OSError:
+                continue
+            if opened in page_paths:
+                observed_page_fds.append(str(opened))
+        real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(bundle_module, "_validate_staging", observe_closed_page_fds)
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert observed_page_fds == []
+
+
 def test_bundle_receipt_verification_reuses_prevalidated_hashes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -914,6 +1014,29 @@ def test_bundle_keeps_complete_target_when_post_rename_fsync_fails(
         debug_report.build_debug_report_bundle(
             fixture.retrieval_config, output_dir=target
         )
+
+
+def test_bundle_reports_parent_reopen_failure_after_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "parent-reopen-failure"
+    real_open = bundle_module._open_directory_fd
+
+    def fail_parent_reopen(path: Path) -> int:
+        if path == target.parent and target.exists():
+            raise OSError("forced parent reopen")
+        return real_open(path)
+
+    monkeypatch.setattr(bundle_module, "_open_directory_fd", fail_parent_reopen)
+    with pytest.raises(
+        OSError, match="bundle published but target parent durability fsync failed"
+    ):
+        debug_report.build_debug_report_bundle(
+            fixture.retrieval_config, output_dir=target
+        )
+
+    assert (target / "bundle-manifest.json").is_file()
 
 
 def test_bundle_does_not_retain_topic_render_buffer_during_validation(
