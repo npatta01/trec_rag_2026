@@ -51,6 +51,11 @@ The strict provider response contains one record per operation with exactly thes
 - `replacement_safe`: true for insertions; for replacements, the new object is more useful than
   everything removed and loses no distinct caveat, qualification, tradeoff, or relevant detail.
 
+The decision vector is solved as one coherent candidate subset. Support, atomicity, and materiality
+remain operation-local, but redundancy and replacement safety are evaluated in the draft produced
+by the retained subset. This avoids rejecting an insertion as redundant against text that a paired
+replacement removes, or rejecting that replacement for losing a detail restored by the insertion.
+
 Local acceptance is derived, not model-selected: all five booleans must be true. The model cannot
 return replacement text, citations, indexes, or an `accept` override. The payload must contain each
 expected operation ID exactly once and no unknown ID. Any malformed or incomplete payload rejects
@@ -111,10 +116,11 @@ Run topics sequentially in this order:
 3. `499`: mixed insertion/replacement positive probe; inspect whether the substantive gains survive
    without retaining partially supported or redundant material.
 
-Do not tune the prompt between topics. Use Luna medium thinking, exactly one call per topic, and zero
-new Sol calls. Judge the sealed results from actual prose and authenticated passages, using existing
-post-hoc support artifacts only after generation. Do not rerun the slow nuggetizer unless the
-qualitative result is ambiguous.
+After one topic-`233` diagnostic exposed the interacting-operation ambiguity above, freeze the
+corrected v2 prompt across topics `233`, `300`, and `499`. Use Luna medium thinking, exactly one v2
+call per topic, and zero new Sol calls. Judge the sealed results from actual prose and authenticated
+passages, using existing post-hoc support artifacts only after generation. Do not rerun the slow
+nuggetizer unless the qualitative result is ambiguous.
 
 ## Promotion Rule
 

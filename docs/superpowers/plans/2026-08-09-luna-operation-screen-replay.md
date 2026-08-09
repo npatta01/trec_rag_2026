@@ -4,13 +4,20 @@
 
 **Goal:** Build and test a one-call Luna gate that filters already-validated Sol splice operations, then replay it on frozen topics `233`, `300`, and `499` with zero new Sol calls.
 
+**Status:** Implementation and frozen evaluation complete; PR integration gate blocked by the
+repository's existing linked-worktree environment failures. The v2 replay passed all three probes
+with 3 Luna calls, 0 Sol calls, and $0.007576 provider cost. One earlier topic-`233` diagnostic cost
+$0.002224 and led to the coherent-subset prompt correction documented in the design and result
+report.
+
 **Architecture:** Put the strict decision schema and fail-closed operation filtering in a small provider-independent `operation_screen` module. Put authenticated frozen-source loading, prompt rendering, one-call OpenRouter execution, resume safety, final assembly, and manifest writing in a separate replay module. The replay reads but never mutates the source runs and does not change the production competition runner.
 
 **Tech Stack:** Python 3.12, dataclasses, existing OpenRouter strict JSON client, existing bounded-splice and blueprint primitives, pytest.
 
 ## Global Constraints
 
-- Use exactly one Luna medium-thinking semantic call per tested topic and zero new Sol calls.
+- Use exactly one frozen-v2 Luna medium-thinking semantic call per tested topic and zero new Sol
+  calls; preserve the earlier topic-`233` diagnostic as a separately reported iteration cost.
 - Run only development topics `233`, `300`, and `499`, sequentially, without prompt changes between topics.
 - Luna returns decisions only; it cannot return or modify operation prose, citations, indexes, or ranges.
 - Accept an operation only when all five gates are true: fully supported, atomic, material, nonredundant, and replacement-safe.
@@ -33,7 +40,7 @@
 - Consumes: `Sequence[SpliceOperation]` and one provider payload.
 - Produces: `operation_screen_response_schema(operation_count: int)`, `operation_ids(operations: Sequence[SpliceOperation])`, `validate_operation_screen_payload(payload: object, operations: Sequence[SpliceOperation]) -> OperationScreenResult`, `ScreenDecision`, and `OperationScreenResult`.
 
-- [ ] **Step 1: Write the failing schema and filtering tests**
+- [x] **Step 1: Write the failing schema and filtering tests**
 
 Create two literal `SpliceOperation` values: one insertion and one replacement. Assert the dynamic
 schema requires exactly two strict decision objects. Submit a payload that passes all insertion
@@ -68,7 +75,7 @@ assert result.accepted_operations == (operations[0],)
 assert result.decisions[1].rejection_reasons == ("replacement_safe",)
 ```
 
-- [ ] **Step 2: Run the pure tests and verify red**
+- [x] **Step 2: Run the pure tests and verify red**
 
 Run:
 
@@ -79,7 +86,7 @@ PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python 
 
 Expected: collection fails because `trec_rag.operation_screen` does not exist.
 
-- [ ] **Step 3: Implement the minimal strict contract**
+- [x] **Step 3: Implement the minimal strict contract**
 
 Define immutable records:
 
@@ -102,13 +109,13 @@ requires exact root/item fields, exact one-to-one IDs, real booleans, and input 
 already `SpliceOperation` instances. It derives `accepted = all(gates)` and ordered reason names for
 false gates; it never trusts a provider-supplied accept flag.
 
-- [ ] **Step 4: Add red tests for malformed identity and types**
+- [x] **Step 4: Add red tests for malformed identity and types**
 
 Assert that missing, duplicate, unknown, and reordered IDs fail closed; assert extra fields and an
 integer masquerading as a boolean fail. Run each new test and confirm the expected validator failure
 before adding the corresponding branch.
 
-- [ ] **Step 5: Run focused green tests and commit**
+- [x] **Step 5: Run focused green tests and commit**
 
 ```bash
 PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python \
@@ -130,7 +137,7 @@ git commit -m "prototype: add strict Luna operation screen"
 - Consumes: `--config`, `--topic`, completed `--source-root`, `--state-mode create|resume`, and optional `--dry-run`.
 - Produces: `OperationScreenSource`, `load_operation_screen_source(...)`, `render_operation_screen_prompt(...)`, `finalize_operation_screen(...)`, `run_luna_operation_screen_replay(...)`, private replay state/receipt/evaluation arms, and a manifest-last aggregate.
 
-- [ ] **Step 1: Write failing prompt and source-authentication tests**
+- [x] **Step 1: Write failing prompt and source-authentication tests**
 
 Build one real temporary bounded source fixture with planner state, draft, merged audit cards, state
 reservation/call records, and a revision receipt. Assert the rendered prompt contains the untouched
@@ -141,7 +148,7 @@ Assert the loader rejects a changed registered audit file, wrong handoff/topic d
 is not `semantic_success`, mismatched revision prompt/schema hash, mismatched revision reservation,
 or an invalid frozen splice payload.
 
-- [ ] **Step 2: Run replay tests and verify red**
+- [x] **Step 2: Run replay tests and verify red**
 
 ```bash
 PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python \
@@ -150,7 +157,7 @@ PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python 
 
 Expected: collection fails because `trec_rag.luna_operation_screen_replay` does not exist.
 
-- [ ] **Step 3: Implement source loading and prompt rendering**
+- [x] **Step 3: Implement source loading and prompt rendering**
 
 `load_operation_screen_source` authenticates state and registered files, reloads the planner state,
 loads the original draft and merged audit cards, recomputes the original Sol revision prompt/schema
@@ -163,14 +170,14 @@ then serializes each typed operation with its stable ID and only its named audit
 that every cited document must fully support the complete object, insertions set replacement safety
 true, replacements must preserve every removed detail, and Luna must return decisions only.
 
-- [ ] **Step 4: Write failing finalization and resume tests**
+- [x] **Step 4: Write failing finalization and resume tests**
 
 Assert a valid mixed decision payload applies only accepted operations and preserves rejected draft
 objects. Assert malformed decision output returns the rebound draft with a recorded fallback error.
 Assert resume reuses a matching semantic-success receipt, retries only a terminal transport failure,
 and refuses an ambiguous pending request without a receipt.
 
-- [ ] **Step 5: Implement the one-call runner and CLI**
+- [x] **Step 5: Implement the one-call runner and CLI**
 
 Use the existing `_bounded_provider_call`, candidate writers, generation identities, and local
 validators. Reserve one `operation-screen` Luna call, bind the replay identity to prompt/schema and
@@ -179,7 +186,7 @@ and write `manifest.json` last. Report accepted/rejected counts and aggregate re
 copying operation text or evidence. Dry run prints source counts plus
 `calls=luna_operation_screen:1,sol:0,provider:0` and creates no output directory.
 
-- [ ] **Step 6: Run focused green tests and commit**
+- [x] **Step 6: Run focused green tests and commit**
 
 ```bash
 PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python \
@@ -209,39 +216,39 @@ git commit -m "prototype: replay Luna operation screening"
 - Consumes: the frozen hardened source roots and authenticated shared handoff.
 - Produces: three sealed screened candidates plus an aggregate privacy-reviewed decision.
 
-- [ ] **Step 1: Create unique ignored configs and dry-run all three topics**
+- [x] **Step 1: Create unique ignored configs and dry-run all three topics**
 
 Copy each matching hardened local config, assign a new operation-screen experiment/output ID, and
 select exactly the matching topic. Confirm the source root, operation count, prompt size, one Luna
 call, zero Sol calls, and no output creation.
 
-- [ ] **Step 2: Run topic 233 and inspect before continuing**
+- [x] **Step 2: Run topic 233 and inspect before continuing**
 
 Run create mode once. Require a semantic-success manifest, valid source hashes, no fallback, and
 organizer-valid final. Inspect the private decision vector and exact prose/evidence. Continue only
-after deciding whether the known weak replacement was rejected without discarding all three useful
-operations.
+after deciding whether the known weak replacement was rejected and the retained subset is a
+coherent, defensible improvement; do not require retaining edits whose usefulness depends on an
+unsafe replacement.
 
-- [ ] **Step 3: Run topic 300 and inspect before continuing**
+- [x] **Step 3: Run topic 300 and inspect before continuing**
 
 Repeat under the frozen prompt. Judge whether the insertion-only operation set remains meaningful,
 supported, coherent, and materially useful. Do not modify code or prompt based on the result.
 
-- [ ] **Step 4: Run topic 499 and inspect**
+- [x] **Step 4: Run topic 499 and inspect**
 
 Repeat under the same prompt. Judge whether the screen retains the substantive full-flow gains and
 rejects any operation that is only partially supported, redundant, or replacement-unsafe.
 
-- [ ] **Step 5: Perform bounded post-hoc comparison**
+- [x] **Step 5: Perform bounded post-hoc comparison**
 
 After all three candidates seal, compare accepted/rejected operations with the prior gold-blind
 qualitative review and existing support judgments. Run the cheap support judge only when a screened
 answer creates a combination not already represented by cached exact answer-object tasks. Do not
 rerun the nuggetizer unless qualitative judgment is genuinely ambiguous.
 
-- [ ] **Step 6: Record, verify, and commit the verdict**
+- [x] **Step 6: Record, verify, and commit the verdict**
 
 Write aggregate calls, cost, decisions, qualitative outcomes, support results, and promotion
 decision without private text. Mark the plan complete. Rerun the focused Task 2 verification,
 inspect manifests and git status, then commit only the plan/report files.
-
