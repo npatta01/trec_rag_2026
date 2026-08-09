@@ -69,8 +69,9 @@ def test_wrapper_preflight_freezes_all22_and_zero_upstream_expectations() -> Non
     assert "retrieval_network_calls_expected=0" in result.stdout
     assert "passage_model_batches_expected=0" in result.stdout
     assert "candidate_judge_calls_max=22" in result.stdout
-    assert "canary_topic=407" in result.stdout
+    assert "topic_407_gate=post-full-structural" in result.stdout
     assert "warm_probe_topics=14,31" in result.stdout
+    assert "warm_probe_seconds=180" in result.stdout
 
 
 def test_live_wrapper_validates_topics_after_creating_the_locked_environment() -> None:
@@ -96,7 +97,11 @@ def test_task_uses_one_fast_bounded_on_demand_gpu_and_only_named_secrets() -> No
     assert value["resources"]["disk"] == "100GB"
     assert value["backends"] == ["runpod", "vastai"]
     assert value["spot_policy"] == "on-demand"
-    assert value["max_duration"] == "5h"
+    assert value["max_duration"] == "2h50m"
+    assert value["commands"] == [
+        "timeout --signal=TERM --kill-after=10m 2h40m "
+        "bash code/tools/run_cached_segmentation_validation.sh ${{ run.args }}"
+    ]
     assert value["max_price"] == 3.29
     assert value["retry"] == {"on_events": ["no-capacity"], "duration": "30m"}
     assert value["env"] == [
@@ -130,6 +135,28 @@ def test_probe_failure_preserves_the_underlying_exit_status() -> None:
 
     assert result.returncode == 137
     assert "probe failed with status 137" in result.stderr
+
+
+def test_expected_short_probe_timeout_is_success() -> None:
+    wrapper = WRAPPER.read_text()
+    match = re.search(
+        r"(?ms)^propagate_probe_failure\(\) \{\n.*?^\}\n",
+        wrapper,
+    )
+    assert match is not None
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{match.group(0)}\npropagate_probe_failure 124",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
 
 
 def test_source_verification_batch_waits_all_and_preserves_failure(
@@ -222,7 +249,7 @@ def test_launcher_accepts_safe_cloud_instance_names_with_spaces() -> None:
     assert shell_syntax.returncode == 1
 
 
-def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> None:
+def test_workflow_source_encodes_short_probe_full_run_and_marker_last() -> None:
     wrapper = WRAPPER.read_text()
     launcher = LAUNCHER.read_text()
 
@@ -242,8 +269,9 @@ def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> N
     assert "topic_workers: 4" not in wrapper  # generated structurally, not patched text
     assert "cached_segmentation_validation structural" in wrapper
     assert "cached_segmentation_validation semantic" in wrapper
-    assert wrapper.count('--document-store-root "$cache_root/documents/v1"') == 2
-    assert "cached-segmentation-concurrency-decision-v2" in wrapper
+    assert '--output-dir "$validation_root" --workers 8 "${topic_args[@]}"' in wrapper
+    assert wrapper.count('--document-store-root "$cache_root/documents/v1"') == 1
+    assert "cached-segmentation-concurrency-decision-v3" in wrapper
     assert "peak_memory_mib" in wrapper
     assert "projected_selected_worker_memory_mib" in wrapper
     assert "nvidia-smi --query-gpu=memory.used,memory.total" in wrapper
@@ -253,12 +281,20 @@ def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> N
     assert '"gpu_uuid": gpu_uuid' in wrapper
     assert "SELECTED_WORKERS=20" in wrapper
     assert 'make_config "$final_config" "$run_id" "$SELECTED_WORKERS"' in wrapper
+    assert "PROBE_DURATION_SECONDS=180" in wrapper
+    assert "MINIMUM_PROBE_PEAK_DELTA_MIB=4096" in wrapper
+    assert 'probe_cache_root="$work_root/probe-cache"' in wrapper
+    assert 'make_config "$probe_config" "${run_id}-probe" "$PROBE_WORKERS"' in wrapper
+    assert 'timeout --signal=TERM --kill-after=30s "${PROBE_DURATION_SECONDS}s"' in wrapper
+    assert (
+        '"$venv_python" -m trec_rag.competition_retrieval "$probe_config" \\\n'
+        '  --topic 14 --topic 31 --cached-upstream-rescore'
+    ) in wrapper
     assert (
         '"$venv_python" -m trec_rag.competition_retrieval "$final_config" \\\n'
-        '  --topic 407 --topic 14 --topic 31 --cached-upstream-rescore'
+        '  --cached-upstream-rescore'
     ) in wrapper
-    assert 'outputs/${run_id}-canary' not in wrapper
-    assert 'outputs/${run_id}-warm' not in wrapper
+    assert '--topic 407 --cached-upstream-rescore' not in wrapper
     assert "cached_segmentation_result_bundle pack" in wrapper
     assert "cached_segmentation_result_bundle pack-diagnostic" in wrapper
     assert "verify-diagnostic" in wrapper
@@ -286,6 +322,8 @@ def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> N
     assert '"--gpu" "${approved_gpu}:1"' in launcher
     assert '"--max-price" "$approved_hourly_price"' in launcher
     assert 'Decimal("3.29")' in launcher
+    assert "approved_max_exposure=" in launcher
+    assert 'Decimal("17") / Decimal("6")' in launcher
     assert 'remote set-url origin "$remote_url"' in launcher
     assert 'update-ref "refs/remotes/origin/$tracking_branch" "$tracking_head"' in launcher
     assert 'branch --set-upstream-to="origin/$tracking_branch"' in launcher

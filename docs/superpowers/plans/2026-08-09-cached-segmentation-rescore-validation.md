@@ -4,7 +4,7 @@
 
 **Goal:** Re-score all 22 cached RAG 2025 development topics with the fixed sentence segmenter on one fast dstack GPU, prove that planning/retrieval/passage scoring performed no new work, and compare old versus fixed canonical nuggets against the exact same frozen obligation plans.
 
-**Architecture:** Add one explicit three-value retrieval execution policy and a read-only document-store seam so `cached-upstream-rescore` fails before forbidden upstream work while allowing sentence scoring, similarity, and canonicalization. Add an authenticated A/B validator that reports fragmentation metrics, reuses the 22 completed baseline coverage plans, and makes one candidate-arm judge call per topic. One dstack task restores the portable bundles, runs topic 407 first, then all topics with twenty probe-gated workers on one high-memory GPU host, and publishes a private verified result bundle.
+**Architecture:** Add one explicit three-value retrieval execution policy and a read-only document-store seam so `cached-upstream-rescore` fails before forbidden upstream work while allowing sentence scoring, similarity, and canonicalization. Add an authenticated A/B validator that reports fragmentation metrics, reuses the 22 completed baseline coverage plans, and makes one candidate-arm judge call per topic. One dstack task restores the portable bundles, runs a three-minute isolated two-topic probe, then all topics in one twenty-worker wave on a high-memory GPU host, and publishes a private verified result bundle.
 
 **Tech Stack:** Python 3.12, pytest, spaCy `en_core_web_sm` 3.8.0, PyTorch CUDA, SQLite, dstack 0.20.29, private Hugging Face Buckets, deterministic tar+zstd, OpenRouter `openai/gpt-5.6-sol`.
 
@@ -26,7 +26,7 @@
   final review finding now also preserves any failed gate or interrupted run in
   a distinct marker-last, non-promotable diagnostic bundle.
 - Local verification passes: lock check, shell syntax, compile checks, diff
-  check, real wrapper/dstack-HF preflights, and 632 targeted tests. Two exact
+  check, real wrapper/dstack-HF preflights, and 636 targeted tests. Two exact
   H100 attempts stopped before scoring: the first exposed remote environment
   ordering and the second exposed v3 source-receipt compatibility. The latter
   published a verified non-promotable diagnostic bundle. Both root causes have
@@ -46,20 +46,23 @@
   misses. The real Topic 14 source passes this profile in 8.14 seconds and 271
   MiB. Retry 5 proved that a single topic spends more than fifty minutes in
   the CPU-heavy downstream stages while the H100 remains lightly utilized.
-  Retry 6 uses the fixed twenty-worker policy and fresh result and diagnostic
-  prefixes.
+  Retry 6 was stopped during authenticated input restoration before scoring
+  because sequential completed canary/probe runs could not meet the deadline.
+  Retry 7 uses a three-minute isolated probe, one twenty-worker wave, eight-way
+  semantic judging, and fresh result and diagnostic prefixes.
 
 ## Global Constraints
 
 - Work only in `/home/npatta01/data/competitions/trec_rag_2026/.worktrees/fix-sentence-segmentation` on `codex/fix-sentence-segmentation`.
 - Topics: `14,31,37,58,72,84,144,161,200,213,219,224,225,233,273,300,407,477,499,515,707,897`.
 - Source: private immutable `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806`.
-- Destination run ID: `nonagentic-rag25-segmentation-fixed-20260809-r6`; never overwrite a remote prefix.
+- Destination run ID: `nonagentic-rag25-segmentation-fixed-20260809-r7`; never overwrite a remote prefix.
 - Planning, retrieval, document materialization, and passage scoring are fail-closed cache-only/read-only.
 - Sentence scoring and similarity may use local GPU work. Canonicalization may make bounded hosted calls.
 - Reuse existing baseline `plan.json` bytes and make at most 22 candidate-arm judge calls; make no planner calls.
 - Use one on-demand machine with at least 24 CPU cores, 192 GB RAM, 100 GB disk, and one H200/H100 GPU with at least 80 GB VRAM.
-- Topic 407 validates first. The full run uses exactly `execution.topic_workers: 20`, gated by a same-machine two-worker VRAM projection.
+- The full run uses exactly `execution.topic_workers: 20`, gated by a same-machine three-minute two-worker VRAM projection; Topic 407 validates before promotion from the completed wave.
+- Enforce a 2h40m wrapper deadline with ten minutes for diagnostic preservation and a 2h50m hard task cap.
 - Keep caches, outputs, evidence, nuggets, provider responses, and reports private and out of git.
 - Ignore Modal completely: no Modal dependency, config key, import, test, or execution path.
 - Promotion means push and open a draft PR after validation; never merge automatically.
@@ -438,7 +441,7 @@ git commit -m "Bundle cached segmentation validation results"
 
 ```text
 run_cached_segmentation_validation.sh [--preflight]
-  --run-id nonagentic-rag25-segmentation-fixed-20260809-r6
+  --run-id nonagentic-rag25-segmentation-fixed-20260809-r7
   --source-run-id nonagentic-rag25-dev-20260806
   --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807
   --config configs/rag25_competition_retrieval_v1.yaml
@@ -453,7 +456,7 @@ apply_cached_segmentation_validation.sh --preview|--launch --name NAME \
 
 - [ ] **Step 1: Write executable workflow tests first**
 
-Run the real wrapper against fake `hf`, `uv`, `git`, `nvidia-smi`, and nested Python. Assert: exact 22 source pairs; empty private destination; verify-all-then-merge; topic 407 cached-rescore canary; two-topic warm probe; final twenty-worker all-topic run; structural gate before promotion; no planner and at most 22 judge calls; archive-before-marker upload; list/download/byte-compare/reverify; failure propagation; committed-only launch; preview declines and never submits.
+Run the real wrapper against fake `hf`, `uv`, `git`, `nvidia-smi`, and nested Python. Assert: exact 22 source pairs; empty private destination; verify-all-then-merge; isolated three-minute two-topic probe; one twenty-worker all-topic run; Topic 407 and full structural gates before promotion; no planner and at most 22 judge calls; archive-before-marker upload; list/download/byte-compare/reverify; failure propagation; committed-only launch; preview declines and never submits.
 
 - [ ] **Step 2: Verify RED**
 
@@ -463,24 +466,23 @@ Run the real wrapper against fake `hf`, `uv`, `git`, `nvidia-smi`, and nested Py
 
 - [ ] **Step 3: Implement preflight and remote setup**
 
-Follow the existing cache-shard launcher for committed-only transport, secret-safe mapping, pinned interpreter, locked CUDA sync, private-bucket checks, foreground failures, and marker-last round trips. Download 1.30 GiB, verify each source with the explicit `competition_cache_bundle verify-rescore-source` profile, then use `merge-rescore-source` once for all 22 fresh `/tmp` cache/output roots. This preserves exact archive/cache/checkpoint authentication while deferring the intentional downstream rescore proof to the cached-upstream execution receipts. Download the baseline archive/marker pair, byte-verify it, and run `cached_segmentation_result_bundle verify-baseline` before any hosted judge call. Never copy SQLite directly.
+Follow the existing cache-shard launcher for committed-only transport, secret-safe mapping, pinned interpreter, locked CUDA sync, private-bucket checks, foreground failures, and marker-last round trips. Download 1.30 GiB, verify each source with the explicit `competition_cache_bundle verify-rescore-source` profile, then use `merge-rescore-source` for fresh production and isolated-probe `/tmp` cache/output roots. This preserves exact archive/cache/checkpoint authentication while deferring the intentional downstream rescore proof to the cached-upstream execution receipts. Download the baseline archive/marker pair, byte-verify it, and run `cached_segmentation_result_bundle verify-baseline` before any hosted judge call. Never copy SQLite directly.
 
-- [ ] **Step 4: Implement canary, warm probe, full run, and validation**
+- [ ] **Step 4: Implement short warm probe, one-wave full run, and validation**
 
-Generate one ignored twenty-worker config from tracked
-`configs/rag25_competition_retrieval_v1.yaml`. Extend one run namespace so
-topic receipts from the canary and probe are resumed rather than recomputed:
+Generate ignored two- and twenty-worker configs from tracked
+`configs/rag25_competition_retrieval_v1.yaml`:
 
 ```text
-canary 407: one active topic
-warm probe 14,31: two active topics with peak-memory sampling
-final 22: twenty workers
+warm probe 14,31: two active topics for three minutes in isolated roots
+final 22: one twenty-worker production wave
 ```
 
-Run topic 407 structural validation before continuing. Project selected-worker
-memory from the two-topic probe and stop if it exceeds 90% of device memory.
-Package the canonical concurrency decision with the final structural and
-frozen-plan semantic checks, then upload and round-trip verify the result. A
+Project selected-worker memory from the two-topic probe and stop if it exceeds
+90% of device memory. Run Topic 407 and full structural validation after the
+wave, then use eight threads for the independent frozen-plan judge calls.
+Package the canonical concurrency decision with the structural and semantic
+checks, then upload and round-trip verify the result. A
 nonzero exit packages available completed checkpoint phases, comparisons, and
 coverage states into a distinct marker-last diagnostic bundle that is
 explicitly ineligible for promotion.
@@ -489,7 +491,7 @@ explicitly ineligible for promotion.
 
 Use the pinned `huggingface/trl` image digest and launcher sentinel. Map secret
 names only. Configure one on-demand H200/H100 pool verified against dstack
-0.20.29, at least 80 GB VRAM, 24 CPU cores, 192 GB RAM, 100 GB disk, `max_duration: 5h`, hard
+0.20.29, at least 80 GB VRAM, 24 CPU cores, 192 GB RAM, 100 GB disk, `max_duration: 2h50m`, a 2h40m wrapper deadline, hard
 price cap, RunPod/Vast.ai, and bounded `no-capacity` retry.
 
 - [ ] **Step 6: Verify GREEN and commit**
@@ -497,7 +499,7 @@ price cap, RunPod/Vast.ai, and bounded `no-capacity` retry.
 ```bash
 .venv/bin/python -m pytest code/tests/test_cached_segmentation_validation_workflow.py -q
 bash code/tools/run_cached_segmentation_validation.sh --preflight \
-  --run-id nonagentic-rag25-segmentation-fixed-20260809-r6 \
+  --run-id nonagentic-rag25-segmentation-fixed-20260809-r7 \
   --source-run-id nonagentic-rag25-dev-20260806 \
   --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
   --config configs/rag25_competition_retrieval_v1.yaml
@@ -517,7 +519,7 @@ git commit -m "Run cached segmentation validation on dstack"
 - Update: this plan with verification/live evidence
 - Private baseline source: `outputs/nonagentic-rag25-dev-all22-replay-p4-20260807`
 - Private baseline prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807`
-- Private result prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-segmentation-fixed-20260809-r6`
+- Private result prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-segmentation-fixed-20260809-r7`
 
 **Interfaces:**
 
@@ -562,14 +564,14 @@ Retain the HF mode and verify the real wrapper's `--preflight` path.
 
 ```bash
 bash code/tools/apply_cached_segmentation_validation.sh \
-  --preview --name rag25-segfix-all22-20260809-r6 -- \
-  --run-id nonagentic-rag25-segmentation-fixed-20260809-r6 \
+  --preview --name rag25-segfix-all22-20260809-r7 -- \
+  --run-id nonagentic-rag25-segmentation-fixed-20260809-r7 \
   --source-run-id nonagentic-rag25-dev-20260806 \
   --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
   --config configs/rag25_competition_retrieval_v1.yaml
 ```
 
-Show the dstack table unchanged. Report GPU/provider/region identities, hourly prices, five-hour maximum exposure, and at least two distinct eligible offers when practical. Stop for user offer approval.
+Show the dstack table unchanged. Report GPU/provider/region identities, hourly prices, the 2h50m maximum exposure, and at least two distinct eligible offers when practical. Stop for user offer approval.
 
 - [ ] **Step 6: Submit exactly once after offer approval**
 
@@ -578,9 +580,9 @@ must re-plan with the exact backend, region, instance type, GPU, and price cap,
 then call the identically constrained `dstack apply -y -d` once. Check `dstack
 ps -v`, then monitor logs and GPU memory/utilization without a blocking attach.
 
-- [ ] **Step 7: Enforce canary and full gates**
+- [ ] **Step 7: Enforce Topic 407 and full gates**
 
-Before continuing after topic 407, require every non-hit upstream counter to be zero, fixed segmentation-unit median above 11, fixed segmentation-unit sub-40 fraction below 0.604, and all provenance/selection/canonical validators to pass. After all 22, require the same zero-work proof per topic, twenty-worker completion, authenticated export/handoff, improved candidate/selection fragmentation, and completed semantic comparison.
+After all 22, require every non-hit upstream counter to be zero, Topic 407 fixed segmentation-unit median above 11 and sub-40 fraction below 0.604, twenty-worker completion, authenticated export/handoff, all provenance/selection/canonical validators, improved candidate/selection fragmentation, and completed semantic comparison.
 
 - [ ] **Step 8: Independently verify downloaded results**
 

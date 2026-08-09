@@ -590,6 +590,21 @@ def test_semantic_comparison_reuses_plan_and_reports_candidate_improvement(
     assert resumed_judge.requests == []
 
 
+def test_semantic_comparison_rejects_parallel_injected_judge(tmp_path: Path) -> None:
+    _, _, _, baseline_handoff, candidate_handoff = _fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="injected judge requires one worker"):
+        compare_semantic_runs(
+            baseline_handoff_path=baseline_handoff,
+            baseline_coverage_root=tmp_path / "baseline-coverage",
+            candidate_handoff_path=candidate_handoff,
+            candidate_coverage_root=tmp_path / "candidate-coverage",
+            topic_ids=(TOPIC_ID,),
+            judge=_CoverageBackend([]),
+            max_workers=2,
+        )
+
+
 def test_semantic_comparison_lists_regression_and_fails_macro_gate(
     tmp_path: Path,
 ) -> None:

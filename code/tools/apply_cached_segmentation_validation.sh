@@ -211,10 +211,10 @@ else
     "approved_instance_type=$approved_instance_type" \
     "approved_gpu=$approved_gpu" \
     "approved_hourly_price=$approved_hourly_price" \
-    "approved_5h_exposure=$("$project_python" - "$approved_hourly_price" <<'PY'
+    "approved_max_exposure=$("$project_python" - "$approved_hourly_price" <<'PY'
 from decimal import Decimal
 import sys
-print(Decimal(sys.argv[1]) * 5)
+print(Decimal(sys.argv[1]) * Decimal("17") / Decimal("6"))
 PY
 )"
   # Re-plan the exact approved offer class immediately before submission. The

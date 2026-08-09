@@ -380,7 +380,7 @@ def _result_fixture(
     _write_json(
         validation_root / "concurrency-decision.json",
         {
-            "schema_version": "cached-segmentation-concurrency-decision-v2",
+            "schema_version": "cached-segmentation-concurrency-decision-v3",
             "run_id": "fixture-run",
             "config_sha256": config_sha,
             "gpu_name": "NVIDIA H100 80GB HBM3",
@@ -389,7 +389,10 @@ def _result_fixture(
             "probe_topics": ["14", "31"],
             "probe_workers": 2,
             "selected_workers": selected_workers,
-            "elapsed_seconds": 120,
+            "elapsed_seconds": 180,
+            "probe_duration_seconds": 180,
+            "probe_exit_status": 124,
+            "minimum_peak_delta_mib": 4096,
             "idle_memory_mib": 1000,
             "peak_memory_mib": 7000,
             "total_memory_mib": 81559,
@@ -848,6 +851,43 @@ def test_result_pack_rejects_internally_inconsistent_concurrency_decision(
     value = json.loads(path.read_text())
     value["projected_selected_worker_memory_mib"] = 0
     value["safe_limit_memory_mib"] = 0
+    _write_json(path, value)
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="concurrency decision",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
+        )
+
+
+def test_result_pack_rejects_short_timed_concurrency_probe(tmp_path: Path) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    path = validation_root / "concurrency-decision.json"
+    value = json.loads(path.read_text())
+    value["elapsed_seconds"] = 179
+    _write_json(path, value)
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="concurrency decision",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
+        )
+
+
+def test_result_pack_rejects_idle_only_concurrency_probe(tmp_path: Path) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    path = validation_root / "concurrency-decision.json"
+    value = json.loads(path.read_text())
+    value["peak_memory_mib"] = value["idle_memory_mib"]
+    value["projected_selected_worker_memory_mib"] = value["idle_memory_mib"]
     _write_json(path, value)
 
     with pytest.raises(

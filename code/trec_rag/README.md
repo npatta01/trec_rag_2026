@@ -2093,6 +2093,9 @@ JSON and manifest private.
 `cached_segmentation_validation semantic` validates each completed baseline
 `retrieval_nugget_coverage_v2/<topic>` bundle, copies only its authenticated
 frozen plan into the candidate arm, and runs exactly one candidate judge stage.
+The CLI can run independent topic judges concurrently with `--workers`; each
+topic keeps a disjoint work directory, output order remains the requested topic
+order, and an injected shared judge is restricted to one worker.
 It never reruns the planner and refuses narrative, evaluator-identity, or plan
 drift before judging. The private comparison records paired obligation labels,
 artifact hashes, improvements and regressions, plus topic-macro required
@@ -2108,12 +2111,16 @@ committed-only repository transport and declines dstack submission; its launch
 path requires the approved backend, region, instance type, H200/H100 GPU, and
 hourly-price cap, re-previews those exact constraints, then submits exactly one
 detached task. The remote wrapper authenticates all 22 portable source bundles
-before one strict merge, restores the private baseline, runs topic 407 first,
-then samples peak memory while processing topics 14/31. Twenty workers proceed
-only when their linear projection is at most 90% of the 80+ GB GPU; the task
-also requires at least 192 GB of host RAM and 24 CPU cores. The signed-off
-decision is included in the private result bundle. Canary/probe topic receipts
-resume in the same final run namespace. The archive is uploaded before its
+before strict production and isolated-probe merges, restores the private
+baseline, and samples topics 14/31 for exactly three minutes in the disposable
+probe namespace. Twenty workers then process all topics in one wave only when
+their linear projection is at most 90% of the 80+ GB GPU; the task also
+requires at least 192 GB of host RAM and 24 CPU cores. Topic 407's structural
+canary is enforced on the completed full wave, and eight independent candidate
+judge calls may run concurrently. The signed-off decision is included in the
+private result bundle; idle-only/short probes are rejected. The wrapper has a
+2h40m deadline plus ten minutes for diagnostic preservation under the 2h50m
+dstack hard cap. The archive is uploaded before its
 completion marker, then both are downloaded and revalidated. Planning,
 retrieval, and passage scoring must report zero misses, network/provider calls,
 and model batches throughout.

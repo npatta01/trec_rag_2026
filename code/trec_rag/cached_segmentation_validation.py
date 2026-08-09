@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
@@ -871,10 +872,15 @@ def compare_semantic_runs(
     candidate_coverage_root: Path,
     topic_ids: Sequence[str],
     judge: CoverageModelBackend | None = None,
+    max_workers: int = 1,
 ) -> SemanticComparison:
     """Judge candidate nuggets against authenticated baseline obligation plans."""
 
     ordered_topic_ids = tuple(topic_ids)
+    if type(max_workers) is not int or max_workers < 1:
+        raise ValueError("max_workers must be a positive integer")
+    if judge is not None and max_workers != 1:
+        raise ValueError("injected judge requires one worker")
     if (
         not ordered_topic_ids
         or any(
@@ -891,10 +897,9 @@ def compare_semantic_runs(
     if tuple(topic.topic_id for topic in candidate_handoff.topics) != ordered_topic_ids:
         raise ValueError("candidate handoff topic order changed")
 
-    topics: list[SemanticTopicComparison] = []
-    expected_judge_calls = 0
-    actual_judge_calls = 0
-    for topic_id in ordered_topic_ids:
+    def compare_topic(
+        topic_id: str,
+    ) -> tuple[SemanticTopicComparison, int, int]:
         baseline_topic = _topic_by_id(baseline_handoff, topic_id)
         candidate_topic = _topic_by_id(candidate_handoff, topic_id)
         if (
@@ -929,7 +934,6 @@ def compare_semantic_runs(
             raise ValueError("candidate frozen plan changed")
 
         judge_was_missing = not (candidate_work_dir / "judgments.json").is_file()
-        expected_judge_calls += int(judge_was_missing)
         receipt = run_coverage_evaluation(
             CoverageRunConfig(
                 handoff_manifest_path=Path(candidate_handoff_path),
@@ -947,7 +951,6 @@ def compare_semantic_runs(
             raise ValueError("candidate did not reuse the frozen baseline plan")
         if receipt.hosted_calls != int(judge_was_missing):
             raise ValueError("candidate hosted-call count changed")
-        actual_judge_calls += receipt.hosted_calls
 
         candidate = load_completed_coverage_evaluation(
             handoff_manifest_path=Path(candidate_handoff_path),
@@ -991,7 +994,7 @@ def compare_semantic_runs(
             elif delta < 0:
                 regressed.append(obligation.obligation_id)
 
-        topics.append(
+        return (
             SemanticTopicComparison(
                 topic_id=topic_id,
                 narrative_sha256=baseline.bound_input.narrative_sha256,
@@ -1020,8 +1023,22 @@ def compare_semantic_runs(
                 baseline_artifact_sha256s=_semantic_artifact_hashes(baseline),
                 candidate_artifact_sha256s=_semantic_artifact_hashes(candidate),
                 candidate_judge_calls=1,
-            )
+            ),
+            int(judge_was_missing),
+            receipt.hosted_calls,
         )
+
+    if max_workers == 1 or len(ordered_topic_ids) == 1:
+        results = tuple(compare_topic(topic_id) for topic_id in ordered_topic_ids)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(max_workers, len(ordered_topic_ids)),
+            thread_name_prefix="segmentation-semantic",
+        ) as executor:
+            results = tuple(executor.map(compare_topic, ordered_topic_ids))
+    topics = [result[0] for result in results]
+    expected_judge_calls = sum(result[1] for result in results)
+    actual_judge_calls = sum(result[2] for result in results)
 
     if actual_judge_calls != expected_judge_calls:
         raise ValueError("candidate judge-call total changed")
@@ -1147,6 +1164,7 @@ def _run_semantic(args: argparse.Namespace) -> int:
         candidate_handoff_path=args.candidate_handoff,
         candidate_coverage_root=args.candidate_coverage_root,
         topic_ids=tuple(args.topic),
+        max_workers=args.workers,
     )
     output_dir = Path(args.output_dir)
     comparison_path = output_dir / "semantic-comparison.json"
@@ -1188,6 +1206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     semantic.add_argument("--candidate-handoff", type=Path, required=True)
     semantic.add_argument("--candidate-coverage-root", type=Path, required=True)
     semantic.add_argument("--output-dir", type=Path, required=True)
+    semantic.add_argument("--workers", type=int, default=1)
     semantic.add_argument("--topic", action="append", required=True)
     semantic.set_defaults(handler=_run_semantic)
     args = parser.parse_args(argv)

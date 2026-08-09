@@ -998,6 +998,9 @@ def _comparison_sources(
         "driver_version",
         "probe_topics",
         "probe_workers",
+        "probe_duration_seconds",
+        "probe_exit_status",
+        "minimum_peak_delta_mib",
         "selected_workers",
         "elapsed_seconds",
         "idle_memory_mib",
@@ -1022,7 +1025,7 @@ def _comparison_sources(
         set(decision) != expected_decision_fields
         or _canonical(decision) != decision_body
         or decision.get("schema_version")
-        != "cached-segmentation-concurrency-decision-v2"
+        != "cached-segmentation-concurrency-decision-v3"
         or decision.get("run_id") != run_id
         or decision.get("config_sha256") != config_sha256
         or not isinstance(gpu_name, str)
@@ -1033,6 +1036,9 @@ def _comparison_sources(
         or not driver_version
         or decision.get("probe_topics") != ["14", "31"]
         or decision.get("probe_workers") != 2
+        or decision.get("probe_duration_seconds") != 180
+        or decision.get("probe_exit_status") not in {0, 124}
+        or decision.get("minimum_peak_delta_mib") != 4096
         or decision.get("selected_workers") != selected_workers
         or type(selected_workers) is not int
         or selected_workers != 20
@@ -1043,14 +1049,23 @@ def _comparison_sources(
     idle = decision["idle_memory_mib"]
     peak = decision["peak_memory_mib"]
     total = decision["total_memory_mib"]
+    elapsed = decision["elapsed_seconds"]
+    probe_duration = decision["probe_duration_seconds"]
+    probe_status = decision["probe_exit_status"]
     expected_projected = idle + (
         selected_workers // decision["probe_workers"]
     ) * max(0, peak - idle)
     expected_safe_limit = int(total * 0.90)
     if (
-        decision["elapsed_seconds"] < 0
+        elapsed <= 0
+        or (
+            probe_status == 124
+            and not probe_duration <= elapsed <= probe_duration + 60
+        )
+        or (probe_status == 0 and elapsed > probe_duration)
         or idle < 0
         or peak < idle
+        or peak - idle < decision["minimum_peak_delta_mib"]
         or total <= 0
         or peak > total
         or decision["projected_selected_worker_memory_mib"] != expected_projected
@@ -1598,7 +1613,7 @@ def _diagnostic_evidence_sources(
             )
             if (
                 decision.get("schema_version")
-                != "cached-segmentation-concurrency-decision-v2"
+                != "cached-segmentation-concurrency-decision-v3"
                 or decision.get("run_id") != run_id
             ):
                 raise ResultBundleIntegrityError(

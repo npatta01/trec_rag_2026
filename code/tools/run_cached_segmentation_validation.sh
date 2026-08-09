@@ -10,6 +10,8 @@ MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 MINILM_REVISION="1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
 SOURCE_VERIFY_WORKERS=8
 PROBE_WORKERS=2
+PROBE_DURATION_SECONDS=180
+MINIMUM_PROBE_PEAK_DELTA_MIB=4096
 SELECTED_WORKERS=20
 
 preflight=false
@@ -25,7 +27,7 @@ die() {
 
 propagate_probe_failure() {
   local status=$1
-  if [[ $status == 0 ]]; then
+  if [[ $status == 0 || $status == 124 ]]; then
     return 0
   fi
   printf 'ERROR: two-topic concurrency probe failed with status %s\n' \
@@ -97,8 +99,10 @@ if $preflight; then
     "topic_count=22" \
     "topic_workers=$SELECTED_WORKERS" \
     "source_verify_workers=$SOURCE_VERIFY_WORKERS" \
-    "canary_topic=407" \
+    "topic_407_gate=post-full-structural" \
     "warm_probe_topics=14,31" \
+    "warm_probe_seconds=$PROBE_DURATION_SECONDS" \
+    "warm_probe_minimum_peak_delta_mib=$MINIMUM_PROBE_PEAK_DELTA_MIB" \
     "source_bundle_download_gib=1.30" \
     "source_prefix=$source_prefix" \
     "baseline_prefix=$baseline_uri" \
@@ -141,7 +145,9 @@ validate_topic_order "$venv_python"
 work_root="/tmp/trec-rag-segmentation/${run_id}"
 bundle_root="$work_root/source-bundles"
 cache_root="$work_root/cache"
+probe_cache_root="$work_root/probe-cache"
 source_outputs="$work_root/source-outputs"
+probe_source_outputs="$work_root/probe-source-outputs"
 baseline_bundle="$work_root/baseline-bundle"
 baseline_restore="$work_root/baseline"
 baseline_output="$work_root/baseline-output"
@@ -152,10 +158,12 @@ diagnostic_bundle="$work_root/diagnostic-bundle"
 diagnostic_roundtrip_bundle="$work_root/diagnostic-roundtrip-bundle"
 config_root="$REPO_ROOT/configs/local"
 final_output="$REPO_ROOT/outputs/$run_id"
-mkdir -p "$bundle_root" "$cache_root" "$source_outputs" "$baseline_bundle" \
+mkdir -p "$bundle_root" "$cache_root" "$probe_cache_root" "$source_outputs" \
+  "$probe_source_outputs" "$baseline_bundle" \
   "$baseline_output" "$validation_root" "$result_bundle" "$roundtrip_bundle" \
   "$diagnostic_bundle" "$diagnostic_roundtrip_bundle" "$config_root"
-chmod 700 "$work_root" "$cache_root" "$source_outputs" "$validation_root"
+chmod 700 "$work_root" "$cache_root" "$probe_cache_root" "$source_outputs" \
+  "$probe_source_outputs" "$validation_root"
 export TREC_RAG_CACHE_ROOT="$cache_root"
 export HF_HOME="$work_root/huggingface"
 
@@ -316,6 +324,11 @@ fi
 "$venv_python" -m trec_rag.competition_cache_bundle merge-rescore-source \
   --cache-root "$cache_root" --outputs-root "$source_outputs" \
   "${bundle_dirs[@]}"
+# Keep the bounded admission probe isolated from the production cache and
+# output namespace so terminating it cannot leave resumable partial state.
+"$venv_python" -m trec_rag.competition_cache_bundle merge-rescore-source \
+  --cache-root "$probe_cache_root" --outputs-root "$probe_source_outputs" \
+  "${bundle_dirs[@]}"
 
 hf_cli buckets cp "$baseline_uri/bundle.tar.zst" "$baseline_bundle/bundle.tar.zst"
 hf_cli buckets cp "$baseline_uri/bundle-complete.json" "$baseline_bundle/bundle-complete.json"
@@ -376,44 +389,12 @@ PY
 }
 
 final_config="$config_root/${run_id}.yaml"
+probe_config="$config_root/${run_id}-probe.yaml"
 make_config "$final_config" "$run_id" "$SELECTED_WORKERS"
+make_config "$probe_config" "${run_id}-probe" "$PROBE_WORKERS"
 
-diagnostic_stage="canary-rescore"
-"$venv_python" -m trec_rag.competition_retrieval "$final_config" \
-  --topic 407 --cached-upstream-rescore
 baseline_handoff="$baseline_restore/generation_handoff_manifest.json"
 baseline_coverage="$baseline_restore/retrieval_nugget_coverage_v2"
-"$venv_python" - "$baseline_handoff" "$work_root/baseline-407.json" <<'PY'
-from pathlib import Path
-import sys
-from trec_rag.generation_handoff import GenerationHandoff, load_generation_handoff, write_generation_handoff
-source, destination = map(Path, sys.argv[1:])
-loaded = load_generation_handoff(source)
-topics = tuple(topic for topic in loaded.topics if topic.topic_id == "407")
-if len(topics) != 1:
-    raise SystemExit("baseline topic 407 changed")
-write_generation_handoff(destination, GenerationHandoff(loaded.producer, topics))
-PY
-diagnostic_stage="canary-structural-validation"
-"$venv_python" -m trec_rag.cached_segmentation_validation structural \
-  --baseline-output-root "$baseline_output" \
-  --candidate-output-root "$final_output" \
-  --document-store-root "$cache_root/documents/v1" \
-  --baseline-handoff "$work_root/baseline-407.json" \
-  --candidate-handoff "$final_output/generation_handoff_manifest.json" \
-  --output-dir "$validation_root/canary" --topic 407
-
-# The global cache-operation marker covers the selected invocation, while the
-# topic receipts are immutable and resumable. Remove only that expandable root
-# marker before extending this same run namespace with the probe and full set.
-"$venv_python" - "$final_output/cache-operation-manifest.json" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-if not path.is_file() or path.is_symlink():
-    raise SystemExit("canary cache-operation marker is missing or unsafe")
-path.unlink()
-PY
 
 diagnostic_stage="concurrency-probe"
 probe_memory="$validation_root/warm-probe-memory.csv"
@@ -427,8 +408,10 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits \
 monitor_pid=$!
 probe_started=$(date +%s)
 set +e
-"$venv_python" -m trec_rag.competition_retrieval "$final_config" \
-  --topic 407 --topic 14 --topic 31 --cached-upstream-rescore
+TREC_RAG_CACHE_ROOT="$probe_cache_root" \
+  timeout --signal=TERM --kill-after=30s "${PROBE_DURATION_SECONDS}s" \
+  "$venv_python" -m trec_rag.competition_retrieval "$probe_config" \
+  --topic 14 --topic 31 --cached-upstream-rescore
 probe_status=$?
 set -e
 probe_finished=$(date +%s)
@@ -439,18 +422,22 @@ propagate_probe_failure "$probe_status"
 concurrency_decision="$validation_root/concurrency-decision.json"
 "$venv_python" - "$probe_memory" "$concurrency_decision" \
   "$probe_started" "$probe_finished" "$run_id" "$final_config" \
-  "$gpu_identity" "$PROBE_WORKERS" "$SELECTED_WORKERS" <<'PY'
+  "$gpu_identity" "$PROBE_WORKERS" "$SELECTED_WORKERS" \
+  "$PROBE_DURATION_SECONDS" "$probe_status" \
+  "$MINIMUM_PROBE_PEAK_DELTA_MIB" <<'PY'
 from pathlib import Path
 from hashlib import sha256
 import csv, json, sys
 source, destination = map(Path, sys.argv[1:3])
 started, finished = map(int, sys.argv[3:5])
 run_id, config_path, gpu_identity_path = sys.argv[5:8]
-probe_workers, selected_workers = map(int, sys.argv[8:])
+probe_workers, selected_workers, probe_duration, probe_status, minimum_delta = map(int, sys.argv[8:])
 if probe_workers != 2 or selected_workers < probe_workers or selected_workers > 32:
     raise SystemExit("worker selection is outside the validated range")
 if selected_workers % probe_workers:
     raise SystemExit("selected workers must be an exact multiple of probe workers")
+if probe_duration != 180 or probe_status not in {0, 124} or minimum_delta != 4096:
+    raise SystemExit("probe timing contract changed")
 samples = []
 for line in source.read_text().splitlines():
     fields = [field.strip() for field in line.split(",")]
@@ -462,6 +449,18 @@ if not samples or len({total for _, total in samples}) != 1:
 idle = samples[0][0]
 peak = max(used for used, _ in samples)
 total = samples[0][1]
+elapsed = finished - started
+if elapsed <= 0:
+    raise SystemExit("probe elapsed time is invalid")
+if probe_status == 124 and not probe_duration <= elapsed <= probe_duration + 60:
+    raise SystemExit("timed probe duration changed")
+if probe_status == 0 and elapsed > probe_duration:
+    raise SystemExit("completed probe exceeded its duration")
+if peak - idle < minimum_delta:
+    raise SystemExit(
+        f"two-worker probe allocated only {peak - idle} MiB; "
+        f"at least {minimum_delta} MiB is required"
+    )
 projected = idle + (selected_workers // probe_workers) * max(0, peak - idle)
 safe_limit = int(total * 0.90)
 if projected > safe_limit:
@@ -476,7 +475,7 @@ gpu_name, gpu_uuid, driver_version = identity_rows[0]
 if not any(model in gpu_name for model in ("H100", "H200")) or not gpu_uuid.startswith("GPU-"):
     raise SystemExit("GPU identity differs from the approved task class")
 value = {
-    "schema_version": "cached-segmentation-concurrency-decision-v2",
+    "schema_version": "cached-segmentation-concurrency-decision-v3",
     "run_id": run_id,
     "config_sha256": sha256(Path(config_path).read_bytes()).hexdigest(),
     "gpu_name": gpu_name,
@@ -484,8 +483,11 @@ value = {
     "driver_version": driver_version,
     "probe_topics": ["14", "31"],
     "probe_workers": probe_workers,
+    "probe_duration_seconds": probe_duration,
+    "probe_exit_status": probe_status,
+    "minimum_peak_delta_mib": minimum_delta,
     "selected_workers": selected_workers,
-    "elapsed_seconds": finished - started,
+    "elapsed_seconds": elapsed,
     "idle_memory_mib": idle,
     "peak_memory_mib": peak,
     "total_memory_mib": total,
@@ -493,15 +495,6 @@ value = {
     "safe_limit_memory_mib": safe_limit,
 }
 destination.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
-PY
-
-"$venv_python" - "$final_output/cache-operation-manifest.json" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-if not path.is_file() or path.is_symlink():
-    raise SystemExit("probe cache-operation marker is missing or unsafe")
-path.unlink()
 PY
 
 diagnostic_stage="full-rescore"
@@ -524,7 +517,7 @@ diagnostic_stage="semantic-validation"
   --baseline-coverage-root "$baseline_coverage" \
   --candidate-handoff "$final_output/generation_handoff_manifest.json" \
   --candidate-coverage-root "$validation_root/retrieval_nugget_coverage_v2" \
-  --output-dir "$validation_root" "${topic_args[@]}"
+  --output-dir "$validation_root" --workers 8 "${topic_args[@]}"
 
 diagnostic_stage="result-pack"
 "$venv_python" -m trec_rag.cached_segmentation_result_bundle pack \

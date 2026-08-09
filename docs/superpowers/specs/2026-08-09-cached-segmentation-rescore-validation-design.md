@@ -78,24 +78,30 @@ not use distributed training or multiple machines.
 
 ### Bounded multi-topic concurrency
 
-Topic 407 runs alone first on the leased machine because it has the clearest
-known fragmentation baseline. The wrapper validates its cache counters,
-artifacts, and structural before/after metrics before continuing.
-
-After the canary passes, run exactly twenty topic workers on the same GPU host;
-the final invocation has at most nineteen pending topics because the canary and
-two probe topics resume. This choice follows the live H100 evidence: one topic
+Run exactly twenty topic workers on the same GPU host in one full wave. This
+choice follows the live H100 evidence: one topic
 kept one CPU core busy while GPU utilization was sparse, used about 6.7 GiB of
 host RSS and 2.32 GiB of VRAM, and took more than fifty minutes downstream.
 The task therefore requires at least 24 CPU cores and 192 GB host RAM.
 
-A same-machine two-worker probe records GPU identity, elapsed time, idle VRAM,
-and peak VRAM. Twenty workers are admitted only when the exact linear
+A same-machine, three-minute two-worker probe runs in isolated cache/output
+roots and records GPU identity, elapsed time, idle VRAM, and peak VRAM. Its
+expected timeout is success; every other nonzero status fails. Twenty workers
+are admitted only when the exact linear
 projection `idle + 10 * (peak - idle)` stays at or below 90% of device memory.
+The probe must also observe at least 4096 MiB above idle, and its exact
+180-second duration plus exit status are bound into the verified decision; an
+idle-only or short timed probe cannot become promotable.
 The result verifier binds the decision to the config and export and accepts
-exactly twenty workers. The wrapper fails rather than silently reducing
+exactly twenty workers. Topic 407's known structural canary thresholds are
+enforced after the full wave, before semantic judging or promotion. The wrapper
+fails rather than silently reducing
 concurrency, weakening validation, or restarting retrieval after an
 out-of-memory error.
+
+The outer task gives the wrapper 2h40m, then reserves ten minutes for its
+marker-last diagnostic path before dstack's 2h50m hard cap. At $3.29/hour the
+maximum task exposure is about $9.32.
 
 ## Remote Data Flow
 
@@ -106,10 +112,11 @@ out-of-memory error.
 3. Require the new result and non-promotable diagnostic prefixes to be empty.
 4. Download exactly the 22 existing archive/marker pairs from the pinned
    private source prefix.
-5. Verify each archive and merge all bundles into a fresh task-local cache.
+5. Verify each archive and merge all bundles into fresh production and isolated
+   probe caches.
    Never copy a live SQLite database between machines.
-6. Run topic 407 in `cached-upstream-rescore` mode and apply the canary gates.
-7. Project the two-topic probe to twenty workers and run all outstanding topics.
+6. Run the bounded two-topic probe and project its peak to twenty workers.
+7. Run all 22 topics in one twenty-worker wave and apply Topic 407 plus full gates.
 8. Validate all topic receipts and the aggregate retrieval export/handoff.
 9. Produce a private before/after validation report.
 10. Pack, locally verify, upload, download, byte-compare, and semantically
@@ -166,6 +173,11 @@ planner-derived diagnostic, not organizer ground truth, and the report must say
 so. Organizer gold nuggets and qrels remain outside the retrieval/generation
 runner; a separate read-only development diagnostic may be added only if its
 input and interpretation are explicit.
+
+The 22 independent candidate judge calls may use eight threads. Every topic has
+a disjoint frozen-plan work directory, results are restored to requested topic
+order, and only the production backend may be parallelized; injected shared
+test backends remain single-worker.
 
 The fixed arm passes the semantic gate only when topic-macro, every topic, and
 every obligation do not regress. A gain elsewhere never compensates a local
