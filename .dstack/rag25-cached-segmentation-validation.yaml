@@ -19,7 +19,7 @@ env:
   - HF_CLI_MODE=direct
 
 commands:
-  - 'timeout --signal=TERM --kill-after=10m 2h40m bash code/tools/run_cached_segmentation_validation.sh ${{ run.args }}'
+  - 'timeout --signal=TERM --kill-after=10m 160m bash code/tools/run_cached_segmentation_validation.sh ${{ run.args }}'
 
 resources:
   cpu: 24..

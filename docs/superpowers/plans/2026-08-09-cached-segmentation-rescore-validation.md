@@ -62,7 +62,7 @@
 - Reuse existing baseline `plan.json` bytes and make at most 22 candidate-arm judge calls; make no planner calls.
 - Use one on-demand machine with at least 24 CPU cores, 192 GB RAM, 100 GB disk, and one H200/H100 GPU with at least 80 GB VRAM.
 - The full run uses exactly `execution.topic_workers: 20`, gated by a same-machine three-minute two-worker VRAM projection; Topic 407 validates before promotion from the completed wave.
-- Enforce a 2h40m wrapper deadline with ten minutes for diagnostic preservation and a 2h50m hard task cap.
+- Enforce a 160m wrapper deadline with ten minutes for diagnostic preservation and a 170m hard task cap.
 - Keep caches, outputs, evidence, nuggets, provider responses, and reports private and out of git.
 - Ignore Modal completely: no Modal dependency, config key, import, test, or execution path.
 - Promotion means push and open a draft PR after validation; never merge automatically.
@@ -491,7 +491,7 @@ explicitly ineligible for promotion.
 
 Use the pinned `huggingface/trl` image digest and launcher sentinel. Map secret
 names only. Configure one on-demand H200/H100 pool verified against dstack
-0.20.29, at least 80 GB VRAM, 24 CPU cores, 192 GB RAM, 100 GB disk, `max_duration: 170m`, a 2h40m wrapper deadline, hard
+0.20.29, at least 80 GB VRAM, 24 CPU cores, 192 GB RAM, 100 GB disk, `max_duration: 170m`, a 160m wrapper deadline, hard
 price cap, RunPod/Vast.ai, and bounded `no-capacity` retry.
 
 - [ ] **Step 6: Verify GREEN and commit**

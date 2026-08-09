@@ -2119,7 +2119,7 @@ requires at least 192 GB of host RAM and 24 CPU cores. Topic 407's structural
 canary is enforced on the completed full wave, and eight independent candidate
 judge calls may run concurrently. The signed-off decision is included in the
 private result bundle; idle-only/short probes are rejected. The wrapper has a
-2h40m deadline plus ten minutes for diagnostic preservation under the 2h50m
+160m deadline plus ten minutes for diagnostic preservation under the 170m
 dstack hard cap. The archive is uploaded before its
 completion marker, then both are downloaded and revalidated. Planning,
 retrieval, and passage scoring must report zero misses, network/provider calls,

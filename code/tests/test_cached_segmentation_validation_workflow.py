@@ -99,7 +99,7 @@ def test_task_uses_one_fast_bounded_on_demand_gpu_and_only_named_secrets() -> No
     assert value["spot_policy"] == "on-demand"
     assert value["max_duration"] == "170m"
     assert value["commands"] == [
-        "timeout --signal=TERM --kill-after=10m 2h40m "
+        "timeout --signal=TERM --kill-after=10m 160m "
         "bash code/tools/run_cached_segmentation_validation.sh ${{ run.args }}"
     ]
     assert value["max_price"] == 3.29

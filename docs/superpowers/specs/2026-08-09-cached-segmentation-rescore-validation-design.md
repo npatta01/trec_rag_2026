@@ -99,8 +99,8 @@ fails rather than silently reducing
 concurrency, weakening validation, or restarting retrieval after an
 out-of-memory error.
 
-The outer task gives the wrapper 2h40m, then reserves ten minutes for its
-marker-last diagnostic path before dstack's 2h50m hard cap. At $3.29/hour the
+The outer task gives the wrapper 160m, then reserves ten minutes for its
+marker-last diagnostic path before dstack's 170m hard cap. At $3.29/hour the
 maximum task exposure is about $9.32.
 
 ## Remote Data Flow
