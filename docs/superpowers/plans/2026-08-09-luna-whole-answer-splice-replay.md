@@ -31,7 +31,7 @@
 - Consumes: `GenerationTopic`, authenticated `NarrativeBlueprint`, `BlueprintProjection`, and validated draft record.
 - Produces: `luna_splice_response_schema()`, `render_luna_splice_prompt(topic, blueprint, projection, *, draft)`, `_evidence_alias_docids(topic)`, and `assemble_luna_splice_candidate(topic, draft, payload)`.
 
-- [ ] **Step 1: Write failing prompt and validation tests**
+- [x] **Step 1: Write failing prompt and validation tests**
 
 Create a minimal topic/blueprint/draft fixture. Assert that the prompt contains the full narrative,
 selected evidence, immutable draft indexes, `at most three`, `prefer insertion`,
@@ -43,7 +43,7 @@ Add a valid insertion using `audit_card_ids: ["e001"]` and its exact linked doci
 assembled candidate adds the object. Add one payload with four otherwise valid operations and assert
 it fails with `at most three operations`.
 
-- [ ] **Step 2: Run the selected tests and verify red**
+- [x] **Step 2: Run the selected tests and verify red**
 
 ```bash
 PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python \
@@ -52,7 +52,7 @@ PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python 
 
 Expected: collection fails because `trec_rag.luna_splice_replay` does not exist.
 
-- [ ] **Step 3: Implement the minimal pure contract**
+- [x] **Step 3: Implement the minimal pure contract**
 
 In `luna_splice_replay.py`, define:
 
@@ -82,11 +82,11 @@ _evidence_alias_docids(topic))`. It applies returned operations through
 `apply_splice_operations(draft, operations)` and returns the unchanged draft for `keep_draft`. It
 does not catch validation errors.
 
-- [ ] **Step 4: Run the focused tests and verify green**
+- [x] **Step 4: Run the focused tests and verify green**
 
 Run the Task 1 command. Expected: all new tests pass.
 
-- [ ] **Step 5: Commit the contract**
+- [x] **Step 5: Commit the contract**
 
 ```bash
 git add code/trec_rag/luna_splice_replay.py code/tests/test_luna_splice_replay.py
@@ -103,19 +103,19 @@ git commit -m "prototype: add Luna whole-answer splice contract"
 - Consumes: `--config`, `--topic`, `--source-root`, `--state-mode create|resume`, and optional `--dry-run`.
 - Produces: private `work/luna_splice_replay/<topic>/` state, receipt, draft/final submissions, generation identities, and manifest.
 
-- [ ] **Step 1: Write failing source-authentication and fallback tests**
+- [x] **Step 1: Write failing source-authentication and fallback tests**
 
 Build a temporary source root with current bounded state, registered blueprint state, and draft.
 Assert the loader rejects a mismatched handoff digest, topic-context digest, or registered file hash.
 Assert malformed replay payload handling returns the rebound validated draft and records draft
 fallback without a second provider reservation.
 
-- [ ] **Step 2: Run the new tests and verify red**
+- [x] **Step 2: Run the new tests and verify red**
 
 Run the Task 1 pytest command. Expected: failures identify the missing source loader and fallback
 helpers.
 
-- [ ] **Step 3: Implement source loading, durable state, and CLI**
+- [x] **Step 3: Implement source loading, durable state, and CLI**
 
 Add two public experiment interfaces. `load_replay_source(source_root: Path, *, config: Any,
 handoff: GenerationHandoff, topic: GenerationTopic) -> tuple[NarrativeBlueprint,
@@ -136,7 +136,7 @@ validation error. It writes the final manifest last.
 The CLI dry run prints topic/source/counts and
 `calls=luna_whole_answer_splice:1,sol:0,provider:0` without creating output directories.
 
-- [ ] **Step 4: Run focused verification**
+- [x] **Step 4: Run focused verification**
 
 ```bash
 PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python \
@@ -148,7 +148,7 @@ ruff check code/trec_rag/luna_splice_replay.py code/tests/test_luna_splice_repla
 git diff --check
 ```
 
-- [ ] **Step 5: Commit the runner**
+- [x] **Step 5: Commit the runner**
 
 ```bash
 git add code/trec_rag/luna_splice_replay.py code/tests/test_luna_splice_replay.py
@@ -166,28 +166,28 @@ git commit -m "prototype: run authenticated Luna splice replay"
 - Consumes: completed hardened source roots for topics `233` and `499` plus their authenticated handoff.
 - Produces: two sealed replay candidates and an aggregate privacy-reviewed verdict.
 
-- [ ] **Step 1: Create unique ignored configs and run both dry runs**
+- [x] **Step 1: Create unique ignored configs and run both dry runs**
 
 Copy the matching hardened local configs, assign replay-specific experiment IDs/output directories,
 and keep one topic per config. Confirm each dry run reports exactly one Luna call and zero Sol calls.
 
-- [ ] **Step 2: Run topic 233 and inspect before continuing**
+- [x] **Step 2: Run topic 233 and inspect before continuing**
 
 Run create mode once. Verify source hashes, receipt outcome, operation count/types, citation linkage,
 word count, normalized references, and fallback status. Perform a gold-blind review of whether the
 known weak replacement was avoided; only then continue.
 
-- [ ] **Step 3: Run and inspect topic 499**
+- [x] **Step 3: Run and inspect topic 499**
 
 Repeat the same checks and judge whether the replay retains meaningful omissions from the known
 positive case without visible seams or weak replacements.
 
-- [ ] **Step 4: Evaluate sealed candidates post hoc**
+- [x] **Step 4: Evaluate sealed candidates post hoc**
 
 Use the same DeepSeek V4 Flash nuggetizer and citation-support settings as the frozen batch. Compare
 draft, replay final, and current full-flow final. Keep all raw artifacts private.
 
-- [ ] **Step 5: Record and verify the verdict**
+- [x] **Step 5: Record and verify the verdict**
 
 Write the aggregate report with calls, provider cost, validity, qualitative decision, coverage,
 citation support, and the final choice among the Luna replay, draft-only flow, or another bounded
