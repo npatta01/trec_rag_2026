@@ -329,10 +329,17 @@ def collect_remote_scoring(
     shared_cache_root = Path(shared_cache_root).resolve()
     work_root = Path(work_root).resolve()
     output_dir = Path(output_dir).resolve()
-    if len(
-        {publication_dir, input_dir, shared_cache_root, work_root, output_dir}
-    ) != 5:
-        raise ValueError("collection roots must be distinct")
+    roots = (
+        publication_dir,
+        input_dir,
+        shared_cache_root,
+        work_root,
+        output_dir,
+    )
+    for index, first in enumerate(roots):
+        for second in roots[index + 1 :]:
+            if first == second or first in second.parents or second in first.parents:
+                raise ValueError("collection roots must not overlap")
     if work_root.exists() and any(work_root.iterdir()):
         raise ValueError("collection work root must be empty")
     if output_dir.exists() and any(output_dir.iterdir()):

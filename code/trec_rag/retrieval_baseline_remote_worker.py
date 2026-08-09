@@ -6,7 +6,9 @@ import argparse
 from collections.abc import Callable
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
+import re
 from typing import Protocol, Sequence
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
@@ -149,6 +151,14 @@ def run_remote_scoring(
         input_dir,
         expected_topics=OFFICIAL_TOPIC_IDS,
     )
+    input_manifest_sha256 = sha256(
+        (input_dir / "input-manifest.json").read_bytes()
+    ).hexdigest()
+    source_revision = os.environ.get("TREC_RAG_SOURCE_REVISION")
+    if source_revision is None or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+        raise ValueError(
+            "remote scoring requires TREC_RAG_SOURCE_REVISION as a Git commit"
+        )
     topic_ids = tuple(verified["topic_ids"])
     canary_topic_ids = tuple(verified["canary_topic_ids"])
     ordered_scoring_phases(topic_ids, canary_topic_ids)
@@ -178,6 +188,8 @@ def run_remote_scoring(
     replay_receipts = publication_dir / "replay-receipts"
     live_scorer = scorer_factory(live_cache, False)
     live_matrices: dict[str, TopicMatrix] = {}
+    canary_replay_started = False
+    canary_replay_verified = False
 
     def score_one(topic_id: str) -> None:
         core = _load_candidate_core(input_dir, topic_id)
@@ -261,6 +273,8 @@ def run_remote_scoring(
         return tuple(replayed)
 
     def verify_canaries(selected_topic_ids: tuple[str, ...]) -> None:
+        nonlocal canary_replay_started, canary_replay_verified
+        canary_replay_started = True
         portable_path = work_root / "canary-cache.jsonl"
         live_scorer.score_cache.export_portable_jsonl(portable_path)  # type: ignore[attr-defined]
         replay_topics(
@@ -270,14 +284,36 @@ def run_remote_scoring(
             replay_matrices_root=work_root / "canary-replay-matrices",
             receipt_phase="canary",
         )
+        canary_replay_verified = True
 
     try:
-        run_canary_gated_scoring(
-            topic_ids=topic_ids,
-            canary_topic_ids=canary_topic_ids,
-            score_one=score_one,
-            verify_canaries=verify_canaries,
-        )
+        try:
+            run_canary_gated_scoring(
+                topic_ids=topic_ids,
+                canary_topic_ids=canary_topic_ids,
+                score_one=score_one,
+                verify_canaries=verify_canaries,
+            )
+        except Exception as exc:
+            if not canary_replay_verified:
+                _write_new_json(
+                    publication_dir / "remote-scoring-failure-receipt.json",
+                    {
+                        "canary_topic_ids": list(CANARY_TOPIC_IDS),
+                        "failure_stage": (
+                            "canary_replay"
+                            if canary_replay_started
+                            else "canary_scoring"
+                        ),
+                        "failure_type": type(exc).__name__,
+                        "input_manifest_sha256": input_manifest_sha256,
+                        "schema_version": "retrieval-baseline-remote-failure-v1",
+                        "scored_topic_ids": list(live_matrices),
+                        "source_revision": source_revision,
+                        "status": "failed",
+                    },
+                )
+            raise
     finally:
         live_scorer.score_cache.close()  # type: ignore[attr-defined]
 
@@ -312,9 +348,7 @@ def run_remote_scoring(
     receipt = {
         "cache_stats": dict(verified["cache_stats"]),
         "canary_topic_ids": list(CANARY_TOPIC_IDS),
-        "input_manifest_sha256": sha256(
-            (input_dir / "input-manifest.json").read_bytes()
-        ).hexdigest(),
+        "input_manifest_sha256": input_manifest_sha256,
         "portable_cache_row_count": cache_export_receipt["row_count"],
         "portable_cache_sha256": cache_export_receipt["sha256"],
         "schema_version": "retrieval-baseline-remote-scoring-v1",

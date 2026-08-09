@@ -61,6 +61,13 @@ empty_or_absent_directory() {
   fi
 }
 
+paths_overlap() {
+  local first second
+  first=$(realpath -m -- "$1") || return 1
+  second=$(realpath -m -- "$2") || return 1
+  [[ $first == "$second" || $first == "$second/"* || $second == "$first/"* ]]
+}
+
 while (($#)); do
   case "$1" in
     --publication-prefix) (($# >= 2)) || die "--publication-prefix needs a value"; publication_prefix=$2; shift 2 ;;
@@ -84,9 +91,13 @@ safe_hf_prefix "$publication_prefix" || die "--publication-prefix must be a safe
 for destination in "$publication_dir" "$work_root" "$output_dir"; do
   empty_or_absent_directory "$destination" || die "collection destination must be absent or empty: $destination"
 done
-[[ $publication_dir != "$input_dir" && $publication_dir != "$shared_cache" ]] || die "collection paths must be distinct"
-[[ $work_root != "$input_dir" && $work_root != "$shared_cache" ]] || die "collection paths must be distinct"
-[[ $output_dir != "$input_dir" && $output_dir != "$shared_cache" ]] || die "collection paths must be distinct"
+collection_paths=("$publication_dir" "$input_dir" "$shared_cache" "$work_root" "$output_dir")
+for ((first_index = 0; first_index < ${#collection_paths[@]}; first_index++)); do
+  for ((second_index = first_index + 1; second_index < ${#collection_paths[@]}; second_index++)); do
+    paths_overlap "${collection_paths[$first_index]}" "${collection_paths[$second_index]}" \
+      && die "collection paths must not overlap"
+  done
+done
 
 cd "$REPO_ROOT"
 venv_python="$REPO_ROOT/.venv/bin/python"

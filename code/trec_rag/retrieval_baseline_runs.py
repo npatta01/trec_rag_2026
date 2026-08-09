@@ -584,6 +584,13 @@ def load_topic_input(
     loaded: dict[str, dict[str, object]] = {}
     source_bodies: dict[str, bytes] = {}
     source_sha256s: dict[str, str] = {}
+    export_manifest_path = Path(source_dir) / "retrieval_export_manifest.json"
+    export_manifest_body = export_manifest_path.read_bytes()
+    if not export_manifest_body:
+        raise ValueError("retrieval export manifest must be nonempty")
+    source_sha256s["retrieval_export_manifest.json"] = sha256(
+        export_manifest_body
+    ).hexdigest()
     for relative in relative_paths:
         value, body = _read_json_object(topic_dir / relative)
         loaded[relative] = value
@@ -1750,6 +1757,23 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
         raise ValueError("topic matrices must share one scorer identity")
     if any(matrix.chunker_identity != ordered[0].chunker_identity for matrix in ordered):
         raise ValueError("topic matrices must share one chunker identity")
+    source_export_digests = {
+        matrix.source_sha256s.get("retrieval_export_manifest.json")
+        for matrix in ordered
+    }
+    if (
+        None in source_export_digests
+        or len(source_export_digests) != 1
+        or any(
+            not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            for digest in source_export_digests
+        )
+    ):
+        raise ValueError(
+            "topic matrices must share one authenticated retrieval export manifest"
+        )
+    source_export_manifest_sha256 = next(iter(source_export_digests))
 
     ranked_topics = tuple(rank_topic_matrix(matrix) for matrix in ordered)
     root = Path(output_dir)
@@ -1836,7 +1860,8 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
     if source_revision is not None and re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
         raise ValueError("TREC_RAG_SOURCE_REVISION must be a lowercase Git commit")
     manifest = {
-        "schema_version": "retrieval-baseline-runs-manifest-v3",
+        "schema_version": "retrieval-baseline-runs-manifest-v4",
+        "source_export_manifest_sha256": source_export_manifest_sha256,
         "run_files": run_files,
         "run_file_receipts": run_file_receipts,
         "run_ids": _RUN_IDS,

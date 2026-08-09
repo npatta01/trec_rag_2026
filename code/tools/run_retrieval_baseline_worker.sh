@@ -196,8 +196,24 @@ for path in root.rglob("*"):
 if actual != expected:
     raise SystemExit("publication file set differs from SHA256SUMS")
 value = json.loads(manifest.read_text(encoding="utf-8"))
-if value.get("status") != "complete" or value.get("sha256s_sha256") != sha256(sums.read_bytes()).hexdigest():
+schema_status = (value.get("schema_version"), value.get("status"))
+if schema_status not in {
+    ("retrieval-baseline-publication-v1", "complete"),
+    ("retrieval-baseline-failure-publication-v1", "failed"),
+} or value.get("sha256s_sha256") != sha256(sums.read_bytes()).hexdigest():
     raise SystemExit("publication manifest is invalid")
+receipt_field = (
+    "remote_scoring_receipt_sha256"
+    if value.get("status") == "complete"
+    else "failure_receipt_sha256"
+)
+receipt_name = (
+    "remote-scoring-receipt.json"
+    if value.get("status") == "complete"
+    else "remote-scoring-failure-receipt.json"
+)
+if value.get(receipt_field) != sha256((root / receipt_name).read_bytes()).hexdigest():
+    raise SystemExit("publication terminal receipt digest differs")
 PY
 }
 
@@ -248,12 +264,65 @@ print(f"model_snapshot_verified={model}@{revision}")
 PY
 
 publication="$worker_root/publication"
+set +e
 "$venv_python" -m trec_rag.retrieval_baseline_remote_worker \
   --input-dir "$input_dir" \
   --work-root "$worker_root/scoring" \
   --publication-dir "$publication" \
   --device cuda --batch-size 32 >"$worker_root/remote-scoring-stdout.json"
+scoring_status=$?
+set -e
 cp "$input_verify_receipt" "$publication/input-verify-receipt.json"
+if ((scoring_status != 0)); then
+  failure_receipt="$publication/remote-scoring-failure-receipt.json"
+  [[ -f $failure_receipt && ! -L $failure_receipt ]] || exit "$scoring_status"
+  (
+    cd "$publication"
+    find . -type f ! -name SHA256SUMS ! -name publication-manifest.json -print0 \
+      | LC_ALL=C sort -z \
+      | xargs -0 sha256sum >SHA256SUMS
+    sha256sum -c SHA256SUMS
+  )
+  "$venv_python" - "$publication" "$task_name" "$source_revision" "$input_manifest_sha256" <<'PY'
+from hashlib import sha256
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+payload = {
+    "failure_receipt_sha256": sha256((root / "remote-scoring-failure-receipt.json").read_bytes()).hexdigest(),
+    "input_manifest_sha256": sys.argv[4],
+    "schema_version": "retrieval-baseline-failure-publication-v1",
+    "sha256s_sha256": sha256((root / "SHA256SUMS").read_bytes()).hexdigest(),
+    "source_revision": sys.argv[3],
+    "status": "failed",
+    "task_name": sys.argv[2],
+}
+(root / "publication-manifest.json").write_text(
+    json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+  verify_checksum_closure "$publication"
+  require_private_bucket "$output_bucket" "$worker_root/output-bucket-info-before-failure-upload.json"
+  require_empty_prefix "$output_prefix" "$worker_root/output-listing-before-failure-upload.json"
+  "$venv_hf" buckets sync "$publication" "$output_prefix" \
+    --exclude publication-manifest.json --ignore-existing
+  "$venv_hf" buckets cp "$publication/publication-manifest.json" \
+    "$output_prefix/publication-manifest.json"
+  failure_roundtrip="$worker_root/failure-roundtrip"
+  mkdir -m 700 "$failure_roundtrip"
+  "$venv_hf" buckets sync "$output_prefix" "$failure_roundtrip" --no-delete
+  verify_checksum_closure "$failure_roundtrip"
+  cmp -- "$publication/SHA256SUMS" "$failure_roundtrip/SHA256SUMS"
+  cmp -- "$publication/publication-manifest.json" "$failure_roundtrip/publication-manifest.json"
+  printf '%s\n' \
+    "worker_status=failed" \
+    "failure_stage=canary" \
+    "output_prefix=$output_prefix" >&2
+  exit "$scoring_status"
+fi
 cp "$worker_root/remote-scoring-stdout.json" "$publication/remote-scoring-stdout.json"
 "$venv_python" - "$publication/remote-scoring-receipt.json" <<'PY'
 import json, sys

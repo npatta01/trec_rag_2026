@@ -286,6 +286,14 @@ def _file_receipt(topic_dir: Path, relative_path: str) -> dict[str, object]:
 def _source_fixture(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "source"
     topic_dir = source / "rag2026-2"
+    _write_json(
+        source / "retrieval_export_manifest.json",
+        {
+            "export_code_commit": "a" * 40,
+            "run_id": "fixture-run",
+            "selected_topic_ids": ["rag2026-2"],
+        },
+    )
     document_root = tmp_path / "documents"
     store = DocumentStore(document_root)
     first = store.admit_text("first document text")
@@ -920,6 +928,9 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
         "rag2026-2",
         "rag2026-10",
     ]
+    assert first["source_export_manifest_sha256"] == sha256(
+        (source / "retrieval_export_manifest.json").read_bytes()
+    ).hexdigest()
     assert all(
         row["narrative_docids_sha256"] == row["combo_docids_sha256"]
         == row["breadth_docids_sha256"]
@@ -940,6 +951,31 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
         body = (tmp_path / "first" / first["run_files"][name]).read_bytes()
         assert receipt["sha256"] == sha256(body).hexdigest()
         assert receipt["bytes"] == len(body)
+
+
+def test_export_runs_rejects_mismatched_root_export_manifests(tmp_path: Path) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    topic = load_topic_input(source, "rag2026-2", document_root)
+    base = score_topic(
+        topic,
+        candidate_core=_candidate_core(topic),
+        scorer=_FakePassageScorer(cached=False),
+        chunker=SemanticTextChunker(
+            ChunkingConfig(max_characters=3_500, overlap_characters=350)
+        ),
+    )
+    conflicting = replace(
+        base,
+        topic_id="rag2026-10",
+        candidate_core=replace(base.candidate_core, topic_id="rag2026-10"),
+        source_sha256s={
+            **base.source_sha256s,
+            "retrieval_export_manifest.json": "f" * 64,
+        },
+    )
+
+    with pytest.raises(ValueError, match="retrieval export manifest"):
+        export_runs((base, conflicting), tmp_path / "runs")
 
 
 def test_matrix_rejects_unpinned_identity_and_incomplete_chunk_coverage(

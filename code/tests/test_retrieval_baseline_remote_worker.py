@@ -101,10 +101,10 @@ class _Model:
         return [float(len(query) + len(passage)) for query, passage in pairs]
 
 
-def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
+def _remote_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+) -> tuple[Path, object, _Model, dict[str, int], str]:
     input_dir = tmp_path / "input"
     source_run_id = "facet-deepseek-b40-v3"
     source_root = input_dir / "source" / source_run_id
@@ -122,6 +122,9 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
         + "\n",
         encoding="utf-8",
     )
+    source_export_manifest_sha256 = sha256(
+        (source_root / "retrieval_export_manifest.json").read_bytes()
+    ).hexdigest()
     stored = DocumentStore(input_dir / "documents/v1").admit_text("shared passage")
     empty_admissions = sha256(b"").hexdigest()
     topic_stats: dict[str, dict[str, object]] = {}
@@ -227,7 +230,10 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
                     "shared passage",
                 ),
             ),
-            source_sha256s={"scoring/lane_scores.jsonl": "c" * 64},
+            source_sha256s={
+                "retrieval_export_manifest.json": source_export_manifest_sha256,
+                "scoring/lane_scores.jsonl": "c" * 64,
+            },
         )
 
     monkeypatch.setattr(
@@ -241,14 +247,11 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
     source_revision = "b" * 40
     monkeypatch.setenv("TREC_RAG_SOURCE_REVISION", source_revision)
     model = _Model()
-    loader_calls = 0
+    counters = {"loader_calls": 0}
 
     def scorer_factory(root: Path, read_only: bool):
-        nonlocal loader_calls
-
         def loader(**_kwargs):
-            nonlocal loader_calls
-            loader_calls += 1
+            counters["loader_calls"] += 1
             if read_only:
                 raise AssertionError("cache-only replay loaded the model")
             return model
@@ -263,6 +266,71 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
         scorer._device = "cuda"
         return scorer
 
+    return input_dir, scorer_factory, model, counters, source_revision
+
+
+def test_canary_replay_failure_writes_redacted_receipt_and_stops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir, scorer_factory, model, counters, source_revision = _remote_fixture(
+        tmp_path, monkeypatch
+    )
+
+    def fail_compare(_first: Path, _second: Path) -> None:
+        raise ValueError("forced secret-bearing mismatch detail")
+
+    monkeypatch.setattr(
+        "trec_rag.retrieval_baseline_remote_worker._compare_matrix_artifacts",
+        fail_compare,
+    )
+    publication = tmp_path / "publication"
+    with pytest.raises(ValueError, match="secret-bearing"):
+        run_remote_scoring(
+            input_dir=input_dir,
+            work_root=tmp_path / "work",
+            publication_dir=publication,
+            scorer_factory=scorer_factory,
+        )
+
+    receipt_path = publication / "remote-scoring-failure-receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt == {
+        "canary_topic_ids": ["rag2026-1", "rag2026-18"],
+        "failure_stage": "canary_replay",
+        "failure_type": "ValueError",
+        "input_manifest_sha256": sha256(
+            (input_dir / "input-manifest.json").read_bytes()
+        ).hexdigest(),
+        "schema_version": "retrieval-baseline-remote-failure-v1",
+        "scored_topic_ids": ["rag2026-1", "rag2026-18"],
+        "source_revision": source_revision,
+        "status": "failed",
+    }
+    assert sorted(path.name for path in (publication / "matrices").iterdir()) == [
+        "rag2026-1",
+        "rag2026-18",
+    ]
+    assert model.calls == 4
+    assert counters["loader_calls"] == 1
+    assert not (publication / "portable-scores").exists()
+    assert not (publication / "runs").exists()
+    assert b"secret-bearing" not in receipt_path.read_bytes()
+    assert all(
+        b"shared passage" not in path.read_bytes()
+        for path in publication.rglob("*")
+        if path.is_file()
+    )
+
+
+def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir, scorer_factory, model, counters, source_revision = _remote_fixture(
+        tmp_path, monkeypatch
+    )
+
     receipt = run_remote_scoring(
         input_dir=input_dir,
         work_root=tmp_path / "work",
@@ -273,7 +341,7 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
     assert receipt["status"] == "complete"
     assert receipt["topic_count"] == 119
     assert receipt["portable_cache_row_count"] == 238
-    assert loader_calls == 1
+    assert counters["loader_calls"] == 1
     assert model.calls == 238
     publication = tmp_path / "publication"
     assert len(list((publication / "matrices").glob("rag2026-*"))) == 119

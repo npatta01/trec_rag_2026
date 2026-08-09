@@ -8,6 +8,7 @@ import pytest
 
 from trec_rag.mixedbread_passage_scorer import MixedbreadPassageScorer
 from trec_rag.retrieval_baseline_collection import (
+    collect_remote_scoring,
     merge_portable_scores,
     verify_publication_closure,
 )
@@ -172,3 +173,40 @@ def test_collection_wrapper_is_private_explicit_and_merges_only_after_download()
     assert "--source-revision" in source
     assert "--no-delete" in source
     assert "publication-manifest.json" in source
+    assert "realpath -m" in source
+
+
+@pytest.mark.parametrize(
+    ("publication_relative", "work_relative", "output_relative"),
+    [
+        ("input/publication", "work", "output"),
+        ("publication", "publication/work", "output"),
+        ("publication", "work", "publication/output"),
+    ],
+)
+def test_collection_rejects_nested_roots_before_writing(
+    tmp_path: Path,
+    publication_relative: str,
+    work_relative: str,
+    output_relative: str,
+) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    publication = tmp_path / publication_relative
+    work = tmp_path / work_relative
+    output = tmp_path / output_relative
+
+    with pytest.raises(ValueError, match="overlap"):
+        collect_remote_scoring(
+            publication_dir=publication,
+            input_dir=input_dir,
+            expected_input_manifest_sha256="a" * 64,
+            expected_source_revision="b" * 40,
+            shared_cache_root=tmp_path / "shared-cache",
+            work_root=work,
+            output_dir=output,
+        )
+
+    assert not publication.exists()
+    assert not work.exists()
+    assert not output.exists()
