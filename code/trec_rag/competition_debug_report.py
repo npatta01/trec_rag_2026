@@ -2766,6 +2766,19 @@ class TopicPageNavigation:
     next_href: str | None = None
 
 
+_TOPIC_PAGE_STAGES = (
+    ("narrative", "Narrative"),
+    ("subnarratives", "Subnarratives"),
+    ("final-rag", "Final RAG"),
+    ("funnel-overview", "Funnel overview"),
+    ("new-documents", "New documents"),
+    ("selected-documents", "Selected documents"),
+    ("top-passages", "Top passages"),
+    ("final-selected-nuggets", "Final selected nuggets"),
+    ("final-retrieval", "Final retrieval"),
+)
+
+
 _DEBUG_REPORT_CSS = """:root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; line-height: 1.5; --page: #f5f7fb; --surface: #fff; --surface-soft: #eef3fb; --ink: #182235; --muted: #5d687b; --line: #ccd5e3; --accent: #2859c5; --accent-ink: #fff; --focus: #f59e0b; }
 * { box-sizing: border-box; }
 html { overflow-x: hidden; scroll-behavior: smooth; }
@@ -2797,7 +2810,7 @@ table { width: 100%; border-collapse: collapse; min-width: 38rem; }
 caption { text-align: left; font-weight: 700; padding: .4rem 0; }
 th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: .45rem; }
 code, .break { overflow-wrap: anywhere; word-break: break-word; }
-details:not(.topic-panel, .run-diagnostics) { margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid var(--line); }
+details:not(.topic-panel, .run-diagnostics, .topic-stage-menu) { margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid var(--line); }
 summary { min-height: 44px; display: list-item; padding-block: .6rem; cursor: pointer; font-weight: 650; }
 .status { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-weight: 700; }
 .status-complete { color: #063; background: #d8f3df; }
@@ -2841,10 +2854,16 @@ a:focus-visible, button:focus-visible, summary:focus-visible { outline: .22rem s
 @media (max-width: 42rem) { header, main, footer { padding: .75rem; } section { padding: .75rem; } nav li { flex: 1 1 calc(50% - .65rem); } .topic-tab, .topic-link-fallback { width: 100%; } .run-diagnostics dl { display: block; } .run-diagnostics dd { margin: 0 0 .75rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 html.topic-page-document, body.topic-page-document { overflow-x: clip; }
-.topic-page-nav { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: .65rem; margin: 1.25rem 0 0; padding: .75rem 0; background: color-mix(in srgb, var(--page) 92%, transparent); }
+.topic-page-nav { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; align-items: flex-start; gap: .65rem; margin: 1.25rem 0 0; padding: .75rem 0; background: color-mix(in srgb, var(--page) 92%, transparent); }
 .topic-page-link { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: .65rem 1rem; border-radius: 999px; border: 1px solid var(--line); font: inherit; font-weight: 750; color: var(--ink); background: var(--surface); text-decoration: none; }
 .topic-page-link:hover { color: var(--accent-ink); border-color: var(--accent); background: var(--accent); }
-@media (max-width: 42rem) { .topic-page-nav { margin-inline: -.75rem; padding-inline: .75rem; } .topic-page-link { width: 100%; } }
+.topic-stage-menu { position: relative; margin: 0; padding: 0; border: 0; background: transparent; }
+.topic-stage-menu > summary { min-height: 44px; display: flex; align-items: center; padding: .65rem 1rem; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); background: var(--surface); font-weight: 750; }
+.topic-stage-menu > summary:hover, .topic-stage-menu[open] > summary { color: var(--accent-ink); border-color: var(--accent); background: var(--accent); }
+.topic-stage-menu ul { position: absolute; top: calc(100% + .35rem); right: 0; width: min(22rem, calc(100vw - 1.5rem)); max-height: min(70vh, 32rem); overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem; margin: 0; padding: .65rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); box-shadow: 0 .6rem 2rem rgb(30 50 90 / 18%); list-style: none; }
+.topic-stage-link { min-height: 44px; display: flex; align-items: center; padding: .55rem .7rem; border-radius: .45rem; color: var(--ink); font-size: .86rem; font-weight: 700; text-decoration: none; }
+.topic-stage-link:hover, .topic-stage-link:focus-visible { color: var(--accent-ink); background: var(--accent); }
+@media (max-width: 42rem) { .topic-page-nav { margin-inline: -.75rem; padding-inline: .75rem; } .topic-page-link { flex: 1 1 auto; padding-inline: .75rem; font-size: .88rem; } .topic-stage-menu { flex: 1 1 auto; } .topic-stage-menu > summary { justify-content: center; padding-inline: .75rem; font-size: .88rem; } .topic-stage-menu ul { position: fixed; top: 4.25rem; right: .75rem; left: .75rem; width: auto; } }
 """
 _LEGACY_TOPIC_SCRIPT = """(() => {
   const panels = Array.from(document.querySelectorAll(".topic-panel"));
@@ -2996,6 +3015,20 @@ def _topic_page_link(href: str | None, label: str) -> str:
     return f'<a class="topic-page-link" href="{_html(href)}">{_html(label)}</a>'
 
 
+def _render_topic_stage_menu(topic: TopicReport) -> str:
+    prefix = f"stage-{_topic_anchor(topic.topic_id)}"
+    links = "".join(
+        '<li>'
+        f'<a class="topic-stage-link" href="#{prefix}-{_html(suffix)}">'
+        f'{_html(label)}</a></li>'
+        for suffix, label in _TOPIC_PAGE_STAGES
+    )
+    return (
+        '<details class="topic-stage-menu"><summary>Stages</summary>'
+        f'<ul aria-label="Stage navigation">{links}</ul></details>'
+    )
+
+
 def render_debug_topic_page(
     topic: TopicReport, *, navigation: TopicPageNavigation
 ) -> str:
@@ -3015,8 +3048,9 @@ def render_debug_topic_page(
     page_navigation = (
         '<nav class="topic-page-nav" aria-label="Report navigation">'
         f'{_topic_page_link(navigation.summary_href, "Back to summary")}'
-        f'{_topic_page_link(navigation.previous_href, "Previous topic")}'
-        f'{_topic_page_link(navigation.next_href, "Next topic")}'
+        f'{_topic_page_link(navigation.previous_href if navigation.position > 1 else None, "Previous topic")}'
+        f'{_topic_page_link(navigation.next_href if navigation.position < navigation.total else None, "Next topic")}'
+        f'{_render_topic_stage_menu(topic)}'
         '</nav>'
     )
     return _render_html_document(

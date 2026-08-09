@@ -9,8 +9,11 @@ from hashlib import sha256
 from html.parser import HTMLParser
 import os
 from pathlib import Path
+import shutil
 import socket
 import stat
+import subprocess
+from types import MappingProxyType
 import weakref
 
 import pytest
@@ -49,6 +52,23 @@ class _HrefParser(HTMLParser):
     ) -> None:
         if tag == "a" and dict(attrs).get("href"):
             self.hrefs.append(str(dict(attrs)["href"]))
+
+
+class _BrowserResultParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.result: dict[str, object] | None = None
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag != "html":
+            return
+        value = dict(attrs).get("data-browser-result")
+        if value is not None:
+            loaded = json.loads(value)
+            assert isinstance(loaded, dict)
+            self.result = loaded
 
 
 def _local_hrefs(page: str) -> tuple[str, ...]:
@@ -228,6 +248,81 @@ def test_bundle_manifest_is_written_last_and_all_links_resolve(
     for page in target.rglob("*.html"):
         for href in _local_hrefs(page.read_text(encoding="utf-8")):
             assert (page.parent / href.split("#", 1)[0]).resolve().is_file()
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "validation_name"),
+    (
+        ("index.html", "_validate_staging"),
+        ("topics/alpha-topic.html", "_validate_staging"),
+        ("bundle-manifest.json", "_validate_manifest_file"),
+    ),
+)
+def test_bundle_freezes_every_content_file_before_authoritative_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+    validation_name: str,
+) -> None:
+    """A same-inode, same-size rewrite at the former seam must not publish."""
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / f"post-freeze-{Path(relative_path).name}"
+    real_validate = getattr(bundle_module, validation_name)
+
+    def rewrite_after_authoritative_validation(
+        *args: object, **kwargs: object
+    ) -> None:
+        real_validate(*args, **kwargs)
+        staging = Path(args[0])
+        path = staging / relative_path
+        before = path.lstat()
+        original = path.read_bytes()
+        replacement = bytes([original[0] ^ 1]) + original[1:]
+        assert len(replacement) == before.st_size
+        path.write_bytes(replacement)
+        after = path.lstat()
+        assert (after.st_dev, after.st_ino, after.st_size) == (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+        )
+
+    monkeypatch.setattr(bundle_module, validation_name, rewrite_after_authoritative_validation)
+
+    with pytest.raises(PermissionError):
+        debug_report.build_debug_report_bundle(
+            fixture.retrieval_config, output_dir=target
+        )
+
+    assert not target.exists()
+
+
+def test_bundle_privacy_scans_the_frozen_index_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A private value injected after the in-memory scan must block publication."""
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "frozen-index-privacy"
+    private_value = next(iter(fixture.docids.values())).encode("utf-8")
+    marker = b"A privacy-safe overview of retrieval health"
+    assert len(private_value) <= len(marker)
+    real_write = bundle_module._write_bundle_file
+
+    def inject_private_index_value(path: Path, payload: bytes):  # type: ignore[no-untyped-def]
+        if path.name == "index.html":
+            replacement = private_value.ljust(len(marker), b" ")
+            payload = payload.replace(marker, replacement, 1)
+            assert marker not in payload
+        return real_write(path, payload)
+
+    monkeypatch.setattr(bundle_module, "_write_bundle_file", inject_private_index_value)
+
+    with pytest.raises(ReportPrivacyError, match="private input value"):
+        debug_report.build_debug_report_bundle(
+            fixture.retrieval_config, output_dir=target
+        )
+
+    assert not target.exists()
 
 
 @pytest.mark.parametrize(
@@ -1691,3 +1786,146 @@ def test_summary_health_cards_report_each_fallback_kind_count(tmp_path: Path) ->
 
     assert "fallback_extractive: 1" in page
     assert "original_only: 1" in page
+
+
+def test_summary_browser_filter_sort_accessibility_and_responsive_layout(
+    tmp_path: Path,
+) -> None:
+    """Exercise the real progressive table behavior in desktop and mobile Chrome."""
+    chrome = shutil.which("google-chrome") or shutil.which("chromium")
+    if chrome is None:
+        pytest.skip("headless Chrome or Chromium is not available")
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    fixture, data, overlay = _evaluated_two_topic_data(run_root)
+    summary = bundle_module.build_run_summary(data, overlay)
+
+    alpha_metrics = {
+        key: MappingProxyType(dict(values))
+        for key, values in summary.topics[0].metrics.items()
+    }
+    alpha_retrieval = dict(alpha_metrics["retrieval"])
+    alpha_retrieval["ndcg@10"] = 0.2
+    alpha_metrics["retrieval"] = MappingProxyType(alpha_retrieval)
+    alpha = replace(
+        summary.topics[0], metrics=MappingProxyType(alpha_metrics)
+    )
+
+    beta_metrics = {
+        key: MappingProxyType(dict(values))
+        for key, values in summary.topics[1].metrics.items()
+    }
+    beta_retrieval = dict(beta_metrics["retrieval"])
+    beta_retrieval["ndcg@10"] = 0.8
+    beta_metrics["retrieval"] = MappingProxyType(beta_retrieval)
+    beta = replace(
+        summary.topics[1],
+        health="fallback",
+        fallback_kinds=("fallback_extractive",),
+        metrics=MappingProxyType(beta_metrics),
+    )
+
+    gamma_metrics = {
+        key: MappingProxyType(dict(values))
+        for key, values in summary.topics[1].metrics.items()
+    }
+    gamma_metrics["retrieval"] = MappingProxyType({})
+    gamma_availability = dict(summary.topics[1].metric_availability)
+    gamma_availability["retrieval"] = bundle_module.MetricAvailability(
+        available=False, reason="fixture judgment unavailable"
+    )
+    gamma = replace(
+        summary.topics[1],
+        topic_id="gamma-topic",
+        href="topics/gamma-topic.html",
+        health="fallback",
+        fallback_kinds=("original_only",),
+        metrics=MappingProxyType(gamma_metrics),
+        metric_availability=MappingProxyType(gamma_availability),
+    )
+    summary = replace(
+        summary,
+        topics=(alpha, beta, gamma),
+        completed_topics=3,
+        fallback_topics=2,
+    )
+    page = bundle_module.render_bundle_summary(
+        summary, denylist=tuple(fixture.docids.values())
+    )
+    browser_probe = r"""
+<script>
+(() => {
+  const result = {};
+  const order = () => Array.from(document.querySelectorAll("#topic-table tbody tr"))
+    .filter((row) => !row.hidden).map((row) => row.dataset.topicId);
+  result.noOverflow = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+  const search = document.querySelector("#topic-search");
+  search.value = "ALPHA";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  result.filter = order();
+  search.value = "";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  const header = document.querySelector('th[data-metric="retrieval:ndcg@10"]');
+  const button = header.querySelector("button");
+  button.click();
+  result.ascending = order();
+  result.ascendingAria = header.getAttribute("aria-sort");
+  button.click();
+  result.descending = order();
+  result.descendingAria = header.getAttribute("aria-sort");
+  button.focus({ focusVisible: true });
+  const focusStyle = getComputedStyle(button);
+  result.keyboardFocus = document.activeElement === button;
+  result.visibleFocus = button.matches(":focus-visible") ||
+    focusStyle.outlineStyle !== "none" ||
+    focusStyle.textDecorationLine.includes("underline");
+  document.querySelector("#attention-reset").click();
+  result.reset = order();
+  result.resetAria = header.getAttribute("aria-sort");
+  const gamma = document.querySelector('tr[data-topic-id="gamma-topic"]');
+  const gammaCell = gamma.querySelector('td[data-metric="retrieval:ndcg@10"]');
+  result.unavailableText = gammaCell.textContent.trim();
+  result.unavailableHasSortValue = gammaCell.hasAttribute("data-sort-value");
+  document.documentElement.dataset.browserResult = JSON.stringify(result);
+})();
+</script>
+"""
+    page = page.replace("</body>", f"{browser_probe}</body>", 1)
+
+    for viewport in ("1440,1000", "390,844"):
+        document_path = tmp_path / f"summary-browser-{viewport.replace(',', '-')}.html"
+        document_path.write_text(page, encoding="utf-8")
+        completed = subprocess.run(
+            [
+                chrome,
+                "--headless=new",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-background-networking",
+                f"--user-data-dir={tmp_path / ('chrome-' + viewport.replace(',', '-'))}",
+                f"--window-size={viewport}",
+                "--virtual-time-budget=500",
+                "--dump-dom",
+                document_path.as_uri(),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        parser = _BrowserResultParser()
+        parser.feed(completed.stdout)
+        assert parser.result == {
+            "noOverflow": True,
+            "filter": ["alpha-topic"],
+            "ascending": ["alpha-topic", "beta-topic", "gamma-topic"],
+            "ascendingAria": "ascending",
+            "descending": ["beta-topic", "alpha-topic", "gamma-topic"],
+            "descendingAria": "descending",
+            "keyboardFocus": True,
+            "visibleFocus": True,
+            "reset": ["beta-topic", "gamma-topic", "alpha-topic"],
+            "resetAria": "none",
+            "unavailableText": "Unavailable — fixture judgment unavailable",
+            "unavailableHasSortValue": False,
+        }

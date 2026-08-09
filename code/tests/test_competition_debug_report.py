@@ -2676,6 +2676,134 @@ def test_standalone_topic_page_contains_one_complete_trace_and_relative_navigati
     assert "https://" not in page
 
 
+_EXPECTED_STANDALONE_STAGE_LINKS = (
+    ("#stage-literal-rag2026-0-narrative", "Narrative"),
+    ("#stage-literal-rag2026-0-subnarratives", "Subnarratives"),
+    ("#stage-literal-rag2026-0-final-rag", "Final RAG"),
+    ("#stage-literal-rag2026-0-funnel-overview", "Funnel overview"),
+    ("#stage-literal-rag2026-0-new-documents", "New documents"),
+    ("#stage-literal-rag2026-0-selected-documents", "Selected documents"),
+    ("#stage-literal-rag2026-0-top-passages", "Top passages"),
+    ("#stage-literal-rag2026-0-final-selected-nuggets", "Final selected nuggets"),
+    ("#stage-literal-rag2026-0-final-retrieval", "Final retrieval"),
+)
+
+
+def _standalone_navigation_links(page: str) -> tuple[tuple[str, str], ...]:
+    navigation = page.split(
+        '<nav class="topic-page-nav" aria-label="Report navigation">', 1
+    )[1].split("</nav>", 1)[0]
+    return tuple(
+        (html.unescape(href), html.unescape(label))
+        for href, label in re.findall(
+            r'<a class="[^"]+" href="([^"]+)">([^<]+)</a>', navigation
+        )
+    )
+
+
+def test_standalone_topic_navigation_has_exact_primary_and_stage_link_order(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=2,
+            total=3,
+            previous_href="rag2026-prev.html",
+            next_href="rag2026-next.html",
+        ),
+    )
+
+    assert _standalone_navigation_links(page) == (
+        ("../index.html", "Back to summary"),
+        ("rag2026-prev.html", "Previous topic"),
+        ("rag2026-next.html", "Next topic"),
+        *_EXPECTED_STANDALONE_STAGE_LINKS,
+    )
+    ids = set(re.findall(r'\bid="([^"]+)"', page))
+    assert all(href.removeprefix("#") in ids for href, _label in _EXPECTED_STANDALONE_STAGE_LINKS)
+
+
+@pytest.mark.parametrize(
+    ("position", "previous_href", "next_href", "primary_links"),
+    (
+        (
+            1,
+            "must-not-render-before-first.html",
+            "rag2026-next.html",
+            (
+                ("../index.html", "Back to summary"),
+                ("rag2026-next.html", "Next topic"),
+            ),
+        ),
+        (
+            3,
+            "rag2026-prev.html",
+            "must-not-render-after-last.html",
+            (
+                ("../index.html", "Back to summary"),
+                ("rag2026-prev.html", "Previous topic"),
+            ),
+        ),
+    ),
+)
+def test_standalone_topic_navigation_omits_first_and_last_boundary_links(
+    tmp_path: Path,
+    position: int,
+    previous_href: str | None,
+    next_href: str | None,
+    primary_links: tuple[tuple[str, str], ...],
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=position,
+            total=3,
+            previous_href=previous_href,
+            next_href=next_href,
+        ),
+    )
+
+    assert _standalone_navigation_links(page) == (
+        *primary_links,
+        *_EXPECTED_STANDALONE_STAGE_LINKS,
+    )
+
+
+def test_standalone_stage_menu_uses_native_keyboard_semantics_and_escaped_links(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    hostile_href = '../index.html?label=<private>&quote="'
+
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href=hostile_href, position=1, total=1
+        ),
+    )
+
+    navigation = page.split(
+        '<nav class="topic-page-nav" aria-label="Report navigation">', 1
+    )[1].split("</nav>", 1)[0]
+    assert '<details class="topic-stage-menu">' in navigation
+    assert '<summary>Stages</summary>' in navigation
+    assert '<ul aria-label="Stage navigation">' in navigation
+    assert 'role="button"' not in navigation
+    assert "tabindex=" not in navigation
+    assert hostile_href not in page
+    assert 'href="../index.html?label=&lt;private&gt;&amp;quote=&quot;"' in page
+
+
 def test_standalone_topic_page_omits_missing_boundary_links_and_escapes_text(
     tmp_path: Path,
 ) -> None:
@@ -2798,7 +2926,11 @@ def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
     page = debug_report.render_debug_topic_page(
         long_topic,
         navigation=debug_report.TopicPageNavigation(
-            summary_href="../index.html", position=1, total=1
+            summary_href="../index.html",
+            position=2,
+            total=3,
+            previous_href="rag2026-prev.html",
+            next_href="rag2026-next.html",
         ),
     )
     document_path = tmp_path / f"sticky-{window_size.replace(',', '-')}.html"
@@ -2809,11 +2941,20 @@ def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
         'window.scrollTo(0, target.offsetTop);'
         'const nav = document.querySelector(".topic-page-nav");'
         'const rect = nav.getBoundingClientRect();'
+        'const stageMenu = nav.querySelector(".topic-stage-menu");'
+        'const stageSummary = stageMenu.querySelector(":scope > summary");'
+        'stageSummary.focus({preventScroll: true});'
+        'const stageFocus = getComputedStyle(stageSummary);'
+        'stageSummary.click();'
         'document.documentElement.setAttribute("data-scroll-y", String(Math.round(scrollY)));'
         'document.documentElement.setAttribute("data-target-top", String(Math.round(target.getBoundingClientRect().top)));'
         'document.documentElement.setAttribute("data-nav-top", String(Math.round(rect.top)));'
         'document.documentElement.setAttribute("data-nav-bottom", String(Math.round(rect.bottom)));'
         'document.documentElement.setAttribute("data-viewport-height", String(innerHeight));'
+        'document.documentElement.setAttribute("data-stage-native", String(stageMenu.tagName === "DETAILS"));'
+        'document.documentElement.setAttribute("data-stage-open", String(stageMenu.open));'
+        'document.documentElement.setAttribute("data-stage-focus", String(document.activeElement === stageSummary));'
+        'document.documentElement.setAttribute("data-stage-focus-visible", String(stageSummary.matches(":focus-visible") || stageFocus.outlineStyle !== "none"));'
         '}, 150);</script>'
     )
     document_path.write_text(
@@ -2843,13 +2984,26 @@ def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
     viewport_height = re.search(
         r'data-viewport-height="(\d+)"', completed.stdout
     )
+    stage_native = re.search(r'data-stage-native="(true|false)"', completed.stdout)
+    stage_open = re.search(r'data-stage-open="(true|false)"', completed.stdout)
+    stage_focus = re.search(r'data-stage-focus="(true|false)"', completed.stdout)
+    stage_focus_visible = re.search(
+        r'data-stage-focus-visible="(true|false)"', completed.stdout
+    )
     assert scroll_y is not None and target_top is not None
     assert nav_top is not None and nav_bottom is not None
     assert viewport_height is not None
+    assert stage_native is not None and stage_open is not None
+    assert stage_focus is not None
+    assert stage_focus_visible is not None
     assert int(scroll_y.group(1)) > 0
     assert 0 <= int(target_top.group(1)) < int(viewport_height.group(1))
     assert -1 <= int(nav_top.group(1)) <= 1
-    assert 44 <= int(nav_bottom.group(1)) <= int(viewport_height.group(1))
+    assert 44 <= int(nav_bottom.group(1)) <= min(160, int(viewport_height.group(1)))
+    assert stage_native.group(1) == "true"
+    assert stage_open.group(1) == "true"
+    assert stage_focus.group(1) == "true"
+    assert stage_focus_visible.group(1) == "true"
 
 
 def test_html_topics_use_one_open_native_panel_and_a_progressive_switcher(

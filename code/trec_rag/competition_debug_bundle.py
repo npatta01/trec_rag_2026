@@ -1126,11 +1126,10 @@ def _validate_pinned_payload(
 ) -> None:
     """Validate the complete payload through descriptor-relative operations.
 
-    This is deliberately the last authoritative filesystem check in the
-    publication primitive.  Callers may perform an earlier reconciliation for
-    link validation, but a wrapper that mutates a page after that check still
-    reaches this descriptor-pinned identity/hash/coverage check before the
-    no-replace syscall.
+    This is deliberately the last descriptor-pinned path, identity, size, and
+    coverage check in the publication primitive.  Content hashes, links, and
+    summary privacy have already been reconciled after the complete tree was
+    frozen, so no file contents can change before this sweep.
     """
     payload_fd = _open_directory_fd_at(guardian_fd, payload_name)
     topics_fd: int | None = None
@@ -1540,11 +1539,16 @@ def _parse_page_links(page: str) -> _PageLinkGraph:
 
 
 def _read_page_link_graph(
-    staging: Path, page_paths: Mapping[Path, Path]
+    staging: Path,
+    page_paths: Mapping[Path, Path],
+    *,
+    summary_denylist: Sequence[str] = (),
 ) -> Mapping[Path, _PageLinkGraph]:
     graph: dict[Path, _PageLinkGraph] = {}
     for relative, page in page_paths.items():
         page_text = page.read_text(encoding="utf-8")
+        if relative == Path("index.html"):
+            assert_publishable(page_text, denylist=tuple(summary_denylist))
         graph[relative] = _parse_page_links(page_text)
         del page_text
     return graph
@@ -1581,8 +1585,15 @@ def _validate_page_links(staging: Path, page: Path) -> None:
     _validate_link_graph(staging, graph)
 
 
-def _validate_staging_links(staging: Path, page_paths: Mapping[Path, Path]) -> None:
-    graph = _read_page_link_graph(staging, page_paths)
+def _validate_staging_links(
+    staging: Path,
+    page_paths: Mapping[Path, Path],
+    *,
+    summary_denylist: Sequence[str],
+) -> None:
+    graph = _read_page_link_graph(
+        staging, page_paths, summary_denylist=summary_denylist
+    )
     _validate_link_graph(staging, graph)
 
 
@@ -1593,6 +1604,7 @@ def _validate_staging(
     index_receipt: _PageReceipt,
     topic_receipts: Sequence[_PageReceipt],
     file_identities: Mapping[str, _FileIdentity],
+    summary_denylist: Sequence[str] = (),
 ) -> None:
     if not _identity_matches(staging, staging_identity, directory=True):
         raise ValueError("bundle staging directory identity changed")
@@ -1625,7 +1637,9 @@ def _validate_staging(
             raise ValueError(f"bundle hash reconciliation failed for {receipt.path}")
         if not _identity_matches(path, identity):
             raise ValueError(f"bundle file identity changed for {receipt.path}")
-    _validate_staging_links(staging, page_paths)
+    _validate_staging_links(
+        staging, page_paths, summary_denylist=summary_denylist
+    )
 
 
 def _final_reconcile_staging(
@@ -1639,10 +1653,10 @@ def _final_reconcile_staging(
 ) -> None:
     """Reconcile compact filesystem receipts after the expensive scan.
 
-    Content hashes are intentionally not reread here.  The preceding link and
-    streamed-hash phase produced the receipts; this final pass only confirms
-    exact coverage, regular-file type, inode, and byte size immediately before
-    descriptor-relative publication.
+    Content hashes are intentionally not reread here.  The preceding
+    post-freeze link, privacy, and streamed-hash phase reconciled the receipts;
+    this final pass only confirms exact coverage, regular-file type, inode, and
+    byte size immediately before descriptor-relative publication.
     """
     if not _identity_matches(staging, staging_identity, directory=True):
         raise ValueError("bundle staging payload identity changed")
@@ -2114,6 +2128,7 @@ def build_bundle_from_data(
         else None
     )
     summary = build_run_summary(data, evaluation)
+    summary_denylist = _summary_denylist(data)
     publication_parent_fd: int | None = None
     target_parent_identity = _lstat_identity(target.parent, directory=True)
     state: _StagingState | None = None
@@ -2160,7 +2175,9 @@ def build_bundle_from_data(
 
         ownership_token = _FILE_IDENTITY_REGISTRAR.set(register_owned_file)
 
-        index_body = render_bundle_summary(summary, denylist=_summary_denylist(data)).encode("utf-8")
+        index_body = render_bundle_summary(
+            summary, denylist=summary_denylist
+        ).encode("utf-8")
         index_path = payload / "index.html"
         index_written_identity = _write_bundle_file(index_path, index_body)
         del index_body
@@ -2189,19 +2206,6 @@ def build_bundle_from_data(
             )
             topic_receipts.append(topic_receipt)
 
-        _validate_staging(
-            payload,
-            payload_identity,
-            data,
-            index_receipt,
-            topic_receipts,
-            state.file_identities,
-        )
-        _freeze_staging_tree(
-            state.payload_fd,
-            state.file_identities,
-            freeze_payload=False,
-        )
         pages = (index_receipt, *topic_receipts)
         manifest: dict[str, Any] = {
             "schema_version": _BUNDLE_SCHEMA_VERSION,
@@ -2244,7 +2248,6 @@ def build_bundle_from_data(
             or manifest_receipt.sha256 != manifest_sha256
         ):
             raise ValueError("bundle manifest hash reconciliation failed")
-        _validate_manifest_file(payload, manifest_receipt, state.file_identities)
         _freeze_staging_tree(
             state.payload_fd,
             state.file_identities,
@@ -2253,6 +2256,16 @@ def build_bundle_from_data(
         _fsync_directory(topics_dir)
         _fsync_directory(payload)
         _fsync_directory_fd(guardian_fd)
+        _validate_staging(
+            payload,
+            payload_identity,
+            data,
+            index_receipt,
+            topic_receipts,
+            state.file_identities,
+            summary_denylist,
+        )
+        _validate_manifest_file(payload, manifest_receipt, state.file_identities)
         _final_reconcile_staging(
             payload,
             payload_identity,
