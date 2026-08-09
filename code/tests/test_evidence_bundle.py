@@ -1184,6 +1184,54 @@ def test_lane_query_hashes_round_trip_and_multiline_source_text_is_valid() -> No
         replace(bundle, lanes=(broken_lane,)).validate()
 
 
+def test_exact_document_text_preserves_organizer_control_characters() -> None:
+    document_text = "Exact organizer body with a vertical tab:\vstill authoritative."
+
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=[
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": "Question",
+                "docid": "doc-control-character",
+                "text": document_text,
+                "rank": 1,
+                "score": 1.0,
+                "retriever": "bm25",
+            }
+        ],
+    )
+
+    document = bundle.documents[0]
+    assert document.text == document_text
+    assert document.text_sha256 == _digest(document_text)
+
+    evidence_text = "\vstill authoritative."
+    start_char = document_text.index(evidence_text)
+    evidence = EvidenceSpan(
+        evidence_id="evidence.control",
+        docid=document.docid,
+        text=evidence_text,
+        text_sha256=_digest(evidence_text),
+        start_char=start_char,
+        end_char=start_char + len(evidence_text),
+        lane_ids=("narrative",),
+        selector="exact_sentence",
+        source_document_sha256=document.text_sha256,
+    )
+    nugget = BundleNugget(
+        nugget_id="nugget.control",
+        text=evidence_text,
+        text_sha256=_digest(evidence_text),
+        evidence_ids=(evidence.evidence_id,),
+        nugget_kind="extractive",
+    )
+    bundle = replace(bundle, evidence=(evidence,), nuggets=(nugget,))
+    bundle.validate()
+    assert EvidenceBundle.from_dict(bundle.to_dict()) == bundle
+
+
 @pytest.mark.parametrize("relation_key", ["evidence", "nuggets", "trace_refs"])
 def test_v1_deserialization_requires_complete_relation_keys(relation_key: str) -> None:
     payload = _bundle().to_dict()

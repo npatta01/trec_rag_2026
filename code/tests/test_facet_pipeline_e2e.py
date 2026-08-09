@@ -1053,6 +1053,54 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
     assert (canonical_root / "canonical-nuggets.jsonl").read_bytes() == b""
 
 
+def test_rejected_plan_with_empty_original_retrieval_reports_no_supported_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exhausted original fallback is empty, not downstream scoring."""
+
+    class _EmptyRetriever(_Retriever):
+        def retrieve(self, query: QueryVariant) -> list[RetrievedCandidate]:
+            self.transport_calls += 1
+            self.calls.append(query.variant_name)
+            return []
+
+    config = _write_pipeline_config(tmp_path)
+    planning = _PlanningBackend(reject=True)
+    retriever = _EmptyRetriever()
+    candidate_scorer = _CandidateScorer()
+    similarity = _Similarity()
+    canonical_factories: list[bool] = []
+    monkeypatch.setattr(
+        competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_production_dependencies",
+        lambda: _local_dependencies(candidate_scorer, similarity),
+    )
+
+    with pytest.raises(TopicDispatchError, match="no supported document"):
+        run_official(
+            config,
+            external=ExternalAdapters(
+                planning_backend=planning,
+                retriever=retriever,
+                canonical_backend_factory=lambda: canonical_factories.append(True),
+            ),
+        )
+
+    output = tmp_path / "outputs" / "public-e2e"
+    canonical_root = output / "housing-1" / "canonical"
+    assert retriever.calls == ["original"]
+    assert candidate_scorer.calls == []
+    assert similarity.calls == []
+    assert canonical_factories == []
+    assert (canonical_root / "canonical-nuggets.jsonl").read_bytes() == b""
+    assert not (output / "retrieval_export_manifest.json").exists()
+    assert not (output / "generation_handoff_manifest.json").exists()
+
+
 def test_public_run_rejects_base_only_legacy_checkpoint_without_hosted_or_model_calls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

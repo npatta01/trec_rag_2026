@@ -13,6 +13,7 @@ from trec_rag.agentic_generation_export import (
     prepare_agentic_topic_projection,
     serialize_agentic_retrieval_topic,
 )
+import trec_rag.agentic_run_state as run_state
 from trec_rag.agentic_run_state import (
     RUN_PLAN_FILENAME,
     TOPIC_SEAL_FILENAME,
@@ -377,6 +378,53 @@ def test_run_plan_create_publishes_a_private_self_authenticating_plan(
     assert plan.planned_topic_ids == ("rag2026-0", "rag2026-1")
     assert plan.config_bytes == CONFIG_BYTES
     assert load_run_plan(work) == plan
+
+
+def test_run_plan_bytes_can_be_deserialized_and_installed_atomically(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    plan = _create(source)
+    body = serialize_run_plan(plan)
+
+    assert run_state.deserialize_run_plan(body) == plan
+
+    installed = tmp_path / "installed"
+    assert run_state.install_run_plan(work_dir=installed, body=body) == plan
+    assert (installed / RUN_PLAN_FILENAME).read_bytes() == body
+    assert run_state.install_run_plan(work_dir=installed, body=body) == plan
+
+    conflicting = serialize_run_plan(_create(tmp_path / "conflict", run_id="other-run"))
+    with pytest.raises(AgenticRunStateError, match="publication conflict"):
+        run_state.install_run_plan(work_dir=installed, body=conflicting)
+
+
+def test_run_plan_install_rejects_nonempty_namespace_without_a_plan(
+    tmp_path: Path,
+) -> None:
+    body = serialize_run_plan(_create(tmp_path / "source"))
+    installed = tmp_path / "installed"
+    stale = installed / "topics" / TOPICS[0].id / "stale.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale attempt\n", encoding="utf-8")
+
+    with pytest.raises(AgenticRunStateError, match="namespace|without a plan"):
+        run_state.install_run_plan(work_dir=installed, body=body)
+
+
+def test_run_plan_byte_deserialization_rejects_noncanonical_or_tampered_bytes(
+    tmp_path: Path,
+) -> None:
+    body = serialize_run_plan(_create(tmp_path / "source"))
+
+    with pytest.raises(AgenticRunStateError, match="canonical"):
+        run_state.deserialize_run_plan(body + b"\n")
+
+    payload = json.loads(body)
+    payload["topics"]["planned"][0]["topic_id"] = "rag2026-99"
+    tampered = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    with pytest.raises(AgenticRunStateError, match="digest"):
+        run_state.deserialize_run_plan(tampered)
 
 
 def test_run_plan_create_is_exclusive_but_allows_explicit_identical_idempotence(

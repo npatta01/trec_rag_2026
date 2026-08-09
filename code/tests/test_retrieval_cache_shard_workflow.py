@@ -1014,7 +1014,7 @@ def test_dstack_shard_task_has_a_bounded_ephemeral_resource_contract() -> None:
     resources = config["resources"]
     assert resources == {
         "gpu": {
-            "name": ["A40", "A6000", "L40S"],
+            "name": ["A40", "A6000", "L40", "L40S", "RTX6000Ada", "RTXPRO5000"],
             "count": 1,
             "memory": "48GB..",
         },

@@ -94,6 +94,116 @@ def test_checked_in_config_enables_two_topic_workers() -> None:
     assert config.resolved_payload(())["execution"] == {"topic_workers": 2}
 
 
+def test_resumed_topic_envelope_avoids_repeating_deep_checkpoint_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches resume preflight rebuilding all source geometry before dispatch."""
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(base, root_dir=tmp_path)
+    topic = Topic("topic-a", "", "narrative")
+    config_sha256 = "a" * 64
+    producer_sha256 = "b" * 64
+    sealed = TopicJobReceipt(
+        topic_id=topic.id,
+        projection_manifest_sha256="c" * 64,
+        status="complete",
+        stopping_reason="coverage_sufficient",
+    )
+    projection = SimpleNamespace(
+        topic_id=topic.id,
+        manifest_sha256=sealed.projection_manifest_sha256,
+        retrieval_status=sealed.status,
+        retrieval_stopping_reason=sealed.stopping_reason,
+        source_seals=(
+            ("config_sha256", config_sha256),
+            ("decomposition_producer_sha256", producer_sha256),
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "read_topic_projection_receipt",
+        lambda *_args: projection,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_decomposition_producer_sha256",
+        lambda *_args, **_kwargs: producer_sha256,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "validate_retrieval_topic_checkpoints",
+        lambda *_args, **_kwargs: pytest.fail(
+            "resume envelope repeated deep checkpoint validation"
+        ),
+    )
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_read_topic_cache_operation_receipt",
+        lambda **kwargs: observed.update(kwargs) or object(),
+    )
+
+    assert competition_retrieval._validated_existing_topic_job_envelope(
+        config,
+        topic,
+        sealed,
+        expected_config_sha256=config_sha256,
+        planning_backend=None,
+        operation_mode="online",
+    ) is sealed
+    assert observed["topic"] is topic
+    assert observed["projection_manifest_sha256"] == sealed.projection_manifest_sha256
+
+
+def test_resumed_topic_envelope_rejects_completion_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches a dispatch seal claiming different completion than its projection."""
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(base, root_dir=tmp_path)
+    topic = Topic("topic-a", "", "narrative")
+    config_sha256 = "a" * 64
+    producer_sha256 = "b" * 64
+    sealed = TopicJobReceipt(
+        topic_id=topic.id,
+        projection_manifest_sha256="c" * 64,
+        status="complete",
+        stopping_reason="coverage_sufficient",
+    )
+    projection = SimpleNamespace(
+        topic_id=topic.id,
+        manifest_sha256=sealed.projection_manifest_sha256,
+        retrieval_status="incomplete",
+        retrieval_stopping_reason="no_evidence",
+        source_seals=(
+            ("config_sha256", config_sha256),
+            ("decomposition_producer_sha256", producer_sha256),
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "read_topic_projection_receipt",
+        lambda *_args: projection,
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_decomposition_producer_sha256",
+        lambda *_args, **_kwargs: producer_sha256,
+    )
+
+    with pytest.raises(ValueError, match="completion differs"):
+        competition_retrieval._validated_existing_topic_job_envelope(
+            config,
+            topic,
+            sealed,
+            expected_config_sha256=config_sha256,
+            planning_backend=None,
+            operation_mode="online",
+        )
+
+
 @pytest.mark.parametrize("value", [0, -1, True, "2"])
 def test_config_rejects_invalid_topic_worker_count(tmp_path: Path, value: object) -> None:
     text = V2_CONFIG.read_text(encoding="utf-8")

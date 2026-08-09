@@ -314,6 +314,9 @@ Completed 2026-08-09 in linked worktree `hardened-splice-three-topic` on branch
   103.89 seconds.
 - Post-follow-up v8 full verification: 2,811 tests passed, 19 skipped, and 60 subtests passed in
   121.93 seconds.
+- After merging current `origin/master`, the complete combined suite passed 2,968 tests with 19
+  skipped and 60 subtests in 109.30 seconds; the only merge conflict was an append-only README
+  overlap, resolved by preserving both the generation and retrieval-baseline sections.
 - A first full-suite attempt found six stale `/tmp/trec-rag-cache-shards/fixture-pytest-0-*`
   collisions. After deleting only those generated fixtures, the clean rerun passed completely;
   the regenerated disposable fixture and external temp directories were removed afterward.
