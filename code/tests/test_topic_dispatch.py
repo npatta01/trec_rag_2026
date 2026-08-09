@@ -180,6 +180,68 @@ def test_topic_job_policy_has_an_isolated_canonical_receipt(
     assert read_topic_receipt(job) == expected
 
 
+@pytest.mark.parametrize(
+    ("policy", "filename"),
+    (
+        ("online", "topic-job-receipt.json"),
+        ("offline-cache-only", "topic-job-receipt.offline-cache-only.json"),
+    ),
+)
+def test_read_accepts_canonical_v3_receipt_for_unchanged_legacy_modes(
+    tmp_path: Path,
+    policy: str,
+    filename: str,
+) -> None:
+    config_bytes = b"schema_version: test\n"
+    job = TopicJob(
+        topic_id="topic-a",
+        run_id="run-a",
+        config_path=(tmp_path / "config.yaml").resolve(),
+        config_bytes=config_bytes,
+        config_sha256=sha256(config_bytes).hexdigest(),
+        topic_root=(tmp_path / "run-a" / "topic-a").resolve(),
+        execution_policy=policy,
+    )
+    expected = _receipt(job, b"projection")
+    publish_topic_receipt(job, expected)
+    path = job.topic_root / filename
+    value = json.loads(path.read_bytes())
+    value["schema_version"] = "topic-job-receipt-v3"
+    path.write_bytes(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+    assert read_topic_receipt(job) == expected
+
+
+def test_read_rejects_v3_receipt_for_new_cached_rescore_mode(tmp_path: Path) -> None:
+    config_bytes = b"schema_version: test\n"
+    job = TopicJob(
+        topic_id="topic-a",
+        run_id="run-a",
+        config_path=(tmp_path / "config.yaml").resolve(),
+        config_bytes=config_bytes,
+        config_sha256=sha256(config_bytes).hexdigest(),
+        topic_root=(tmp_path / "run-a" / "topic-a").resolve(),
+        execution_policy="cached-upstream-rescore",
+    )
+    publish_topic_receipt(job, _receipt(job, b"projection"))
+    path = job.topic_root / "topic-job-receipt.cached-upstream-rescore.json"
+    value = json.loads(path.read_bytes())
+    value["schema_version"] = "topic-job-receipt-v3"
+    path.write_bytes(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+    with pytest.raises(TopicDispatchIntegrityError, match="schema"):
+        read_topic_receipt(job)
+
+
 def test_topic_job_rejects_unknown_execution_policy(tmp_path: Path) -> None:
     config_bytes = b"schema_version: test\n"
     with pytest.raises(ValueError, match="execution_policy"):

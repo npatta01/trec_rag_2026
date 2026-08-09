@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 
 _SCHEMA_VERSION = "topic-job-receipt-v4"
+_LEGACY_SCHEMA_VERSION = "topic-job-receipt-v3"
 _RECEIPT_FILENAME = "topic-job-receipt.json"
 _OFFLINE_RECEIPT_FILENAME = "topic-job-receipt.offline-cache-only.json"
 _CACHED_RESCORE_RECEIPT_FILENAME = "topic-job-receipt.cached-upstream-rescore.json"
@@ -253,7 +254,11 @@ def read_topic_receipt(
         "stopping_reason",
     }:
         raise TopicDispatchIntegrityError("topic receipt fields changed")
-    if value.get("schema_version") != _SCHEMA_VERSION:
+    receipt_schema = value.get("schema_version")
+    if receipt_schema != _SCHEMA_VERSION and not (
+        receipt_schema == _LEGACY_SCHEMA_VERSION
+        and job.execution_policy in {"online", "offline-cache-only"}
+    ):
         raise TopicDispatchIntegrityError("topic receipt schema changed")
     if value.get("run_id") != job.run_id:
         raise TopicDispatchIntegrityError("topic receipt run identity changed")
@@ -272,7 +277,7 @@ def read_topic_receipt(
         )
     except (TypeError, ValueError) as exc:
         raise TopicDispatchIntegrityError("topic receipt values changed") from exc
-    if _receipt_bytes(job, receipt) != body:
+    if _receipt_bytes(job, receipt, schema_version=receipt_schema) != body:
         raise TopicDispatchIntegrityError("topic receipt is not canonical")
     _validate_projection_manifest(job, receipt)
     return receipt
@@ -327,10 +332,15 @@ def _job_mode(job: TopicJob) -> str:
     return job.execution_policy
 
 
-def _receipt_bytes(job: TopicJob, receipt: TopicJobReceipt) -> bytes:
+def _receipt_bytes(
+    job: TopicJob,
+    receipt: TopicJobReceipt,
+    *,
+    schema_version: str = _SCHEMA_VERSION,
+) -> bytes:
     return json.dumps(
         {
-            "schema_version": _SCHEMA_VERSION,
+            "schema_version": schema_version,
             "run_id": job.run_id,
             "topic_id": receipt.topic_id,
             "config_sha256": job.config_sha256,
