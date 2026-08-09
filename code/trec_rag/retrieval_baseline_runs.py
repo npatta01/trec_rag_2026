@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import math
@@ -13,9 +14,9 @@ from statistics import median
 import tempfile
 from typing import Any, Mapping, Protocol, TypeVar
 
-from trec_rag.chunking import SemanticTextChunker, TextChunk
+from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk
 from trec_rag.document_store import DocumentStore
-from trec_rag.mixedbread_passage_scorer import ScoredPassage
+from trec_rag.mixedbread_passage_scorer import MixedbreadPassageScorer, ScoredPassage
 
 
 _TOP_PASSAGE_WEIGHTS = (0.55, 0.25, 0.13, 0.07)
@@ -168,6 +169,7 @@ class CutoffDecision:
     eligible_docids: tuple[str, ...]
     pre_fallback_count: int
     fallback_used: bool
+    admission_multiplicity_histogram: Mapping[str, int]
 
 
 @dataclass(frozen=True)
@@ -673,6 +675,7 @@ def write_topic_matrix(matrix: TopicMatrix, output_dir: Path) -> Path:
         "matrix_byte_count": len(body),
         "document_count": len(matrix.documents),
         "semantic_unit_count": len(matrix.units),
+        "document_semantic_pair_count": len(matrix.documents) * len(matrix.units),
         "passage_pair_count": len(matrix.passages),
     }
     manifest_path = root / "topic-matrix-manifest.json"
@@ -773,6 +776,7 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
     expected_counts = {
         "document_count": len(matrix.documents),
         "semantic_unit_count": len(matrix.units),
+        "document_semantic_pair_count": len(matrix.documents) * len(matrix.units),
         "passage_pair_count": len(matrix.passages),
     }
     if any(manifest.get(name) != count for name, count in expected_counts.items()):
@@ -879,6 +883,7 @@ def cutoff_decision(documents: tuple[DocumentScore, ...]) -> CutoffDecision:
         for subnarrative_id in subnarrative_ids
     )
     eligible_set: set[str] = set()
+    admitted_units_by_docid: dict[str, int] = {}
     unit_stats: list[CutoffUnitStat] = []
     for unit_id, scores in unit_scores:
         center = median(scores.values())
@@ -902,6 +907,8 @@ def cutoff_decision(documents: tuple[DocumentScore, ...]) -> CutoffDecision:
             )
             comparison = "strictly_greater_than"
         eligible_set.update(admitted)
+        for docid in admitted:
+            admitted_units_by_docid[docid] = admitted_units_by_docid.get(docid, 0) + 1
         unit_stats.append(
             CutoffUnitStat(
                 unit_id=unit_id,
@@ -929,11 +936,18 @@ def cutoff_decision(documents: tuple[DocumentScore, ...]) -> CutoffDecision:
     eligible = tuple(
         sorted(eligible_set, key=lambda docid: docid.encode("utf-8"))
     )
+    multiplicity_histogram: dict[str, int] = {}
+    for count in admitted_units_by_docid.values():
+        key = str(count)
+        multiplicity_histogram[key] = multiplicity_histogram.get(key, 0) + 1
     return CutoffDecision(
         units=tuple(unit_stats),
         eligible_docids=eligible,
         pre_fallback_count=pre_fallback_count,
         fallback_used=fallback_used,
+        admission_multiplicity_histogram=dict(
+            sorted(multiplicity_histogram.items(), key=lambda row: int(row[0]))
+        ),
     )
 
 
@@ -1173,17 +1187,42 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
     topics: list[dict[str, object]] = []
     for matrix, ranked in zip(ordered, ranked_topics, strict=True):
         eligible_hash = _docids_sha256(ranked.rankings.eligible_docids)
+        subnarrative_ids = tuple(
+            row.unit_id for row in matrix.units if row.kind == "subnarrative"
+        )
+        source_pools: dict[str, dict[str, object]] = {}
+        for subnarrative_id in subnarrative_ids:
+            docids = tuple(
+                sorted(
+                    (
+                        row.docid
+                        for row in matrix.documents
+                        if subnarrative_id in row.subnarrative_source_ranks
+                    ),
+                    key=lambda value: value.encode("utf-8"),
+                )
+            )
+            source_pools[subnarrative_id] = {
+                "count": len(docids),
+                "docids_sha256": _docids_sha256(docids),
+            }
         topics.append(
             {
                 "topic_id": matrix.topic_id,
                 "document_union_count": len(matrix.documents),
                 "semantic_unit_count": len(matrix.units),
+                "document_semantic_pair_count": len(matrix.documents)
+                * len(matrix.units),
                 "passage_pair_count": len(matrix.passages),
                 "matrix_sha256": sha256(_matrix_bytes(matrix)).hexdigest(),
                 "k": len(ranked.rankings.eligible_docids),
                 "pre_fallback_count": ranked.cutoff.pre_fallback_count,
                 "fallback_used": ranked.cutoff.fallback_used,
+                "admission_multiplicity_histogram": dict(
+                    ranked.cutoff.admission_multiplicity_histogram
+                ),
                 "cutoff_units": [asdict(row) for row in ranked.cutoff.units],
+                "subnarrative_source_pools": source_pools,
                 "narrative_docids_sha256": eligible_hash,
                 "combo_docids_sha256": eligible_hash,
                 "breadth_docids_sha256": eligible_hash,
@@ -1200,6 +1239,138 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
     manifest_path = root / "retrieval-baseline-runs-manifest.json"
     _atomic_write(manifest_path, _canonical_json_line(manifest))
     return manifest_path
+
+
+def _selected_matrix_topics(
+    matrix_dir: Path, topic_ids: tuple[str, ...]
+) -> tuple[str, ...]:
+    if topic_ids:
+        if len(set(topic_ids)) != len(topic_ids):
+            raise ValueError("topic selectors must be unique")
+        selected = topic_ids
+    else:
+        selected = tuple(
+            child.name
+            for child in Path(matrix_dir).iterdir()
+            if child.is_dir() and (child / "topic-matrix-manifest.json").is_file()
+        )
+    if not selected:
+        raise ValueError("no topic matrices were selected")
+    return tuple(sorted(selected, key=topic_sort_key))
+
+
+def _load_selected_matrices(
+    matrix_dir: Path, topic_ids: tuple[str, ...]
+) -> tuple[TopicMatrix, ...]:
+    selected = _selected_matrix_topics(matrix_dir, topic_ids)
+    matrices = tuple(read_topic_matrix(Path(matrix_dir) / topic_id) for topic_id in selected)
+    if tuple(matrix.topic_id for matrix in matrices) != selected:
+        raise ValueError("matrix directory and authenticated topic identities differ")
+    return matrices
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Build three variable-cutoff runs from an existing retrieval union."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    score = subparsers.add_parser("score-topic")
+    score.add_argument("--source-dir", type=Path, required=True)
+    score.add_argument("--document-store", type=Path, required=True)
+    score.add_argument("--score-cache", type=Path, required=True)
+    score.add_argument("--output-dir", type=Path, required=True)
+    score.add_argument("--topic", required=True)
+    score.add_argument("--device", default="cuda")
+    score.add_argument("--batch-size", type=int, default=32)
+    score.add_argument("--cache-only", action="store_true")
+
+    for name in ("rank", "verify"):
+        command = subparsers.add_parser(name)
+        command.add_argument("--matrix-dir", type=Path, required=True)
+        command.add_argument("--output-dir", type=Path, required=True)
+        command.add_argument("--topic", action="append", dest="topic_ids", default=[])
+    return parser
+
+
+def _score_topic_command(args: argparse.Namespace) -> dict[str, object]:
+    topic = load_topic_input(args.source_dir, args.topic, args.document_store)
+    scorer = MixedbreadPassageScorer(
+        score_cache_root=args.score_cache,
+        device=args.device,
+        batch_size=args.batch_size,
+        read_only=args.cache_only,
+    )
+    try:
+        matrix = score_topic(
+            topic,
+            scorer=scorer,
+            chunker=SemanticTextChunker(
+                config=ChunkingConfig(
+                    max_characters=3_500,
+                    overlap_characters=350,
+                )
+            ),
+        )
+        manifest_path = write_topic_matrix(matrix, args.output_dir / topic.topic_id)
+    finally:
+        scorer.score_cache.close()
+    return {
+        "status": "complete",
+        "topic_id": topic.topic_id,
+        "document_count": len(matrix.documents),
+        "semantic_unit_count": len(matrix.units),
+        "passage_pair_count": len(matrix.passages),
+        "cache_stats": dict(matrix.cache_stats),
+        "manifest_sha256": sha256(manifest_path.read_bytes()).hexdigest(),
+    }
+
+
+def _rank_command(args: argparse.Namespace) -> dict[str, object]:
+    matrices = _load_selected_matrices(args.matrix_dir, tuple(args.topic_ids))
+    manifest_path = export_runs(matrices, args.output_dir)
+    return {
+        "status": "complete",
+        "topic_count": len(matrices),
+        "manifest_sha256": sha256(manifest_path.read_bytes()).hexdigest(),
+    }
+
+
+def _verify_command(args: argparse.Namespace) -> dict[str, object]:
+    matrices = _load_selected_matrices(args.matrix_dir, tuple(args.topic_ids))
+    with tempfile.TemporaryDirectory(prefix="retrieval-baseline-verify-") as temporary:
+        expected_root = Path(temporary)
+        expected_manifest = export_runs(matrices, expected_root)
+        actual_manifest = args.output_dir / expected_manifest.name
+        if actual_manifest.read_bytes() != expected_manifest.read_bytes():
+            raise ValueError("run manifest is not the deterministic matrix projection")
+        manifest = json.loads(expected_manifest.read_bytes())
+        for relative_path in manifest["run_files"].values():
+            if (args.output_dir / relative_path).read_bytes() != (
+                expected_root / relative_path
+            ).read_bytes():
+                raise ValueError("run file is not the deterministic matrix projection")
+    return {"status": "verified", "topic_count": len(matrices)}
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command == "score-topic":
+        receipt = _score_topic_command(args)
+    elif args.command == "rank":
+        receipt = _rank_command(args)
+    else:
+        receipt = _verify_command(args)
+    print(
+        json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    )
+    return 0
 
 
 __all__ = [
@@ -1222,6 +1393,7 @@ __all__ = [
     "cutoff_decision",
     "export_runs",
     "load_topic_input",
+    "main",
     "midrank_percentiles",
     "read_topic_matrix",
     "rank_topic_matrix",
@@ -1232,3 +1404,7 @@ __all__ = [
     "weighted_passage_score",
     "write_topic_matrix",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

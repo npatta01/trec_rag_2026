@@ -2049,3 +2049,44 @@ Outputs: a six-column TREC run and one document row per topic, both shaped for
 query-relevant chunks via `trec_rag.chunking.SemanticTextChunker` instead of being left for the
 generator to head-truncate. Validation: ranks are dense and scores non-increasing so
 `load_trec_run` accepts the output, and duplicate docids are collapsed to their best rank.
+
+### `retrieval_baseline_runs.py`
+
+Builds three deterministic variable-cutoff retrieval runs from an already completed
+competition retrieval output. It never repeats BM25 retrieval. Each subnarrative uses its one
+authenticated `facet:<subnarrative>:text` lane as the pooled source; planned BM25 query strings
+are preserved as provenance but are not treated as additional result pools. The complete
+deduplicated document union is scored against the untouched narrative and each subnarrative
+text, so score-cache hits are reused for exact query-passage pairs.
+
+Score one topic (use the ROCm helper locally or `--device cuda` on an NVIDIA worker):
+
+```bash
+.venv/bin/python-rocm -m trec_rag.retrieval_baseline_runs score-topic \
+  --source-dir outputs/facet-deepseek-b40-v3 \
+  --document-store cache/documents/v1 \
+  --score-cache cache/reranker \
+  --output-dir outputs/retrieval-baseline-matrices \
+  --topic rag2026-0 --device cuda --batch-size 32
+```
+
+Project all selected authenticated matrices into the three TREC files, then independently
+recompute and verify the projection:
+
+```bash
+.venv/bin/python -m trec_rag.retrieval_baseline_runs rank \
+  --matrix-dir outputs/retrieval-baseline-matrices \
+  --output-dir outputs/retrieval-baseline-runs
+
+.venv/bin/python -m trec_rag.retrieval_baseline_runs verify \
+  --matrix-dir outputs/retrieval-baseline-matrices \
+  --output-dir outputs/retrieval-baseline-runs
+```
+
+All three runs use the same topic-specific eligible set and therefore the same variable depth
+`k_t`; only their ordering differs. Eligibility is the union of per-semantic-unit raw-score
+median/MAD outliers. Run 1 orders by narrative percentile, run 2 combines narrative and the two
+strongest subnarrative percentiles, and run 3 first orders by how many pooled subnarratives
+contribute globally strong passages. The matrix artifact contains hashes, identifiers, ranks,
+and scores but no document text. Its manifest and the run manifest record exact matrix counts,
+source-pool membership hashes, cutoff statistics, admission overlap, fallback use, and `k_t`.

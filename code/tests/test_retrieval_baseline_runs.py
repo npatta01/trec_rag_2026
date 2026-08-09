@@ -18,6 +18,7 @@ from trec_rag.retrieval_baseline_runs import (
     cutoff_decision,
     export_runs,
     load_topic_input,
+    main,
     midrank_percentiles,
     read_topic_matrix,
     rank_topic_matrix,
@@ -152,6 +153,7 @@ def test_cutoff_uses_per_unit_raw_scores_and_unions_the_admitted_documents() -> 
         "__narrative__": 1,
         "s": 1,
     }
+    assert decision.admission_multiplicity_histogram == {"1": 2}
 
 
 def test_empty_cutoff_falls_back_by_narrative_then_rank_then_bytewise_docid() -> None:
@@ -477,6 +479,9 @@ def test_topic_matrix_round_trip_is_hashed_and_contains_no_document_text(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["topic_id"] == "rag2026-2"
     assert manifest["passage_pair_count"] == len(matrix.passages)
+    assert manifest["document_semantic_pair_count"] == (
+        len(matrix.documents) * len(matrix.units)
+    )
     artifact_text = (output_dir / "topic-matrix.jsonl").read_text(encoding="utf-8")
     assert "first document text" not in artifact_text
     assert "second document text" not in artifact_text
@@ -560,3 +565,51 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
         == row["breadth_docids_sha256"]
         for row in first["topics"]
     )
+    for row in first["topics"]:
+        assert row["document_semantic_pair_count"] == 4
+        assert row["subnarrative_source_pools"]["s1"]["count"] == 1
+        assert len(row["subnarrative_source_pools"]["s1"]["docids_sha256"]) == 64
+        assert sum(
+            row["admission_multiplicity_histogram"].values()
+        ) == row["pre_fallback_count"]
+
+
+def test_rank_and_verify_cli_use_existing_topic_matrices(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    topic = load_topic_input(source, "rag2026-2", document_root)
+    matrix = score_topic(
+        topic,
+        scorer=_FakePassageScorer(cached=False),
+        chunker=SemanticTextChunker(
+            ChunkingConfig(max_characters=12, overlap_characters=3)
+        ),
+    )
+    matrix_root = tmp_path / "matrices"
+    write_topic_matrix(matrix, matrix_root / "rag2026-2")
+    run_root = tmp_path / "runs"
+
+    assert main(
+        [
+            "rank",
+            "--matrix-dir",
+            str(matrix_root),
+            "--output-dir",
+            str(run_root),
+        ]
+    ) == 0
+    rank_receipt = json.loads(capsys.readouterr().out)
+    assert rank_receipt["topic_count"] == 1
+    assert main(
+        [
+            "verify",
+            "--matrix-dir",
+            str(matrix_root),
+            "--output-dir",
+            str(run_root),
+        ]
+    ) == 0
+    verify_receipt = json.loads(capsys.readouterr().out)
+    assert verify_receipt == {"status": "verified", "topic_count": 1}
