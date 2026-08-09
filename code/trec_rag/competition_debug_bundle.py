@@ -610,7 +610,11 @@ _SUMMARY_SCRIPT = r"""
   health?.addEventListener("change", applyFilter);
   reset?.addEventListener("click", () => {
     sortNeedsAttention();
-    headers.forEach((header) => header.setAttribute("aria-sort", "none"));
+    headers.forEach((header) => {
+      const button = header.querySelector("button");
+      if (button) button.dataset.direction = "";
+      header.setAttribute("aria-sort", "none");
+    });
     if (sortStatus) sortStatus.textContent = "Needs attention: failures and fallbacks first, then official topic order.";
     applyFilter();
   });
@@ -624,9 +628,14 @@ def _render_health_cards(summary: RunSummary) -> str:
     selected = len(summary.topics)
     depth = summary.distributions["depth"]
     fallback_detail = "none"
-    kinds = sorted({kind for topic in summary.topics for kind in topic.fallback_kinds})
-    if kinds:
-        fallback_detail = ", ".join(kinds)
+    kind_counts: dict[str, int] = {}
+    for topic in summary.topics:
+        for kind in topic.fallback_kinds:
+            kind_counts[kind] = kind_counts.get(kind, 0) + 1
+    if kind_counts:
+        fallback_detail = ", ".join(
+            f"{kind}: {kind_counts[kind]}" for kind in sorted(kind_counts)
+        )
     if summary.evaluation is None:
         evaluation_state = '<span class="unavailable">Evaluation not supplied</span>'
     else:
@@ -762,12 +771,9 @@ def _render_topic_table(summary: RunSummary) -> str:
             f'<button type="button" data-label="{_escape(family_label + " " + name)}">{_escape(name)}</button></th>'
         )
 
-    # Attention-first order is deterministic and the JavaScript can restore the
-    # same order after filtering or when the reset control is used.
-    priority = {"empty": 0, "failure": 0, "fallback": 1, "complete": 2}
-    ordered_topics = tuple(
-        sorted(summary.topics, key=lambda topic: (priority.get(topic.health, 1), summary.topics.index(topic)))
-    )
+    # Keep the source order in static HTML.  The script progressively enhances
+    # it into the Needs attention order when JavaScript is available.
+    ordered_topics = summary.topics
     rows: list[str] = []
     for topic in ordered_topics:
         official_order = summary.topics.index(topic)
@@ -876,17 +882,27 @@ def _summary_denylist(data: DebugReportData) -> tuple[str, ...]:
         add(str(digest))
     for topic in data.topics:
         add(topic.narrative_sha256)
+        for subnarrative in topic.subnarratives:
+            add(subnarrative.semantic_query_sha256)
+            for digest in subnarrative.bm25_query_sha256s:
+                add(digest)
         for document in topic.retrieval_output.documents:
             add(document.docid)
-            add(document.text_sha256)
             for digest in document.source_seals.values():
                 add(digest)
+            for score in document.subnarrative_scores:
+                add(score.get("semantic_query_sha256"))
+                add(score.get("text_sha256"))
+                for digest in score.get("bm25_query_sha256s", ()):
+                    add(digest)
         for document in topic.selected_documents:
             add(document.docid)
             add(document.text_sha256)
         for document in topic.new_documents:
             add(document.docid)
             add(document.text_sha256)
+            for provenance in document.lane_provenance:
+                add(provenance.text_sha256)
         for ranking in topic.passage_rankings:
             add(ranking.docid)
             add(ranking.document_sha256)

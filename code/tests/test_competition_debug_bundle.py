@@ -284,7 +284,7 @@ def _evaluated_two_topic_data(tmp_path: Path):
     fixture = build_run(
         tmp_path,
         (
-            TopicSpec("alpha-topic", "private alpha narrative"),
+            TopicSpec("alpha-topic", "private alpha narrative </script><script>"),
             TopicSpec("beta-topic", "private beta narrative"),
         ),
     )
@@ -333,6 +333,8 @@ def test_summary_html_shows_health_scores_and_unavailability_without_private_tex
     assert "Unavailable" in page
     assert "no released gold-nugget file" in page
     assert "private alpha narrative" not in page
+    assert "</script><script>" not in page
+    assert "<script>private alpha narrative" not in page
     assert all(docid not in page for docid in private_docids)
     assert 'href="topics/alpha-topic.html"' in page
     assert 'data-sort-kind="number"' in page
@@ -385,3 +387,124 @@ def test_summary_privacy_scan_rejects_a_run_derived_collision(tmp_path: Path) ->
             build_run_summary(data, None),
             denylist=("alpha-topic",),
         )
+
+
+def test_summary_denylist_real_fixture_can_render_without_invalid_document_digest_access(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import (
+        _summary_denylist,
+        build_run_summary,
+        render_bundle_summary,
+    )
+
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    data = load_debug_report_data(fixture.retrieval_config)
+    denylist = _summary_denylist(data)
+
+    page = render_bundle_summary(build_run_summary(data, None), denylist=denylist)
+
+    assert page.startswith("<!doctype html>")
+    assert denylist
+
+
+def test_summary_denylist_collects_all_query_and_retrieval_digests(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import _summary_denylist
+
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    data = load_debug_report_data(fixture.retrieval_config)
+    topic = data.topics[0]
+    subnarrative = replace(
+        topic.subnarratives[0],
+        semantic_query_sha256="1" * 64,
+        bm25_query_sha256s=("2" * 64,),
+    )
+    lane_provenance = replace(
+        topic.new_documents[0].lane_provenance[0], text_sha256="3" * 64
+    )
+    new_document = replace(
+        topic.new_documents[0], lane_provenance=(lane_provenance,)
+    )
+    retrieval_score = dict(topic.retrieval_output.documents[0].subnarrative_scores[0])
+    retrieval_score.update(
+        {
+            "semantic_query_sha256": "4" * 64,
+            "bm25_query_sha256s": ["5" * 64],
+            "text_sha256": "6" * 64,
+        }
+    )
+    retrieval_document = replace(
+        topic.retrieval_output.documents[0],
+        subnarrative_scores=(retrieval_score,),
+    )
+    updated_topic = replace(
+        topic,
+        subnarratives=(subnarrative,),
+        new_documents=(new_document, *topic.new_documents[1:]),
+        retrieval_output=replace(
+            topic.retrieval_output, documents=(retrieval_document,)
+        ),
+    )
+    updated_data = replace(data, topics=(updated_topic,))
+
+    denylist = set(_summary_denylist(updated_data))
+
+    assert {str(index) * 64 for index in range(1, 7)} <= denylist
+
+
+def test_summary_static_rows_remain_official_order_before_attention_enhancement(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import build_run_summary, render_bundle_summary
+
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    data = load_debug_report_data(fixture.retrieval_config)
+    fallback_result = replace(data.topics[1].canonical_results[0], state="fallback_extractive")
+    fallback_topic = replace(
+        data.topics[1],
+        original_only_fallback=True,
+        canonical_results=(fallback_result,),
+    )
+    summary = build_run_summary(replace(data, topics=(data.topics[0], fallback_topic)), None)
+
+    page = render_bundle_summary(summary, denylist=())
+
+    assert page.index('data-topic-id="alpha-topic"') < page.index('data-topic-id="beta-topic"')
+
+
+def test_summary_needs_attention_reset_clears_metric_sort_direction() -> None:
+    from trec_rag.competition_debug_bundle import _SUMMARY_SCRIPT
+
+    reset_start = _SUMMARY_SCRIPT.index('reset?.addEventListener("click"')
+    reset_end = _SUMMARY_SCRIPT.index("  });\n  sortNeedsAttention();", reset_start)
+    reset_block = _SUMMARY_SCRIPT[reset_start:reset_end]
+
+    assert 'button.dataset.direction = ""' in reset_block
+    assert 'header.setAttribute("aria-sort", "none")' in reset_block
+
+
+def test_summary_health_cards_report_each_fallback_kind_count(tmp_path: Path) -> None:
+    from trec_rag.competition_debug_bundle import build_run_summary, render_bundle_summary
+
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    data = load_debug_report_data(fixture.retrieval_config)
+    fallback_result = replace(data.topics[0].canonical_results[0], state="fallback_extractive")
+    fallback_alpha = replace(
+        data.topics[0],
+        canonical_results=(fallback_result,),
+    )
+    fallback_beta = replace(data.topics[1], original_only_fallback=True)
+    summary = build_run_summary(replace(data, topics=(fallback_alpha, fallback_beta)), None)
+
+    page = render_bundle_summary(summary, denylist=())
+
+    assert "fallback_extractive: 1" in page
+    assert "original_only: 1" in page
