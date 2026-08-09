@@ -21,6 +21,10 @@ from trec_rag.rerank_score_cache import (
     DEFAULT_INFERENCE_DTYPE,
     ScoreCacheMiss,
 )
+from trec_rag.runpod_passage_scorer import (
+    remote_score_cache_context,
+    remote_scorer_identity,
+)
 
 
 class _Parameter:
@@ -45,6 +49,27 @@ class FakeModel:
 class WrongDtypeModel(FakeModel):
     def parameters(self):
         return [SimpleNamespace(dtype="torch.float32")]
+
+
+class FakeRemoteBackend:
+    def __init__(
+        self,
+        scores: list[object],
+        *,
+        request_batch_size: int = 256,
+        failure: Exception | None = None,
+    ) -> None:
+        self.scores = scores
+        self.cache_context = remote_score_cache_context()
+        self.identity = remote_scorer_identity(request_batch_size)
+        self.failure = failure
+        self.calls: list[list[tuple[str, str]]] = []
+
+    def predict(self, pairs):
+        self.calls.append(list(pairs))
+        if self.failure is not None:
+            raise self.failure
+        return self.scores
 
 
 def chunks(*texts: str) -> tuple[TextChunk, ...]:
@@ -104,6 +129,80 @@ def test_scorer_exposes_cumulative_cache_and_model_batch_accounting(tmp_path: Pa
     scorer.rank("query", chunks("cached", "new-a", "new-b"))
     assert scorer.stats == {"cache_hits": 4, "cache_misses": 2, "model_batches": 1}
     assert len(model.calls) == 1
+
+
+def test_remote_backend_uses_distinct_context_and_batches_only_cache_misses(
+    tmp_path: Path,
+) -> None:
+    seed_backend = FakeRemoteBackend([0.1])
+    seed = MixedbreadPassageScorer(
+        tmp_path,
+        prediction_backend=seed_backend,
+        request_batch_size=256,
+    )
+    seed.rank("query", chunks("cached"))
+    seed.score_cache.close()
+    backend = FakeRemoteBackend([0.7, 0.8])
+    scorer = MixedbreadPassageScorer(
+        tmp_path,
+        model_loader=lambda **_: pytest.fail("remote scorer loaded a local model"),
+        prediction_backend=backend,
+        request_batch_size=256,
+    )
+
+    rows = scorer.rank("query", chunks("cached", "new-a", "new-b"))
+
+    assert [row.relevance_score for row in rows] == [0.1, 0.7, 0.8]
+    assert backend.calls == [[("query", "new-a"), ("query", "new-b")]]
+    assert scorer.score_cache.context_sha256 == backend.cache_context.context_sha256
+    assert scorer.identity == remote_scorer_identity(256)
+    assert scorer.stats == {"cache_hits": 1, "cache_misses": 2, "model_batches": 1}
+
+
+def test_remote_cache_hit_never_invokes_backend(tmp_path: Path) -> None:
+    seed = MixedbreadPassageScorer(
+        tmp_path,
+        prediction_backend=FakeRemoteBackend([0.7]),
+        request_batch_size=256,
+    )
+    seed.rank("query", chunks("cached"))
+    seed.score_cache.close()
+    backend = FakeRemoteBackend([], failure=AssertionError("remote backend invoked"))
+    replay = MixedbreadPassageScorer(
+        tmp_path,
+        prediction_backend=backend,
+        request_batch_size=256,
+    )
+
+    rows = replay.rank("query", chunks("cached"))
+
+    assert rows[0].relevance_score == 0.7
+    assert backend.calls == []
+
+
+def test_remote_malformed_batch_commits_no_partial_scores(tmp_path: Path) -> None:
+    backend = FakeRemoteBackend([0.7])
+    scorer = MixedbreadPassageScorer(
+        tmp_path,
+        prediction_backend=backend,
+        request_batch_size=256,
+    )
+
+    with pytest.raises(ValueError, match="count"):
+        scorer.rank("query", chunks("first", "second"))
+
+    assert scorer.score_cache.scores == {}
+
+
+def test_remote_backend_identity_must_match_request_batch_size(tmp_path: Path) -> None:
+    backend = FakeRemoteBackend([0.7], request_batch_size=64)
+
+    with pytest.raises(ValueError, match="request batch size"):
+        MixedbreadPassageScorer(
+            tmp_path,
+            prediction_backend=backend,
+            request_batch_size=256,
+        )
 
 
 def test_scorer_does_not_count_model_batch_when_model_loading_fails(tmp_path: Path) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -150,6 +150,8 @@ class MixedbreadPassageScorer:
         model_loader: Callable[..., Any] = load_pinned_cross_encoder,
         batch_size: int = 8,
         read_only: bool = False,
+        prediction_backend: Any | None = None,
+        request_batch_size: int | None = None,
     ) -> None:
         if not isinstance(device, str) or not device.strip():
             raise ValueError("device must be a nonblank string")
@@ -159,9 +161,74 @@ class MixedbreadPassageScorer:
             raise TypeError("model_loader must be callable")
         if not isinstance(read_only, bool):
             raise TypeError("read_only must be a bool")
+        if request_batch_size is not None and (
+            isinstance(request_batch_size, bool)
+            or not isinstance(request_batch_size, int)
+            or request_batch_size <= 0
+        ):
+            raise ValueError("request_batch_size must be a positive integer")
 
-        self.batch_size = batch_size
-        self._device = _choose_device(device)
+        self._prediction_backend = prediction_backend
+        self._score_batch_size = batch_size
+        score_cache_context = ScoreCacheContext(
+            backend=BACKEND,
+            backend_version=BACKEND_VERSION,
+            model=MIXEDBREAD_MODEL,
+            model_revision=MIXEDBREAD_REVISION,
+            max_length=MAX_LENGTH,
+            requested_max_length=MAX_LENGTH,
+            score_kind=SCORE_KIND,
+            score_representation=SCORE_REPRESENTATION,
+            inference_dtype=INFERENCE_DTYPE,
+            input_policy=INPUT_POLICY,
+        )
+        self._remote_identity: dict[str, object] | None = None
+        if prediction_backend is None:
+            if request_batch_size is not None:
+                raise ValueError("request_batch_size requires a prediction backend")
+            self.batch_size = batch_size
+            self._device = _choose_device(device)
+        else:
+            predict = getattr(prediction_backend, "predict", None)
+            cache_context = getattr(prediction_backend, "cache_context", None)
+            backend_identity = getattr(prediction_backend, "identity", None)
+            if not callable(predict):
+                raise TypeError("prediction_backend must expose a callable predict method")
+            if not isinstance(cache_context, ScoreCacheContext):
+                raise TypeError("prediction_backend must expose a ScoreCacheContext")
+            if not isinstance(backend_identity, Mapping):
+                raise TypeError("prediction_backend must expose a mapping identity")
+            selected_request_batch_size = (
+                backend_identity.get("request_batch_size")
+                if request_batch_size is None
+                else request_batch_size
+            )
+            if (
+                isinstance(selected_request_batch_size, bool)
+                or not isinstance(selected_request_batch_size, int)
+                or selected_request_batch_size <= 0
+            ):
+                raise ValueError("remote request batch size must be a positive integer")
+            if backend_identity.get("request_batch_size") != selected_request_batch_size:
+                raise ValueError("prediction backend identity differs from request batch size")
+            if backend_identity.get("cache_context_sha256") != cache_context.context_sha256:
+                raise ValueError("prediction backend identity differs from cache context")
+            model_batch_size = backend_identity.get("batch_size")
+            if (
+                isinstance(model_batch_size, bool)
+                or not isinstance(model_batch_size, int)
+                or model_batch_size <= 0
+            ):
+                raise ValueError("prediction backend identity has an invalid model batch size")
+            backend_device = backend_identity.get("device")
+            if not isinstance(backend_device, str) or not backend_device.strip():
+                raise ValueError("prediction backend identity has an invalid device")
+            json.dumps(backend_identity, sort_keys=True, separators=(",", ":"))
+            self.batch_size = model_batch_size
+            self._device = backend_device
+            self._score_batch_size = selected_request_batch_size
+            self._remote_identity = dict(backend_identity)
+            score_cache_context = cache_context
         self._model_loader = model_loader
         self._model: Any | None = None
         self._model_lock = Lock()
@@ -169,23 +236,14 @@ class MixedbreadPassageScorer:
         self._stats = {"cache_hits": 0, "cache_misses": 0, "model_batches": 0}
         self.score_cache = GlobalScoreCache(
             Path(score_cache_root),
-            ScoreCacheContext(
-                backend=BACKEND,
-                backend_version=BACKEND_VERSION,
-                model=MIXEDBREAD_MODEL,
-                model_revision=MIXEDBREAD_REVISION,
-                max_length=MAX_LENGTH,
-                requested_max_length=MAX_LENGTH,
-                score_kind=SCORE_KIND,
-                score_representation=SCORE_REPRESENTATION,
-                inference_dtype=INFERENCE_DTYPE,
-                input_policy=INPUT_POLICY,
-            ),
+            score_cache_context,
             read_only=read_only,
         )
 
     @property
     def identity(self) -> dict[str, object]:
+        if self._remote_identity is not None:
+            return dict(self._remote_identity)
         identity = {
             "backend": BACKEND,
             "backend_version": BACKEND_VERSION,
@@ -220,15 +278,19 @@ class MixedbreadPassageScorer:
 
         def compute_batch(batch: Sequence[tuple[str, str]]) -> tuple[float, ...]:
             nonlocal model_batches
-            model = self._get_model()
-            model_batches += 1
-            predicted = model.predict(
-                list(batch),
-                batch_size=self.batch_size,
-                show_progress_bar=False,
-                convert_to_tensor=True,
-                activation_fn=_identity,
-            )
+            if self._prediction_backend is None:
+                model = self._get_model()
+                model_batches += 1
+                predicted = model.predict(
+                    list(batch),
+                    batch_size=self.batch_size,
+                    show_progress_bar=False,
+                    convert_to_tensor=True,
+                    activation_fn=_identity,
+                )
+            else:
+                model_batches += 1
+                predicted = self._prediction_backend.predict(tuple(batch))
             return _model_scores(predicted, expected_count=len(batch))
 
         call_stats: dict[str, int] = {}
@@ -236,7 +298,7 @@ class MixedbreadPassageScorer:
             cached = self.score_cache.score_many(
                 pairs,
                 compute_batch,
-                batch_size=self.batch_size,
+                batch_size=self._score_batch_size,
                 _stats=call_stats,
             )
         finally:
