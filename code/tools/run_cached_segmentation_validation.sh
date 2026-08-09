@@ -9,6 +9,8 @@ TOPICS=("14" "31" "37" "58" "72" "84" "144" "161" "200" "213" "219" "224" "225" 
 MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 MINILM_REVISION="1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
 SOURCE_VERIFY_WORKERS=8
+PROBE_WORKERS=2
+SELECTED_WORKERS=20
 
 preflight=false
 run_id=""
@@ -93,7 +95,7 @@ if $preflight; then
     "preflight=ok" \
     "topic_ids=$topics_csv" \
     "topic_count=22" \
-    "topic_workers=4" \
+    "topic_workers=$SELECTED_WORKERS" \
     "source_verify_workers=$SOURCE_VERIFY_WORKERS" \
     "canary_topic=407" \
     "warm_probe_topics=14,31" \
@@ -374,7 +376,7 @@ PY
 }
 
 final_config="$config_root/${run_id}.yaml"
-make_config "$final_config" "$run_id" 4
+make_config "$final_config" "$run_id" "$SELECTED_WORKERS"
 
 diagnostic_stage="canary-rescore"
 "$venv_python" -m trec_rag.competition_retrieval "$final_config" \
@@ -437,13 +439,18 @@ propagate_probe_failure "$probe_status"
 concurrency_decision="$validation_root/concurrency-decision.json"
 "$venv_python" - "$probe_memory" "$concurrency_decision" \
   "$probe_started" "$probe_finished" "$run_id" "$final_config" \
-  "$gpu_identity" <<'PY'
+  "$gpu_identity" "$PROBE_WORKERS" "$SELECTED_WORKERS" <<'PY'
 from pathlib import Path
 from hashlib import sha256
 import csv, json, sys
 source, destination = map(Path, sys.argv[1:3])
 started, finished = map(int, sys.argv[3:5])
-run_id, config_path, gpu_identity_path = sys.argv[5:]
+run_id, config_path, gpu_identity_path = sys.argv[5:8]
+probe_workers, selected_workers = map(int, sys.argv[8:])
+if probe_workers != 2 or selected_workers < probe_workers or selected_workers > 32:
+    raise SystemExit("worker selection is outside the validated range")
+if selected_workers % probe_workers:
+    raise SystemExit("selected workers must be an exact multiple of probe workers")
 samples = []
 for line in source.read_text().splitlines():
     fields = [field.strip() for field in line.split(",")]
@@ -455,11 +462,11 @@ if not samples or len({total for _, total in samples}) != 1:
 idle = samples[0][0]
 peak = max(used for used, _ in samples)
 total = samples[0][1]
-projected = idle + 2 * max(0, peak - idle)
+projected = idle + (selected_workers // probe_workers) * max(0, peak - idle)
 safe_limit = int(total * 0.90)
 if projected > safe_limit:
     raise SystemExit(
-        f"four-worker projection {projected} MiB exceeds 90% limit {safe_limit} MiB"
+        f"selected-worker projection {projected} MiB exceeds 90% limit {safe_limit} MiB"
     )
 with Path(gpu_identity_path).open(newline="") as source_file:
     identity_rows = [tuple(field.strip() for field in row) for row in csv.reader(source_file)]
@@ -469,20 +476,20 @@ gpu_name, gpu_uuid, driver_version = identity_rows[0]
 if not any(model in gpu_name for model in ("H100", "H200")) or not gpu_uuid.startswith("GPU-"):
     raise SystemExit("GPU identity differs from the approved task class")
 value = {
-    "schema_version": "cached-segmentation-concurrency-decision-v1",
+    "schema_version": "cached-segmentation-concurrency-decision-v2",
     "run_id": run_id,
     "config_sha256": sha256(Path(config_path).read_bytes()).hexdigest(),
     "gpu_name": gpu_name,
     "gpu_uuid": gpu_uuid,
     "driver_version": driver_version,
     "probe_topics": ["14", "31"],
-    "probe_workers": 2,
-    "selected_workers": 4,
+    "probe_workers": probe_workers,
+    "selected_workers": selected_workers,
     "elapsed_seconds": finished - started,
     "idle_memory_mib": idle,
     "peak_memory_mib": peak,
     "total_memory_mib": total,
-    "projected_four_worker_memory_mib": projected,
+    "projected_selected_worker_memory_mib": projected,
     "safe_limit_memory_mib": safe_limit,
 }
 destination.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")

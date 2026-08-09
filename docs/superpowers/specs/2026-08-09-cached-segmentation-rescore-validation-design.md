@@ -82,17 +82,20 @@ Topic 407 runs alone first on the leased machine because it has the clearest
 known fragmentation baseline. The wrapper validates its cache counters,
 artifacts, and structural before/after metrics before continuing.
 
-After the canary passes, run multiple topics concurrently on the same GPU. Use
-two workers as the proven floor and permit four only on an 80 GB or larger GPU
-when the two-topic probe projects usage below 90% of VRAM. The
-wrapper records worker count, GPU identity, elapsed time, and peak memory. It
-must fail rather than silently reduce validation or restart retrieval after an
-out-of-memory error.
+After the canary passes, run exactly twenty topic workers on the same GPU host;
+the final invocation has at most nineteen pending topics because the canary and
+two probe topics resume. This choice follows the live H100 evidence: one topic
+kept one CPU core busy while GPU utilization was sparse, used about 6.7 GiB of
+host RSS and 2.32 GiB of VRAM, and took more than fifty minutes downstream.
+The task therefore requires at least 24 CPU cores and 192 GB host RAM.
 
-The concurrency goal is throughput, not maximum process count. Four model
-copies that saturate memory without improving topics/hour are worse than two.
-The final choice is recorded from the canary and a short two-worker throughput
-probe on the same lease; the remaining topics use the faster safe setting.
+A same-machine two-worker probe records GPU identity, elapsed time, idle VRAM,
+and peak VRAM. Twenty workers are admitted only when the exact linear
+projection `idle + 10 * (peak - idle)` stays at or below 90% of device memory.
+The result verifier binds the decision to the config and export and accepts
+exactly twenty workers. The wrapper fails rather than silently reducing
+concurrency, weakening validation, or restarting retrieval after an
+out-of-memory error.
 
 ## Remote Data Flow
 
@@ -106,7 +109,7 @@ probe on the same lease; the remaining topics use the faster safe setting.
 5. Verify each archive and merge all bundles into a fresh task-local cache.
    Never copy a live SQLite database between machines.
 6. Run topic 407 in `cached-upstream-rescore` mode and apply the canary gates.
-7. Select safe two- or four-topic concurrency and run the remaining 21 topics.
+7. Project the two-topic probe to twenty workers and run all outstanding topics.
 8. Validate all topic receipts and the aggregate retrieval export/handoff.
 9. Produce a private before/after validation report.
 10. Pack, locally verify, upload, download, byte-compare, and semantically
@@ -174,7 +177,7 @@ automatic promotion and is preserved for inspection.
 
 Promote only when all of the following are true:
 
-- all 22 topics complete on one dstack machine;
+- all 22 topics complete on one dstack machine with twenty probe-gated workers;
 - every upstream no-work counter is exactly zero;
 - all checkpoint, provenance, handoff, archive, and round-trip validators pass;
 - deterministic fragmentation metrics improve and selected evidence does not

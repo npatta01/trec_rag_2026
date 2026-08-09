@@ -196,7 +196,9 @@ def _write_phase(topic_root: Path, topic_id: str, phase: str) -> None:
     )
 
 
-def _result_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _result_fixture(
+    tmp_path: Path, *, selected_workers: int = 20
+) -> tuple[Path, Path]:
     run_root = tmp_path / "run"
     validation_root = tmp_path / "validation"
     handoff = _handoff(run_root / "generation_handoff_manifest.json")
@@ -291,7 +293,7 @@ def _result_fixture(tmp_path: Path) -> tuple[Path, Path]:
             "run_id": "fixture-run",
             "export_code_commit": "c" * 40,
             "selected_topic_ids": list(TOPICS),
-            "execution": {"topic_workers": 4},
+            "execution": {"topic_workers": selected_workers},
             "topic_receipts": topic_receipts,
             "artifacts": {
                 "generation_handoff_manifest.json": {
@@ -378,7 +380,7 @@ def _result_fixture(tmp_path: Path) -> tuple[Path, Path]:
     _write_json(
         validation_root / "concurrency-decision.json",
         {
-            "schema_version": "cached-segmentation-concurrency-decision-v1",
+            "schema_version": "cached-segmentation-concurrency-decision-v2",
             "run_id": "fixture-run",
             "config_sha256": config_sha,
             "gpu_name": "NVIDIA H100 80GB HBM3",
@@ -386,12 +388,14 @@ def _result_fixture(tmp_path: Path) -> tuple[Path, Path]:
             "driver_version": "575.57.08",
             "probe_topics": ["14", "31"],
             "probe_workers": 2,
-            "selected_workers": 4,
+            "selected_workers": selected_workers,
             "elapsed_seconds": 120,
             "idle_memory_mib": 1000,
-            "peak_memory_mib": 20000,
+            "peak_memory_mib": 7000,
             "total_memory_mib": 81559,
-            "projected_four_worker_memory_mib": 39000,
+            "projected_selected_worker_memory_mib": (
+                1000 + (selected_workers // 2) * (7000 - 1000)
+            ),
             "safe_limit_memory_mib": 73403,
         },
     )
@@ -822,7 +826,7 @@ def test_result_pack_rejects_unsafe_concurrency_decision(tmp_path: Path) -> None
     run_root, validation_root = _result_fixture(tmp_path / "source")
     path = validation_root / "concurrency-decision.json"
     value = json.loads(path.read_text())
-    value["projected_four_worker_memory_mib"] = 80000
+    value["projected_selected_worker_memory_mib"] = 80000
     _write_json(path, value)
 
     with pytest.raises(
@@ -842,7 +846,7 @@ def test_result_pack_rejects_internally_inconsistent_concurrency_decision(
     run_root, validation_root = _result_fixture(tmp_path / "source")
     path = validation_root / "concurrency-decision.json"
     value = json.loads(path.read_text())
-    value["projected_four_worker_memory_mib"] = 0
+    value["projected_selected_worker_memory_mib"] = 0
     value["safe_limit_memory_mib"] = 0
     _write_json(path, value)
 
@@ -869,6 +873,54 @@ def test_result_pack_rejects_concurrency_decision_from_another_run(
     with pytest.raises(
         bundle_module.ResultBundleIntegrityError,
         match="concurrency decision",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
+        )
+
+
+def test_result_pack_accepts_measured_twenty_worker_decision(tmp_path: Path) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(
+        tmp_path / "source", selected_workers=20
+    )
+    receipt = bundle_module.pack_result_bundle(
+        run_root, validation_root, tmp_path / "bundle"
+    )
+
+    assert receipt.bundle_kind == "result"
+
+
+def test_result_pack_rejects_worker_count_not_covered_by_probe(tmp_path: Path) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    path = validation_root / "concurrency-decision.json"
+    value = json.loads(path.read_text())
+    value["selected_workers"] = 21
+    value["projected_selected_worker_memory_mib"] = 61000
+    _write_json(path, value)
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="concurrency decision",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
+        )
+
+
+def test_result_pack_rejects_matching_lower_even_worker_count(tmp_path: Path) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(
+        tmp_path / "source", selected_workers=4
+    )
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="retrieval export identity|concurrency decision",
     ):
         bundle_module.pack_result_bundle(
             run_root, validation_root, tmp_path / "bundle"

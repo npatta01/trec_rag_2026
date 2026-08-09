@@ -22,11 +22,12 @@ commands:
   - 'bash code/tools/run_cached_segmentation_validation.sh ${{ run.args }}'
 
 resources:
+  cpu: 24..
   gpu:
     name: [H200, H100]
     count: 1
     memory: 80GB..
-  memory: 64GB..
+  memory: 192GB..
   disk: 100GB
 
 backends: [runpod, vastai]

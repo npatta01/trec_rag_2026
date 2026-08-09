@@ -2109,8 +2109,9 @@ path requires the approved backend, region, instance type, H200/H100 GPU, and
 hourly-price cap, re-previews those exact constraints, then submits exactly one
 detached task. The remote wrapper authenticates all 22 portable source bundles
 before one strict merge, restores the private baseline, runs topic 407 first,
-then samples peak memory while processing topics 14/31. Four workers proceed
-only when projected usage is at most 90% of the 80+ GB GPU; the signed-off
+then samples peak memory while processing topics 14/31. Twenty workers proceed
+only when their linear projection is at most 90% of the 80+ GB GPU; the task
+also requires at least 192 GB of host RAM and 24 CPU cores. The signed-off
 decision is included in the private result bundle. Canary/probe topic receipts
 resume in the same final run namespace. The archive is uploaded before its
 completion marker, then both are downloaded and revalidated. Planning,

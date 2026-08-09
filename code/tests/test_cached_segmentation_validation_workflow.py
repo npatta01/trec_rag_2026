@@ -63,7 +63,7 @@ def test_wrapper_preflight_freezes_all22_and_zero_upstream_expectations() -> Non
     assert result.returncode == 0, result.stderr
     assert f"topic_ids={','.join(TOPICS)}" in result.stdout
     assert "topic_count=22" in result.stdout
-    assert "topic_workers=4" in result.stdout
+    assert "topic_workers=20" in result.stdout
     assert "source_verify_workers=8" in result.stdout
     assert "planning_calls_expected=0" in result.stdout
     assert "retrieval_network_calls_expected=0" in result.stdout
@@ -91,7 +91,8 @@ def test_task_uses_one_fast_bounded_on_demand_gpu_and_only_named_secrets() -> No
     assert value["resources"]["gpu"]["count"] == 1
     assert value["resources"]["gpu"]["memory"] == "80GB.."
     assert value["resources"]["gpu"]["name"] == ["H200", "H100"]
-    assert value["resources"]["memory"] == "64GB.."
+    assert value["resources"]["cpu"] == "24.."
+    assert value["resources"]["memory"] == "192GB.."
     assert value["resources"]["disk"] == "100GB"
     assert value["backends"] == ["runpod", "vastai"]
     assert value["spot_policy"] == "on-demand"
@@ -242,15 +243,16 @@ def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> N
     assert "cached_segmentation_validation structural" in wrapper
     assert "cached_segmentation_validation semantic" in wrapper
     assert wrapper.count('--document-store-root "$cache_root/documents/v1"') == 2
-    assert "cached-segmentation-concurrency-decision-v1" in wrapper
+    assert "cached-segmentation-concurrency-decision-v2" in wrapper
     assert "peak_memory_mib" in wrapper
-    assert "projected_four_worker_memory_mib" in wrapper
+    assert "projected_selected_worker_memory_mib" in wrapper
     assert "nvidia-smi --query-gpu=memory.used,memory.total" in wrapper
     assert "nvidia-smi --query-gpu=name,uuid,driver_version" in wrapper
     assert '"config_sha256": sha256(Path(config_path).read_bytes()).hexdigest()' in wrapper
     assert '"run_id": run_id' in wrapper
     assert '"gpu_uuid": gpu_uuid' in wrapper
-    assert 'make_config "$final_config" "$run_id" 4' in wrapper
+    assert "SELECTED_WORKERS=20" in wrapper
+    assert 'make_config "$final_config" "$run_id" "$SELECTED_WORKERS"' in wrapper
     assert (
         '"$venv_python" -m trec_rag.competition_retrieval "$final_config" \\\n'
         '  --topic 407 --topic 14 --topic 31 --cached-upstream-rescore'
