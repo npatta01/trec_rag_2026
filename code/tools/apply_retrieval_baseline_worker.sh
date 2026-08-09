@@ -89,6 +89,7 @@ source_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || die "sourc
 tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || die "source branch has no tracking branch"
 tracking_commit=$(git rev-parse --verify "$tracking_ref^{commit}") || die "tracking branch does not resolve to a commit"
 source_head=$(git rev-parse --verify 'HEAD^{commit}') || die "source HEAD does not resolve to a commit"
+source_tree=$(git rev-parse --verify 'HEAD^{tree}') || die "source HEAD tree does not resolve"
 git merge-base --is-ancestor "$tracking_commit" "$source_head" || die "tracking commit must be an ancestor of HEAD"
 git --no-pager diff --check "$tracking_ref"
 source_status=$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none) || die "unable to inspect source worktree"
@@ -151,6 +152,8 @@ worker_args=(
   --input-prefix "$input_prefix"
   --input-manifest-sha256 "$input_manifest_sha256"
   --output-prefix "$output_prefix"
+  --source-revision "$source_head"
+  --source-tree "$source_tree"
 )
 bash "$snapshot/code/tools/run_retrieval_baseline_worker.sh" --preflight "${worker_args[@]}"
 

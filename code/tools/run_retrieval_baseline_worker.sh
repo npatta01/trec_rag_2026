@@ -12,13 +12,15 @@ task_name=""
 input_prefix=""
 input_manifest_sha256=""
 output_prefix=""
+source_revision=""
+source_tree=""
 
 usage() {
   cat <<'EOF'
 Usage:
   run_retrieval_baseline_worker.sh [--preflight] --task-name SAFE_NAME \
     --input-prefix HF_PREFIX --input-manifest-sha256 SHA256 \
-    --output-prefix HF_PREFIX
+    --output-prefix HF_PREFIX --source-revision GIT_SHA --source-tree GIT_TREE
 
 The authenticated input manifest assigns exactly 119 topics. The worker scores
 rag2026-1 and rag2026-18 first, verifies a fresh cache-only replay, and then
@@ -60,6 +62,8 @@ while (($#)); do
     --input-prefix) (($# >= 2)) || die "--input-prefix needs a value"; input_prefix=$2; shift 2 ;;
     --input-manifest-sha256) (($# >= 2)) || die "--input-manifest-sha256 needs a value"; input_manifest_sha256=$2; shift 2 ;;
     --output-prefix) (($# >= 2)) || die "--output-prefix needs a value"; output_prefix=$2; shift 2 ;;
+    --source-revision) (($# >= 2)) || die "--source-revision needs a value"; source_revision=$2; shift 2 ;;
+    --source-tree) (($# >= 2)) || die "--source-tree needs a value"; source_tree=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -70,6 +74,10 @@ safe_hf_prefix "$input_prefix" || die "--input-prefix must be a safe private hf:
 safe_hf_prefix "$output_prefix" || die "--output-prefix must be a safe private hf:// prefix"
 [[ $input_manifest_sha256 =~ ^[0-9a-f]{64}$ ]] \
   || die "--input-manifest-sha256 must be a lowercase SHA-256 digest"
+[[ $source_revision =~ ^[0-9a-f]{40}$ ]] \
+  || die "--source-revision must be a lowercase Git commit"
+[[ $source_tree =~ ^[0-9a-f]{40}$ ]] \
+  || die "--source-tree must be a lowercase Git tree"
 [[ $input_prefix != "$output_prefix" ]] || die "input and output prefixes must differ"
 
 cd "$REPO_ROOT"
@@ -87,6 +95,8 @@ if $preflight; then
     "input_prefix=$input_prefix" \
     "input_manifest_sha256=$input_manifest_sha256" \
     "output_prefix=$output_prefix" \
+    "source_revision=$source_revision" \
+    "source_tree=$source_tree" \
     "live_model_processes=1"
   exit 0
 fi
@@ -94,9 +104,10 @@ fi
 [[ -n ${HF_TOKEN:-} ]] || die "required dstack secret is missing: HF_TOKEN"
 [[ ${HF_CLI_MODE:-direct} == direct ]] || die "HF_CLI_MODE must be direct"
 git submodule update --init --recursive
-git_status=$(git status --porcelain=v1 --untracked-files=no --ignore-submodules=none)
-[[ -z $git_status ]] || die "tracked worker source or submodule state is dirty"
-source_revision=$(git rev-parse 'HEAD^{commit}')
+git add -A
+actual_source_tree=$(git write-tree) || die "could not derive transported source tree"
+[[ $actual_source_tree == "$source_tree" ]] \
+  || die "transported worker source differs from the reviewed tree"
 export TREC_RAG_SOURCE_REVISION="$source_revision"
 image_python=$(command -v python3) || die "the pinned image has no python3 interpreter"
 image_python=$("$image_python" -c 'import os,sys; print(os.path.realpath(sys.executable))') \
