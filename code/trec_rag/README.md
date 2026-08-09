@@ -1065,6 +1065,13 @@ hashes, writes `bundle-manifest.json` last, and atomically renames the complete
 directory into place. The receipt and manifest must reconcile
 `index_path`, ordered `topic_ids`, `page_count`, `total_bytes`,
 `bundle_manifest_sha256`, `rag_included`, and `evaluation_included`.
+`page_count` is exactly `1 + len(topic_ids)`: one `index.html` plus one topic
+HTML page per ordered topic ID, excluding `bundle-manifest.json`; therefore an
+all-119-topic bundle has `page_count: 120`. `total_bytes` must exactly equal
+the bytes of `index.html`, every topic HTML page, and `bundle-manifest.json`,
+and must reconcile with both the manifest and the actual files. The
+`bundle_manifest_sha256` must exactly match the SHA-256 of the
+`bundle-manifest.json` bytes.
 
 Score overlays keep these families separate: retrieval relevance; nugget or
 obligation coverage; and answer and citation quality. A metric that lacks its
@@ -1081,7 +1088,7 @@ This command is a read-only, post-run validator and renderer: it makes no
 retrieval, API, network, or model calls and does not scan the large candidate
 ledgers. It reads only bounded sealed artifacts, validates every RAG output
 record with the production submission validator, and emits exactly one compact
-JSON receipt on stdout after successful replacement.
+JSON receipt on stdout after successful publication/write.
 
 **Keep the HTML private.** It contains raw corpus text, generated claims,
 answers, and document identifiers. It is not a sanitized publication artifact

@@ -79,6 +79,15 @@ obligation coverage, and answer and citation quality as separate metric
 families. An unavailable metric remains `Unavailable` with its reason; never
 render unavailable as zero or combine unlike families into one score.
 
+Receipt values are exact reconciliation checks: `page_count` must equal
+`1 + len(topic_ids)`—one `index.html` plus one topic HTML page per ordered
+topic ID, excluding `bundle-manifest.json`—so an all-119-topic bundle has
+`page_count: 120`. `total_bytes` must equal the on-disk byte sum of
+`index.html`, every topic HTML page, and `bundle-manifest.json`, and must match
+the corresponding manifest and actual-file reconciliation exactly. The
+`bundle_manifest_sha256` must equal the SHA-256 of the `bundle-manifest.json`
+bytes exactly; do not accept estimates or merely plausible values.
+
 ## Examples
 
 Retrieval-only:
