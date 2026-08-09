@@ -2742,6 +2742,195 @@ def _finite_number(value: object) -> bool:
     return type(value) in {int, float} and math.isfinite(value)
 
 
+@dataclass(frozen=True)
+class TopicPageNavigation:
+    summary_href: str
+    position: int
+    total: int
+    previous_href: str | None = None
+    next_href: str | None = None
+
+
+_DEBUG_REPORT_CSS = """:root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; line-height: 1.5; --page: #f5f7fb; --surface: #fff; --surface-soft: #eef3fb; --ink: #182235; --muted: #5d687b; --line: #ccd5e3; --accent: #2859c5; --accent-ink: #fff; --focus: #f59e0b; }
+* { box-sizing: border-box; }
+html { overflow-x: hidden; scroll-behavior: smooth; }
+body { margin: 0; min-width: 0; overflow-x: hidden; background: var(--page); color: var(--ink); }
+header, main, footer { width: min(100%, 82rem); margin: auto; padding: clamp(1rem, 3vw, 2rem); }
+header { margin-top: clamp(.5rem, 2vw, 1.5rem); border-bottom: 1px solid var(--line); }
+header h1 { margin-block: 0 .35rem; font-size: clamp(1.75rem, 4vw, 3rem); line-height: 1.1; letter-spacing: -.035em; }
+header p { max-width: 70ch; color: var(--muted); }
+nav ul { display: flex; flex-wrap: wrap; gap: .65rem; margin: 1.25rem 0 0; padding: 0; list-style: none; }
+.topic-tab, .topic-link-fallback { min-height: 44px; align-items: center; justify-content: center; padding: .65rem 1rem; border-radius: 999px; border: 1px solid var(--line); font: inherit; font-weight: 750; color: var(--ink); background: var(--surface); text-decoration: none; cursor: pointer; }
+.topic-tab { display: none; }
+.js .topic-tab { display: inline-flex; }
+.js .topic-link-fallback { display: none; }
+.topic-tab[aria-selected="true"] { color: var(--accent-ink); border-color: var(--accent); background: var(--accent); box-shadow: 0 .35rem 1rem rgb(40 89 197 / 22%); }
+section { min-width: 0; margin: 1.5rem 0; padding: clamp(.85rem, 2.5vw, 1.35rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); }
+section section { border-color: color-mix(in srgb, var(--line) 75%, transparent); background: color-mix(in srgb, var(--surface) 92%, var(--surface-soft)); }
+.topic-panel { min-width: 0; margin: 1.5rem 0; border: 1px solid var(--line); border-radius: 1rem; background: var(--surface); box-shadow: 0 .6rem 2rem rgb(30 50 90 / 8%); }
+.topic-panel > summary { min-height: 44px; padding: 1rem 1.25rem; cursor: pointer; font-size: 1.2rem; font-weight: 800; }
+.topic-panel > .topic-content { min-width: 0; padding: 0 clamp(.75rem, 2vw, 1.25rem) .25rem; }
+.js .topic-panel:not([open]) { display: none; }
+.js .topic-panel > summary { display: none; }
+.run-diagnostics { margin-top: 1rem; padding: .25rem 1rem 1rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }
+.run-diagnostics > summary { font-weight: 750; }
+.run-diagnostics dl { display: grid; grid-template-columns: minmax(9rem, auto) minmax(0, 1fr); gap: .35rem 1rem; }
+.run-diagnostics dt { font-weight: 750; }
+.run-diagnostics dd { min-width: 0; margin: 0; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; min-width: 38rem; }
+caption { text-align: left; font-weight: 700; padding: .4rem 0; }
+th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: .45rem; }
+code, .break { overflow-wrap: anywhere; word-break: break-word; }
+details:not(.topic-panel, .run-diagnostics) { margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid var(--line); }
+summary { min-height: 44px; display: list-item; padding-block: .6rem; cursor: pointer; font-weight: 650; }
+.status { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-weight: 700; }
+.status-complete { color: #063; background: #d8f3df; }
+.status-empty { color: #735400; background: #fff0bd; }
+.status-fallback-extractive { color: #7a2300; background: #ffe0d2; }
+.subnarrative-list, .new-document-list, .selected-document-list, .retrieval-document-list, .rag-answer-list, .rag-reference-list { display: grid; gap: 1rem; margin: 0; padding: 0; list-style: none; }
+.subnarrative-card, .new-document-card, .retrieval-document-card, .rag-answer-item, .rag-reference-card, .selected-document-disclosure, .selected-document-remainder { min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }
+.subnarrative-card h3, .new-document-card h4, .retrieval-document-card h3 { margin-top: 0; }
+.funnel-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .75rem; margin: 1rem 0; padding: 0; list-style: none; }
+.funnel-count { min-width: 0; padding: .8rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }
+.funnel-count strong, .funnel-count span { display: block; }
+.funnel-count strong { color: var(--accent); font-size: 1.5rem; line-height: 1.1; }
+.funnel-count span { margin-top: .3rem; color: var(--muted); font-weight: 700; }
+.query-list { margin-bottom: 0; }
+.stage-note, .rank-caveat { color: var(--muted); }
+.new-document-lane, .passage-ranking-disclosure, .canonical-cluster-diagnostics, .canonical-result { margin-block: 1rem; border: 1px solid var(--line); border-inline-start-width: .25rem; border-radius: .65rem; background: var(--surface-soft); }
+.new-document-lane > summary, .passage-ranking-disclosure > summary, .canonical-cluster-diagnostics > summary, .canonical-result > summary { padding-inline: .5rem; }
+.new-document-lane > .new-document-list, .passage-ranking-disclosure > .passage-diagnostics, .canonical-cluster-diagnostics > .table-wrap, .canonical-result > .canonical-result-detail { margin: .5rem; }
+.selected-document-disclosure > summary, .selected-document-remainder > summary { padding-inline: .5rem; }
+.selected-document-disclosure > summary > * + * { margin-inline-start: .65rem; }
+.selected-document-detail, .selected-document-remainder > .selected-document-list { margin: .5rem; }
+.card-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem .75rem; margin: 0 0 .75rem; }
+.card-rank, .citation-chip { display: inline-flex; min-height: 2rem; align-items: center; padding: .2rem .65rem; border-radius: 999px; font-weight: 750; }
+.card-rank { color: var(--accent-ink); background: var(--accent); }
+.card-metadata, .rag-provenance dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: .65rem 1rem; margin: .75rem 0; }
+.card-metadata > div, .rag-provenance dl > div { min-width: 0; }
+.card-metadata dt, .rag-provenance dt { color: var(--muted); font-size: .86rem; font-weight: 750; text-transform: uppercase; letter-spacing: .035em; }
+.card-metadata dd, .rag-provenance dd { margin: .15rem 0 0; }
+.evidence-callout { margin: 1rem 0; padding: .8rem 1rem; border-inline-start: .3rem solid var(--accent); border-radius: .35rem; background: var(--surface); }
+.evidence-callout h4 { margin: 0 0 .35rem; }
+.technical-provenance { margin-top: .85rem; }
+.rag-provenance { margin: 0 0 1.25rem; padding: 1rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }
+.rag-provenance h3, .rag-reference-card h4, .rag-answer-item h4 { margin-top: 0; }
+.rag-answer-item { background: var(--surface); }
+.citation-list { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+.citation-chip { min-height: 44px; color: var(--accent); border: 1px solid var(--accent); background: var(--surface-soft); text-decoration: none; }
+.citation-chip:hover { color: var(--accent-ink); background: var(--accent); }
+.rag-reference-list { margin-top: 1rem; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: .22rem solid var(--focus); outline-offset: .2rem; }
+@media (prefers-color-scheme: dark) { :root { --page: #0d1320; --surface: #141d2d; --surface-soft: #1a263a; --ink: #edf3ff; --muted: #aebbd0; --line: #39475e; --accent: #7ca1ff; --accent-ink: #10182a; --focus: #fbbf24; } }
+@media (max-width: 42rem) { header, main, footer { padding: .75rem; } section { padding: .75rem; } nav li { flex: 1 1 calc(50% - .65rem); } .topic-tab, .topic-link-fallback { width: 100%; } .run-diagnostics dl { display: block; } .run-diagnostics dd { margin: 0 0 .75rem; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+.topic-page-nav { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: .65rem; margin: 1.25rem 0 0; padding: .75rem 0; background: color-mix(in srgb, var(--page) 92%, transparent); }
+.topic-page-link { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: .65rem 1rem; border-radius: 999px; border: 1px solid var(--line); font: inherit; font-weight: 750; color: var(--ink); background: var(--surface); text-decoration: none; }
+.topic-page-link:hover { color: var(--accent-ink); border-color: var(--accent); background: var(--accent); }
+@media (max-width: 42rem) { .topic-page-nav { margin-inline: -.75rem; padding-inline: .75rem; } .topic-page-link { width: 100%; } }
+"""
+_LEGACY_TOPIC_SCRIPT = """(() => {
+  const panels = Array.from(document.querySelectorAll(".topic-panel"));
+  const tabs = Array.from(document.querySelectorAll(".topic-tab"));
+  if (!panels.length) return;
+  const tablist = document.querySelector('nav[aria-label="Topic navigation"] ul');
+  let synchronizing = false;
+  const panelForTab = (tab) => document.getElementById(tab.dataset.topicTarget);
+  const activate = (panel, updateHash, focusTab) => {
+    if (!panel) return;
+    synchronizing = true;
+    panels.forEach((candidate) => { candidate.open = candidate === panel; });
+    tabs.forEach((tab) => {
+      const selected = panelForTab(tab) === panel;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && focusTab) tab.focus();
+    });
+    synchronizing = false;
+    if (updateHash && location.hash !== "#" + panel.id) {
+      history.replaceState(null, "", "#" + panel.id);
+    }
+  };
+  const restoreHash = () => {
+    let target = null;
+    try {
+      target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    } catch (_error) {
+      target = null;
+    }
+    const requested = target && target.closest(".topic-panel");
+    if (requested && panels.includes(requested)) {
+      activate(requested, false, false);
+      setTimeout(() => {
+        let currentTarget = null;
+        try {
+          currentTarget = document.getElementById(
+            decodeURIComponent(location.hash.slice(1))
+          );
+        } catch (_error) {
+          currentTarget = null;
+        }
+        if (currentTarget === target) {
+          target.scrollIntoView({ block: "start", behavior: "instant" });
+        }
+      }, 0);
+      return;
+    }
+    activate(panels.find((panel) => panel.open) || panels[0], false, false);
+  };
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => activate(panelForTab(tab), true, false));
+    tab.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      const next = tabs[(index + direction + tabs.length) % tabs.length];
+      activate(panelForTab(next), true, true);
+    });
+  });
+  panels.forEach((panel) => panel.addEventListener("toggle", () => {
+    if (synchronizing) return;
+    if (panel.open) activate(panel, false, false);
+    else if (!panels.some((candidate) => candidate.open)) activate(panel, false, false);
+  }));
+  window.addEventListener("hashchange", restoreHash);
+  tablist.setAttribute("role", "tablist");
+  tabs.forEach((tab) => {
+    const panel = panelForTab(tab);
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", panel.id);
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", tab.id);
+    panel.querySelector(":scope > summary").hidden = true;
+  });
+  restoreHash();
+  document.documentElement.classList.add("js");
+})();
+"""
+
+
+def _render_html_document(title: str, header: str, main: str, script: str) -> str:
+    script_markup = f"<script>\n{script}\n</script>" if script else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{_html(title)}</title>
+<style>
+{_DEBUG_REPORT_CSS}</style>
+</head>
+<body>
+{header}
+{main}
+<footer><p>Generated deterministically from sealed report data; no retrieval, model, or network calls were made.</p></footer>
+{script_markup}
+</body>
+</html>"""
+
+
 def render_debug_report(data: DebugReportData) -> str:
     """Render sealed report data as one deterministic, dependency-free HTML document.
 
@@ -2762,185 +2951,59 @@ def render_debug_report(data: DebugReportData) -> str:
         _render_topic(topic, initially_open=index == 0)
         for index, topic in enumerate(data.topics)
     )
-    run_summary = _render_run_summary(data)
-    pipeline_legend = _render_pipeline_legend()
-    return f'''<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>Competition retrieval debug report</title>
-<style>
-:root {{ color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; line-height: 1.5; --page: #f5f7fb; --surface: #fff; --surface-soft: #eef3fb; --ink: #182235; --muted: #5d687b; --line: #ccd5e3; --accent: #2859c5; --accent-ink: #fff; --focus: #f59e0b; }}
-* {{ box-sizing: border-box; }}
-html {{ overflow-x: hidden; scroll-behavior: smooth; }}
-body {{ margin: 0; min-width: 0; overflow-x: hidden; background: var(--page); color: var(--ink); }}
-header, main, footer {{ width: min(100%, 82rem); margin: auto; padding: clamp(1rem, 3vw, 2rem); }}
-header {{ margin-top: clamp(.5rem, 2vw, 1.5rem); border-bottom: 1px solid var(--line); }}
-header h1 {{ margin-block: 0 .35rem; font-size: clamp(1.75rem, 4vw, 3rem); line-height: 1.1; letter-spacing: -.035em; }}
-header p {{ max-width: 70ch; color: var(--muted); }}
-nav ul {{ display: flex; flex-wrap: wrap; gap: .65rem; margin: 1.25rem 0 0; padding: 0; list-style: none; }}
-.topic-tab, .topic-link-fallback {{ min-height: 44px; align-items: center; justify-content: center; padding: .65rem 1rem; border-radius: 999px; border: 1px solid var(--line); font: inherit; font-weight: 750; color: var(--ink); background: var(--surface); text-decoration: none; cursor: pointer; }}
-.topic-tab {{ display: none; }}
-.js .topic-tab {{ display: inline-flex; }}
-.js .topic-link-fallback {{ display: none; }}
-.topic-tab[aria-selected="true"] {{ color: var(--accent-ink); border-color: var(--accent); background: var(--accent); box-shadow: 0 .35rem 1rem rgb(40 89 197 / 22%); }}
-section {{ min-width: 0; margin: 1.5rem 0; padding: clamp(.85rem, 2.5vw, 1.35rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); }}
-section section {{ border-color: color-mix(in srgb, var(--line) 75%, transparent); background: color-mix(in srgb, var(--surface) 92%, var(--surface-soft)); }}
-.topic-panel {{ min-width: 0; margin: 1.5rem 0; border: 1px solid var(--line); border-radius: 1rem; background: var(--surface); box-shadow: 0 .6rem 2rem rgb(30 50 90 / 8%); }}
-.topic-panel > summary {{ min-height: 44px; padding: 1rem 1.25rem; cursor: pointer; font-size: 1.2rem; font-weight: 800; }}
-.topic-panel > .topic-content {{ min-width: 0; padding: 0 clamp(.75rem, 2vw, 1.25rem) .25rem; }}
-.js .topic-panel:not([open]) {{ display: none; }}
-.js .topic-panel > summary {{ display: none; }}
-.run-diagnostics {{ margin-top: 1rem; padding: .25rem 1rem 1rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }}
-.run-diagnostics > summary {{ font-weight: 750; }}
-.run-diagnostics dl {{ display: grid; grid-template-columns: minmax(9rem, auto) minmax(0, 1fr); gap: .35rem 1rem; }}
-.run-diagnostics dt {{ font-weight: 750; }}
-.run-diagnostics dd {{ min-width: 0; margin: 0; }}
-.table-wrap {{ overflow-x: auto; }}
-table {{ width: 100%; border-collapse: collapse; min-width: 38rem; }}
-caption {{ text-align: left; font-weight: 700; padding: .4rem 0; }}
-th, td {{ text-align: left; vertical-align: top; border: 1px solid var(--line); padding: .45rem; }}
-code, .break {{ overflow-wrap: anywhere; word-break: break-word; }}
-details:not(.topic-panel, .run-diagnostics) {{ margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid var(--line); }}
-summary {{ min-height: 44px; display: list-item; padding-block: .6rem; cursor: pointer; font-weight: 650; }}
-.status {{ display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-weight: 700; }}
-.status-complete {{ color: #063; background: #d8f3df; }}
-.status-empty {{ color: #735400; background: #fff0bd; }}
-.status-fallback-extractive {{ color: #7a2300; background: #ffe0d2; }}
-.subnarrative-list, .new-document-list, .selected-document-list, .retrieval-document-list, .rag-answer-list, .rag-reference-list {{ display: grid; gap: 1rem; margin: 0; padding: 0; list-style: none; }}
-.subnarrative-card, .new-document-card, .retrieval-document-card, .rag-answer-item, .rag-reference-card, .selected-document-disclosure, .selected-document-remainder {{ min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
-.subnarrative-card h3, .new-document-card h4, .retrieval-document-card h3 {{ margin-top: 0; }}
-.funnel-counts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .75rem; margin: 1rem 0; padding: 0; list-style: none; }}
-.funnel-count {{ min-width: 0; padding: .8rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }}
-.funnel-count strong, .funnel-count span {{ display: block; }}
-.funnel-count strong {{ color: var(--accent); font-size: 1.5rem; line-height: 1.1; }}
-.funnel-count span {{ margin-top: .3rem; color: var(--muted); font-weight: 700; }}
-.query-list {{ margin-bottom: 0; }}
-.stage-note, .rank-caveat {{ color: var(--muted); }}
-.new-document-lane, .passage-ranking-disclosure, .canonical-cluster-diagnostics, .canonical-result {{ margin-block: 1rem; border: 1px solid var(--line); border-inline-start-width: .25rem; border-radius: .65rem; background: var(--surface-soft); }}
-.new-document-lane > summary, .passage-ranking-disclosure > summary, .canonical-cluster-diagnostics > summary, .canonical-result > summary {{ padding-inline: .5rem; }}
-.new-document-lane > .new-document-list, .passage-ranking-disclosure > .passage-diagnostics, .canonical-cluster-diagnostics > .table-wrap, .canonical-result > .canonical-result-detail {{ margin: .5rem; }}
-.selected-document-disclosure > summary, .selected-document-remainder > summary {{ padding-inline: .5rem; }}
-.selected-document-disclosure > summary > * + * {{ margin-inline-start: .65rem; }}
-.selected-document-detail, .selected-document-remainder > .selected-document-list {{ margin: .5rem; }}
-.card-heading {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem .75rem; margin: 0 0 .75rem; }}
-.card-rank, .citation-chip {{ display: inline-flex; min-height: 2rem; align-items: center; padding: .2rem .65rem; border-radius: 999px; font-weight: 750; }}
-.card-rank {{ color: var(--accent-ink); background: var(--accent); }}
-.card-metadata, .rag-provenance dl {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: .65rem 1rem; margin: .75rem 0; }}
-.card-metadata > div, .rag-provenance dl > div {{ min-width: 0; }}
-.card-metadata dt, .rag-provenance dt {{ color: var(--muted); font-size: .86rem; font-weight: 750; text-transform: uppercase; letter-spacing: .035em; }}
-.card-metadata dd, .rag-provenance dd {{ margin: .15rem 0 0; }}
-.evidence-callout {{ margin: 1rem 0; padding: .8rem 1rem; border-inline-start: .3rem solid var(--accent); border-radius: .35rem; background: var(--surface); }}
-.evidence-callout h4 {{ margin: 0 0 .35rem; }}
-.technical-provenance {{ margin-top: .85rem; }}
-.rag-provenance {{ margin: 0 0 1.25rem; padding: 1rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
-.rag-provenance h3, .rag-reference-card h4, .rag-answer-item h4 {{ margin-top: 0; }}
-.rag-answer-item {{ background: var(--surface); }}
-.citation-list {{ display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }}
-.citation-chip {{ min-height: 44px; color: var(--accent); border: 1px solid var(--accent); background: var(--surface-soft); text-decoration: none; }}
-.citation-chip:hover {{ color: var(--accent-ink); background: var(--accent); }}
-.rag-reference-list {{ margin-top: 1rem; }}
-a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem solid var(--focus); outline-offset: .2rem; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --page: #0d1320; --surface: #141d2d; --surface-soft: #1a263a; --ink: #edf3ff; --muted: #aebbd0; --line: #39475e; --accent: #7ca1ff; --accent-ink: #10182a; --focus: #fbbf24; }} }}
-@media (max-width: 42rem) {{ header, main, footer {{ padding: .75rem; }} section {{ padding: .75rem; }} nav li {{ flex: 1 1 calc(50% - .65rem); }} .topic-tab, .topic-link-fallback {{ width: 100%; }} .run-diagnostics dl {{ display: block; }} .run-diagnostics dd {{ margin: 0 0 .75rem; }} }}
-@media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }} }}
-</style>
-</head>
-<body>
-<header>
-<h1>Competition retrieval debug report</h1>
-<p>Read-only rendering of sealed retrieval artifacts. Corpus text and identifiers may be sensitive.</p>
-<nav aria-label="Topic navigation"><ul>{topic_links}</ul></nav>
-</header>
-<main>
-{run_summary}
-{pipeline_legend}
-{topics}
-</main>
-<footer><p>Generated deterministically from sealed report data; no retrieval, model, or network calls were made.</p></footer>
-<script>
-(() => {{
-  const panels = Array.from(document.querySelectorAll(".topic-panel"));
-  const tabs = Array.from(document.querySelectorAll(".topic-tab"));
-  if (!panels.length) return;
-  const tablist = document.querySelector('nav[aria-label="Topic navigation"] ul');
-  let synchronizing = false;
-  const panelForTab = (tab) => document.getElementById(tab.dataset.topicTarget);
-  const activate = (panel, updateHash, focusTab) => {{
-    if (!panel) return;
-    synchronizing = true;
-    panels.forEach((candidate) => {{ candidate.open = candidate === panel; }});
-    tabs.forEach((tab) => {{
-      const selected = panelForTab(tab) === panel;
-      tab.setAttribute("aria-selected", String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-      if (selected && focusTab) tab.focus();
-    }});
-    synchronizing = false;
-    if (updateHash && location.hash !== "#" + panel.id) {{
-      history.replaceState(null, "", "#" + panel.id);
-    }}
-  }};
-  const restoreHash = () => {{
-    let target = null;
-    try {{
-      target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
-    }} catch (_error) {{
-      target = null;
-    }}
-    const requested = target && target.closest(".topic-panel");
-    if (requested && panels.includes(requested)) {{
-      activate(requested, false, false);
-      setTimeout(() => {{
-        let currentTarget = null;
-        try {{
-          currentTarget = document.getElementById(
-            decodeURIComponent(location.hash.slice(1))
-          );
-        }} catch (_error) {{
-          currentTarget = null;
-        }}
-        if (currentTarget === target) {{
-          target.scrollIntoView({{ block: "start", behavior: "instant" }});
-        }}
-      }}, 0);
-      return;
-    }}
-    activate(panels.find((panel) => panel.open) || panels[0], false, false);
-  }};
-  tabs.forEach((tab, index) => {{
-    tab.addEventListener("click", () => activate(panelForTab(tab), true, false));
-    tab.addEventListener("keydown", (event) => {{
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      event.preventDefault();
-      const direction = event.key === "ArrowRight" ? 1 : -1;
-      const next = tabs[(index + direction + tabs.length) % tabs.length];
-      activate(panelForTab(next), true, true);
-    }});
-  }});
-  panels.forEach((panel) => panel.addEventListener("toggle", () => {{
-    if (synchronizing) return;
-    if (panel.open) activate(panel, false, false);
-    else if (!panels.some((candidate) => candidate.open)) activate(panel, false, false);
-  }}));
-  window.addEventListener("hashchange", restoreHash);
-  tablist.setAttribute("role", "tablist");
-  tabs.forEach((tab) => {{
-    const panel = panelForTab(tab);
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-controls", panel.id);
-    panel.setAttribute("role", "tabpanel");
-    panel.setAttribute("aria-labelledby", tab.id);
-    panel.querySelector(":scope > summary").hidden = true;
-  }});
-  restoreHash();
-  document.documentElement.classList.add("js");
-}})();
-</script>
-</body>
-</html>'''
+    header = (
+        '<header>'
+        '<h1>Competition retrieval debug report</h1>'
+        '<p>Read-only rendering of sealed retrieval artifacts. Corpus text and identifiers may be sensitive.</p>'
+        f'<nav aria-label="Topic navigation"><ul>{topic_links}</ul></nav>'
+        '</header>'
+    )
+    main = (
+        '<main>'
+        f'{_render_run_summary(data)}'
+        f'{_render_pipeline_legend()}'
+        f'{topics}'
+        '</main>'
+    )
+    return _render_html_document(
+        title="Competition retrieval debug report",
+        header=header,
+        main=main,
+        script=_LEGACY_TOPIC_SCRIPT,
+    )
+
+
+def _topic_page_link(href: str | None, label: str) -> str:
+    if href is None:
+        return ""
+    return f'<a class="topic-page-link" href="{_html(href)}">{_html(label)}</a>'
+
+
+def render_debug_topic_page(
+    topic: TopicReport, *, navigation: TopicPageNavigation
+) -> str:
+    if navigation.total < 1 or not 1 <= navigation.position <= navigation.total:
+        raise ValueError("topic page position must belong to its total")
+    header = (
+        '<header><p class="eyebrow">Private raw trace</p>'
+        f'<h1>Topic {_html(topic.topic_id)}</h1>'
+        f'<p>Topic {_html(navigation.position)} of {_html(navigation.total)}</p>'
+        '<nav class="topic-page-nav" aria-label="Report navigation">'
+        f'{_topic_page_link(navigation.summary_href, "Back to summary")}'
+        f'{_topic_page_link(navigation.previous_href, "Previous topic")}'
+        f'{_topic_page_link(navigation.next_href, "Next topic")}'
+        '</nav></header>'
+    )
+    return _render_html_document(
+        title=f"{topic.topic_id} · Competition retrieval debug report",
+        header=header,
+        main=(
+            f"<main>{_render_pipeline_legend()}"
+            '<p class="stage-note">Generated answer appears in the Final RAG stage when supplied.</p>'
+            f"{_render_topic_content(topic)}</main>"
+        ),
+        script="",
+    )
 
 
 def _render_run_summary(data: DebugReportData) -> str:
@@ -2997,7 +3060,7 @@ def _render_pipeline_legend() -> str:
     )
 
 
-def _render_topic(topic: TopicReport, *, initially_open: bool = False) -> str:
+def _render_topic_content(topic: TopicReport) -> str:
     anchor = _topic_anchor(topic.topic_id)
     prefix = f"stage-{anchor}"
     stages = (
@@ -3011,13 +3074,20 @@ def _render_topic(topic: TopicReport, *, initially_open: bool = False) -> str:
         _render_nuggets(topic, prefix),
         _render_retrieval(topic, prefix),
     )
+    return (
+        f'<div class="topic-content"><h1 id="topic-title-{anchor}">'
+        f'Topic {_html(topic.topic_id)}</h1>{"".join(stages)}</div>'
+    )
+
+
+def _render_topic(topic: TopicReport, *, initially_open: bool = False) -> str:
+    anchor = _topic_anchor(topic.topic_id)
     open_attribute = " open" if initially_open else ""
     return (
         f'<details class="topic-panel" name="competition-topic" '
         f'id="topic-{anchor}"{open_attribute}>'
         f'<summary id="topic-summary-{anchor}">Topic {_html(topic.topic_id)}</summary>'
-        f'<div class="topic-content"><h1 id="topic-title-{anchor}">'
-        f'Topic {_html(topic.topic_id)}</h1>{"".join(stages)}</div></details>'
+        f'{_render_topic_content(topic)}</details>'
     )
 
 

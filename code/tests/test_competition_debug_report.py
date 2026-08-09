@@ -2650,6 +2650,65 @@ def test_html_renderer_is_semantic_self_contained_and_escapes_hostile_source_tex
     assert script == baseline_script
 
 
+def test_standalone_topic_page_contains_one_complete_trace_and_relative_navigation(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    data = load_debug_report_data(config_path)
+    page = debug_report.render_debug_topic_page(
+        data.topics[0],
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=2,
+            total=3,
+            previous_href="rag2026-0.html",
+            next_href="rag2026-2.html",
+        ),
+    )
+
+    assert page.startswith("<!doctype html>")
+    assert "Topic rag2026-0" in page
+    for stage in (
+        "Narrative", "Subnarratives", "Generated answer", "Funnel overview",
+        "New documents", "Selected documents", "Top passages",
+        "Final selected nuggets", "Final retrieval",
+    ):
+        assert stage in page
+    assert 'href="../index.html"' in page
+    assert 'href="rag2026-0.html"' in page
+    assert 'href="rag2026-2.html"' in page
+    assert "Topic 2 of 3" in page
+    assert "https://" not in page
+
+
+def test_standalone_topic_page_omits_missing_boundary_links_and_escapes_text(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=1,
+            total=1,
+        ),
+    )
+
+    assert "Previous topic" not in page
+    assert "Next topic" not in page
+    assert 'Original &lt;narrative&gt; &amp; &quot;quotes&quot;' in page
+    assert 'id="stage-literal-rag2026-0-narrative"' in page
+    assert page == debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=1,
+            total=1,
+        ),
+    )
+
+
 def test_html_topics_use_one_open_native_panel_and_a_progressive_switcher(
     tmp_path: Path,
 ) -> None:
