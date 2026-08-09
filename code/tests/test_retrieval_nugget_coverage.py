@@ -41,6 +41,7 @@ from trec_rag.retrieval_nugget_coverage import (
     main,
     render_judge_request,
     render_planner_request,
+    seed_coverage_plan_from_completed_baseline,
     run_coverage_evaluation,
     score_coverage,
     validate_and_freeze_plan,
@@ -1621,6 +1622,81 @@ def test_interrupted_resume_rejects_tampered_or_malformed_planner_request_digest
     assert resumed_planner.requests == []
     assert resumed_judge.requests == []
     assert not (work_dir / "manifest.json").exists()
+
+
+def test_seed_completed_baseline_reuses_exact_plan_and_calls_only_candidate_judge(
+    tmp_path: Path,
+) -> None:
+    baseline_handoff = _write_coverage_handoff(tmp_path / "baseline")
+    baseline_work = tmp_path / "baseline-work"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(baseline_handoff, baseline_work),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+    candidate_handoff = tmp_path / "candidate" / "generation_handoff_manifest.json"
+    write_generation_handoff(
+        candidate_handoff,
+        _coverage_handoff(
+            claim_texts=(
+                "A stronger fixed canonical retrieval claim.",
+                "A second stronger fixed canonical retrieval claim.",
+            )
+        ),
+    )
+    candidate_work = tmp_path / "candidate-work"
+
+    seed_coverage_plan_from_completed_baseline(
+        baseline_handoff_manifest_path=baseline_handoff,
+        baseline_work_dir=baseline_work,
+        candidate_handoff_manifest_path=candidate_handoff,
+        candidate_work_dir=candidate_work,
+        topic_id="topic-coverage",
+    )
+
+    planner = RecordingBackend([])
+    judge = RecordingBackend([_reply(_judge_payload(frozen))])
+    receipt = run_coverage_evaluation(
+        _coverage_config(candidate_handoff, candidate_work, mode="resume"),
+        planner=planner,
+        judge=judge,
+    )
+
+    assert (candidate_work / "plan.json").read_bytes() == (
+        baseline_work / "plan.json"
+    ).read_bytes()
+    assert planner.requests == []
+    assert len(judge.requests) == 1
+    assert receipt.hosted_calls == 1
+    assert receipt.reused_stages == ("planner",)
+
+
+def test_seed_completed_baseline_rejects_candidate_narrative_drift(
+    tmp_path: Path,
+) -> None:
+    baseline_handoff = _write_coverage_handoff(tmp_path / "baseline")
+    baseline_work = tmp_path / "baseline-work"
+    frozen = validate_and_freeze_plan(NARRATIVE, VALID_PLAN)
+    run_coverage_evaluation(
+        _coverage_config(baseline_handoff, baseline_work),
+        planner=RecordingBackend([_reply(VALID_PLAN)]),
+        judge=RecordingBackend([_reply(_judge_payload(frozen))]),
+    )
+    candidate_handoff = tmp_path / "candidate" / "generation_handoff_manifest.json"
+    write_generation_handoff(
+        candidate_handoff,
+        _coverage_handoff(narrative=NARRATIVE + " Changed."),
+    )
+
+    with pytest.raises(NuggetCoverageError, match="narrative"):
+        seed_coverage_plan_from_completed_baseline(
+            baseline_handoff_manifest_path=baseline_handoff,
+            baseline_work_dir=baseline_work,
+            candidate_handoff_manifest_path=candidate_handoff,
+            candidate_work_dir=tmp_path / "candidate-work",
+            topic_id="topic-coverage",
+        )
 
 
 @pytest.mark.parametrize("request_digest", ["not-a-digest", "0" * 64])

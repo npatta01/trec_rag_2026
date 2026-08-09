@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import statistics
 import tempfile
-from typing import Any
+from typing import Any, NoReturn
 
 from trec_rag.document_store import DocumentStore
 from trec_rag.facet_evidence import _byte_offsets, _source_spans
@@ -22,12 +22,23 @@ from trec_rag.generation_handoff import (
     GenerationTopic,
     load_generation_handoff,
 )
+from trec_rag.retrieval_nugget_coverage import (
+    CompletedCoverageEvaluation,
+    CoverageModelBackend,
+    CoverageRunConfig,
+    load_completed_coverage_evaluation,
+    run_coverage_evaluation,
+    seed_coverage_plan_from_completed_baseline,
+)
 from trec_rag.topic_records import TopicRecords
 
 
 STRUCTURAL_COMPARISON_SCHEMA = "cached-segmentation-structural-comparison-v1"
 STRUCTURAL_MANIFEST_SCHEMA = "cached-segmentation-structural-manifest-v1"
+SEMANTIC_COMPARISON_SCHEMA = "cached-segmentation-semantic-comparison-v1"
+SEMANTIC_MANIFEST_SCHEMA = "cached-segmentation-semantic-manifest-v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_LABEL_VALUES = {"unsupported": 0.0, "partial": 0.5, "full": 1.0}
 
 
 @dataclass(frozen=True)
@@ -78,6 +89,59 @@ class StructuralComparison:
     aggregate_candidate_representatives: TextShapeMetrics
     aggregate_baseline_claim_hints: TextShapeMetrics
     aggregate_candidate_claim_hints: TextShapeMetrics
+    gates_passed: bool
+    gate_failures: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SemanticObligationComparison:
+    obligation_id: str
+    kind: str
+    baseline_label: str
+    candidate_label: str
+    label_delta: float
+
+
+@dataclass(frozen=True)
+class SemanticTopicComparison:
+    topic_id: str
+    narrative_sha256: str
+    plan_sha256: str
+    baseline_required_coverage: float
+    candidate_required_coverage: float
+    required_coverage_delta: float
+    baseline_strict_full_rate: float
+    candidate_strict_full_rate: float
+    strict_full_rate_delta: float
+    baseline_label_counts: tuple[tuple[str, int], ...]
+    candidate_label_counts: tuple[tuple[str, int], ...]
+    obligations: tuple[SemanticObligationComparison, ...]
+    improved_obligation_ids: tuple[str, ...]
+    regressed_obligation_ids: tuple[str, ...]
+    baseline_artifact_sha256s: tuple[tuple[str, str], ...]
+    candidate_artifact_sha256s: tuple[tuple[str, str], ...]
+    candidate_judge_calls: int
+
+
+@dataclass(frozen=True)
+class SemanticComparison:
+    schema_version: str
+    diagnostic_scope: str
+    baseline_handoff_sha256: str
+    candidate_handoff_sha256: str
+    topic_ids: tuple[str, ...]
+    topics: tuple[SemanticTopicComparison, ...]
+    baseline_topic_macro_required_coverage: float
+    candidate_topic_macro_required_coverage: float
+    topic_macro_required_coverage_delta: float
+    baseline_topic_macro_strict_full_rate: float
+    candidate_topic_macro_strict_full_rate: float
+    topic_macro_strict_full_rate_delta: float
+    improved_obligation_ids: tuple[str, ...]
+    regressed_obligation_ids: tuple[str, ...]
+    planner_calls: int
+    candidate_judge_calls: int
+    expected_candidate_judge_calls: int
     gates_passed: bool
     gate_failures: tuple[str, ...]
 
@@ -524,7 +588,240 @@ def compare_structural_runs(
     )
 
 
-def _comparison_bytes(comparison: StructuralComparison) -> bytes:
+class _ForbiddenPlannerBackend:
+    def complete(self, request: object) -> NoReturn:
+        raise ValueError("semantic comparison forbids planner calls")
+
+
+def _semantic_artifact_hashes(
+    completed: CompletedCoverageEvaluation,
+) -> tuple[tuple[str, str], ...]:
+    hashes = dict(completed.artifact_hashes)
+    hashes["manifest.json"] = completed.manifest_sha256
+    return tuple(sorted(hashes.items()))
+
+
+def _semantic_label_counts(labels: Sequence[str]) -> tuple[tuple[str, int], ...]:
+    counts = Counter(labels)
+    return tuple((label, counts[label]) for label in ("full", "partial", "unsupported"))
+
+
+def compare_semantic_runs(
+    *,
+    baseline_handoff_path: Path,
+    baseline_coverage_root: Path,
+    candidate_handoff_path: Path,
+    candidate_coverage_root: Path,
+    topic_ids: Sequence[str],
+    judge: CoverageModelBackend | None = None,
+) -> SemanticComparison:
+    """Judge candidate nuggets against authenticated baseline obligation plans."""
+
+    ordered_topic_ids = tuple(topic_ids)
+    if (
+        not ordered_topic_ids
+        or any(
+            not isinstance(topic_id, str) or not topic_id
+            for topic_id in ordered_topic_ids
+        )
+        or len(set(ordered_topic_ids)) != len(ordered_topic_ids)
+    ):
+        raise ValueError("topic_ids must be unique non-empty strings")
+    baseline_handoff = load_generation_handoff(Path(baseline_handoff_path))
+    candidate_handoff = load_generation_handoff(Path(candidate_handoff_path))
+    if tuple(topic.topic_id for topic in baseline_handoff.topics) != ordered_topic_ids:
+        raise ValueError("baseline handoff topic order changed")
+    if tuple(topic.topic_id for topic in candidate_handoff.topics) != ordered_topic_ids:
+        raise ValueError("candidate handoff topic order changed")
+
+    topics: list[SemanticTopicComparison] = []
+    expected_judge_calls = 0
+    actual_judge_calls = 0
+    for topic_id in ordered_topic_ids:
+        baseline_topic = _topic_by_id(baseline_handoff, topic_id)
+        candidate_topic = _topic_by_id(candidate_handoff, topic_id)
+        if (
+            baseline_topic.narrative != candidate_topic.narrative
+            or baseline_topic.narrative_sha256 != candidate_topic.narrative_sha256
+        ):
+            raise ValueError(f"candidate narrative changed for topic {topic_id}")
+
+        baseline_work_dir = Path(baseline_coverage_root) / topic_id
+        candidate_work_dir = Path(candidate_coverage_root) / topic_id
+        baseline = load_completed_coverage_evaluation(
+            handoff_manifest_path=Path(baseline_handoff_path),
+            topic_id=topic_id,
+            work_dir=baseline_work_dir,
+        )
+        post_plan_names = ("judgments.json", "report.json", "manifest.json")
+        if not any((candidate_work_dir / name).exists() for name in post_plan_names):
+            seed_coverage_plan_from_completed_baseline(
+                baseline_handoff_manifest_path=Path(baseline_handoff_path),
+                baseline_work_dir=baseline_work_dir,
+                candidate_handoff_manifest_path=Path(candidate_handoff_path),
+                candidate_work_dir=candidate_work_dir,
+                topic_id=topic_id,
+            )
+        baseline_plan_path = baseline_work_dir / "plan.json"
+        candidate_plan_path = candidate_work_dir / "plan.json"
+        if (
+            not candidate_plan_path.is_file()
+            or candidate_plan_path.is_symlink()
+            or candidate_plan_path.read_bytes() != baseline_plan_path.read_bytes()
+        ):
+            raise ValueError("candidate frozen plan changed")
+
+        judge_was_missing = not (candidate_work_dir / "judgments.json").is_file()
+        expected_judge_calls += int(judge_was_missing)
+        receipt = run_coverage_evaluation(
+            CoverageRunConfig(
+                handoff_manifest_path=Path(candidate_handoff_path),
+                topic_id=topic_id,
+                work_dir=candidate_work_dir,
+                planner_model=baseline.identity.planner_model,
+                judge_model=baseline.identity.judge_model,
+                mode="resume",
+                allow_hosted_calls=True,
+            ),
+            planner=_ForbiddenPlannerBackend(),
+            judge=judge,
+        )
+        if "planner" not in receipt.reused_stages:
+            raise ValueError("candidate did not reuse the frozen baseline plan")
+        if receipt.hosted_calls != int(judge_was_missing):
+            raise ValueError("candidate hosted-call count changed")
+        actual_judge_calls += receipt.hosted_calls
+
+        candidate = load_completed_coverage_evaluation(
+            handoff_manifest_path=Path(candidate_handoff_path),
+            topic_id=topic_id,
+            work_dir=candidate_work_dir,
+        )
+        if baseline.identity != candidate.identity:
+            raise ValueError("candidate evaluator model or prompt identity changed")
+        if (
+            baseline.plan.plan_sha256 != candidate.plan.plan_sha256
+            or baseline.plan.canonical_bytes != candidate.plan.canonical_bytes
+            or (baseline_work_dir / "plan.json").read_bytes()
+            != (candidate_work_dir / "plan.json").read_bytes()
+        ):
+            raise ValueError("candidate frozen plan changed")
+
+        baseline_judgments = {
+            row.obligation_id: row for row in baseline.judgments
+        }
+        candidate_judgments = {
+            row.obligation_id: row for row in candidate.judgments
+        }
+        obligation_rows: list[SemanticObligationComparison] = []
+        improved: list[str] = []
+        regressed: list[str] = []
+        for obligation in baseline.plan.obligations:
+            old = baseline_judgments[obligation.obligation_id]
+            fixed = candidate_judgments[obligation.obligation_id]
+            delta = _LABEL_VALUES[fixed.label] - _LABEL_VALUES[old.label]
+            obligation_rows.append(
+                SemanticObligationComparison(
+                    obligation_id=obligation.obligation_id,
+                    kind=obligation.kind,
+                    baseline_label=old.label,
+                    candidate_label=fixed.label,
+                    label_delta=delta,
+                )
+            )
+            if delta > 0:
+                improved.append(obligation.obligation_id)
+            elif delta < 0:
+                regressed.append(obligation.obligation_id)
+
+        topics.append(
+            SemanticTopicComparison(
+                topic_id=topic_id,
+                narrative_sha256=baseline.bound_input.narrative_sha256,
+                plan_sha256=baseline.plan.plan_sha256,
+                baseline_required_coverage=baseline.report.required_coverage,
+                candidate_required_coverage=candidate.report.required_coverage,
+                required_coverage_delta=(
+                    candidate.report.required_coverage
+                    - baseline.report.required_coverage
+                ),
+                baseline_strict_full_rate=baseline.report.strict_full_rate,
+                candidate_strict_full_rate=candidate.report.strict_full_rate,
+                strict_full_rate_delta=(
+                    candidate.report.strict_full_rate
+                    - baseline.report.strict_full_rate
+                ),
+                baseline_label_counts=_semantic_label_counts(
+                    tuple(row.label for row in baseline.judgments)
+                ),
+                candidate_label_counts=_semantic_label_counts(
+                    tuple(row.label for row in candidate.judgments)
+                ),
+                obligations=tuple(obligation_rows),
+                improved_obligation_ids=tuple(improved),
+                regressed_obligation_ids=tuple(regressed),
+                baseline_artifact_sha256s=_semantic_artifact_hashes(baseline),
+                candidate_artifact_sha256s=_semantic_artifact_hashes(candidate),
+                candidate_judge_calls=1,
+            )
+        )
+
+    if actual_judge_calls != expected_judge_calls:
+        raise ValueError("candidate judge-call total changed")
+    baseline_required = statistics.fmean(
+        topic.baseline_required_coverage for topic in topics
+    )
+    candidate_required = statistics.fmean(
+        topic.candidate_required_coverage for topic in topics
+    )
+    baseline_strict = statistics.fmean(
+        topic.baseline_strict_full_rate for topic in topics
+    )
+    candidate_strict = statistics.fmean(
+        topic.candidate_strict_full_rate for topic in topics
+    )
+    failures: list[str] = []
+    if candidate_required < baseline_required:
+        failures.append("topic-macro required coverage regressed")
+    if candidate_strict < baseline_strict:
+        failures.append("topic-macro strict-full rate regressed")
+
+    return SemanticComparison(
+        schema_version=SEMANTIC_COMPARISON_SCHEMA,
+        diagnostic_scope=(
+            "Planner-derived paired nugget coverage diagnostic; not organizer ground truth"
+        ),
+        baseline_handoff_sha256=_digest(Path(baseline_handoff_path).read_bytes()),
+        candidate_handoff_sha256=_digest(Path(candidate_handoff_path).read_bytes()),
+        topic_ids=ordered_topic_ids,
+        topics=tuple(topics),
+        baseline_topic_macro_required_coverage=baseline_required,
+        candidate_topic_macro_required_coverage=candidate_required,
+        topic_macro_required_coverage_delta=candidate_required - baseline_required,
+        baseline_topic_macro_strict_full_rate=baseline_strict,
+        candidate_topic_macro_strict_full_rate=candidate_strict,
+        topic_macro_strict_full_rate_delta=candidate_strict - baseline_strict,
+        improved_obligation_ids=tuple(
+            f"{topic.topic_id}:{obligation_id}"
+            for topic in topics
+            for obligation_id in topic.improved_obligation_ids
+        ),
+        regressed_obligation_ids=tuple(
+            f"{topic.topic_id}:{obligation_id}"
+            for topic in topics
+            for obligation_id in topic.regressed_obligation_ids
+        ),
+        planner_calls=0,
+        candidate_judge_calls=len(topics),
+        expected_candidate_judge_calls=len(topics),
+        gates_passed=not failures,
+        gate_failures=tuple(failures),
+    )
+
+
+def _comparison_bytes(
+    comparison: StructuralComparison | SemanticComparison,
+) -> bytes:
     return (
         json.dumps(
             asdict(comparison),
@@ -584,6 +881,36 @@ def _run_structural(args: argparse.Namespace) -> int:
     return 0 if comparison.gates_passed else 2
 
 
+def _run_semantic(args: argparse.Namespace) -> int:
+    comparison = compare_semantic_runs(
+        baseline_handoff_path=args.baseline_handoff,
+        baseline_coverage_root=args.baseline_coverage_root,
+        candidate_handoff_path=args.candidate_handoff,
+        candidate_coverage_root=args.candidate_coverage_root,
+        topic_ids=tuple(args.topic),
+    )
+    output_dir = Path(args.output_dir)
+    comparison_path = output_dir / "semantic-comparison.json"
+    comparison_body = _comparison_bytes(comparison)
+    _publish_create_only(comparison_path, comparison_body)
+    manifest = {
+        "schema_version": SEMANTIC_MANIFEST_SCHEMA,
+        "comparison_file": comparison_path.name,
+        "comparison_bytes": len(comparison_body),
+        "comparison_sha256": _digest(comparison_body),
+        "topic_ids": list(comparison.topic_ids),
+        "planner_calls": comparison.planner_calls,
+        "candidate_judge_calls": comparison.candidate_judge_calls,
+        "gates_passed": comparison.gates_passed,
+    }
+    _publish_create_only(
+        output_dir / "semantic-comparison-manifest.json",
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        + b"\n",
+    )
+    return 0 if comparison.gates_passed else 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -596,6 +923,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     structural.add_argument("--output-dir", type=Path, required=True)
     structural.add_argument("--topic", action="append", required=True)
     structural.set_defaults(handler=_run_structural)
+    semantic = subparsers.add_parser("semantic")
+    semantic.add_argument("--baseline-handoff", type=Path, required=True)
+    semantic.add_argument("--baseline-coverage-root", type=Path, required=True)
+    semantic.add_argument("--candidate-handoff", type=Path, required=True)
+    semantic.add_argument("--candidate-coverage-root", type=Path, required=True)
+    semantic.add_argument("--output-dir", type=Path, required=True)
+    semantic.add_argument("--topic", action="append", required=True)
+    semantic.set_defaults(handler=_run_semantic)
     args = parser.parse_args(argv)
     return int(args.handler(args))
 

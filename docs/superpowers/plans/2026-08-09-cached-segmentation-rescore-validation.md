@@ -8,6 +8,17 @@
 
 **Tech Stack:** Python 3.12, pytest, spaCy `en_core_web_sm` 3.8.0, PyTorch CUDA, SQLite, dstack 0.20.29, private Hugging Face Buckets, deterministic tar+zstd, OpenRouter `openai/gpt-5.6-sol`.
 
+## Current Status
+
+- Tasks 1–4 are implemented: read-only document admission, the explicit
+  cached-upstream rescore policy, authenticated structural comparison, and
+  frozen-plan paired nugget judging.
+- Latest focused evidence: 119 retrieval-coverage and segmentation-validation
+  tests pass. The worktree environment does not include Ruff, so its optional
+  lint command was unavailable; `git diff --check` passes.
+- Next action: implement and hostile-test the strict private baseline/result
+  bundle in Task 5. No private upload or dstack launch has occurred yet.
+
 ## Global Constraints
 
 - Work only in `/home/npatta01/data/competitions/trec_rag_2026/.worktrees/fix-sentence-segmentation` on `codex/fix-sentence-segmentation`.

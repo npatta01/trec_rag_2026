@@ -2085,6 +2085,17 @@ The aggregate gate requires less fragmentation without any upstream identity
 change; topic 407 additionally must beat the measured old median of 11
 characters and 60.4% sub-40 rate. Keep its JSON and manifest private.
 
+`cached_segmentation_validation semantic` validates each completed baseline
+`retrieval_nugget_coverage_v2/<topic>` bundle, copies only its authenticated
+frozen plan into the candidate arm, and runs exactly one candidate judge stage.
+It never reruns the planner and refuses narrative, evaluator-identity, or plan
+drift before judging. The private comparison records paired obligation labels,
+artifact hashes, improvements and regressions, plus topic-macro required
+coverage and strict-full rate. Its gate permits neither macro metric to regress.
+This is a planner-derived diagnostic, not organizer ground truth; it does not
+open qrels or gold nuggets. Completed candidate judge stages resume without a
+new hosted call and reproduce the same comparison bytes.
+
 ## Answer-quality evaluation
 
 `ragdoll_io.py` and `dev_rag_inputs.py` support scoring generated answers with the organizer

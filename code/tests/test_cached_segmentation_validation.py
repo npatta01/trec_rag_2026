@@ -6,8 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from trec_rag.cached_segmentation_validation import compare_structural_runs
+from trec_rag.cached_segmentation_validation import (
+    compare_semantic_runs,
+    compare_structural_runs,
+)
 from trec_rag.document_store import DocumentStore
+from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_evidence import (
     CandidateSubnarrative,
     ExtractiveCandidateRequest,
@@ -28,6 +32,12 @@ from trec_rag.generation_handoff import (
     write_generation_handoff,
 )
 from trec_rag.topic_records import TopicRecordsBuilder
+from trec_rag.retrieval_nugget_coverage import (
+    CoverageModelRequest,
+    CoverageRunConfig,
+    run_coverage_evaluation,
+    validate_and_freeze_plan,
+)
 
 
 TOPIC_ID = "407"
@@ -39,6 +49,23 @@ SOURCE = (
     "from Dubai and\n"
     "continued mid sentence.\n"
 )
+SEMANTIC_PLAN = {
+    "schema_version": "retrieval_nugget_plan_v1",
+    "facets": [
+        {
+            "title": "Housing costs",
+            "obligations": [
+                {
+                    "requirement": "Explain how housing costs changed.",
+                    "support_test": "The direction of the change is present.",
+                    "kind": "required_explicit",
+                    "narrative_spans": ["how housing costs changed"],
+                }
+            ],
+        }
+    ],
+    "unmapped_narrative_spans": [],
+}
 
 
 def _digest(value: str | bytes) -> str:
@@ -63,6 +90,38 @@ class _Scorer:
     @staticmethod
     def score_pairs(pairs):
         return tuple(float(len(pair.sentence_text)) for pair in pairs)
+
+
+class _CoverageBackend:
+    def __init__(self, payloads: list[object]) -> None:
+        self.payloads = list(payloads)
+        self.requests: list[CoverageModelRequest] = []
+
+    def complete(self, request: CoverageModelRequest) -> BackendReply:
+        self.requests.append(request)
+        content = json.dumps(self.payloads.pop(0), separators=(",", ":")).encode()
+        return BackendReply(
+            content=content,
+            response_body=b'{"provider":"fixture"}',
+            status=200,
+            metadata={"requested_model": request.model},
+        )
+
+
+def _semantic_judgment(label: str) -> dict[str, object]:
+    return {
+        "schema_version": "retrieval_nugget_judgment_v1",
+        "judgments": [
+            {
+                "obligation_id": "f001-o001",
+                "label": label,
+                "supporting_nugget_aliases": (
+                    [] if label == "unsupported" else ["n001"]
+                ),
+                "missing_elements": "" if label == "full" else "Missing detail.",
+            }
+        ],
+    }
 
 
 def _fixed_candidates():
@@ -335,3 +394,114 @@ def test_structural_comparison_reports_aggregate_representative_regression(
     assert "aggregate representative fragment fraction worsened" in (
         comparison.gate_failures
     )
+
+
+def _write_baseline_coverage(
+    handoff_path: Path,
+    coverage_root: Path,
+    *,
+    label: str = "partial",
+) -> None:
+    planner = _CoverageBackend([SEMANTIC_PLAN])
+    judge = _CoverageBackend([_semantic_judgment(label)])
+    run_coverage_evaluation(
+        CoverageRunConfig(
+            handoff_manifest_path=handoff_path,
+            topic_id=TOPIC_ID,
+            work_dir=coverage_root / TOPIC_ID,
+            allow_hosted_calls=True,
+        ),
+        planner=planner,
+        judge=judge,
+    )
+    assert [request.stage for request in planner.requests] == ["planner"]
+    assert [request.stage for request in judge.requests] == ["judge"]
+
+
+def test_semantic_comparison_reuses_plan_and_reports_candidate_improvement(
+    tmp_path: Path,
+) -> None:
+    _, _, _, baseline_handoff, candidate_handoff = _fixture(tmp_path)
+    baseline_coverage = tmp_path / "baseline-coverage"
+    candidate_coverage = tmp_path / "candidate-coverage"
+    _write_baseline_coverage(baseline_handoff, baseline_coverage)
+    fixed_judge = _CoverageBackend([_semantic_judgment("full")])
+
+    comparison = compare_semantic_runs(
+        baseline_handoff_path=baseline_handoff,
+        baseline_coverage_root=baseline_coverage,
+        candidate_handoff_path=candidate_handoff,
+        candidate_coverage_root=candidate_coverage,
+        topic_ids=(TOPIC_ID,),
+        judge=fixed_judge,
+    )
+
+    topic = comparison.topics[0]
+    expected_plan = validate_and_freeze_plan(NARRATIVE, SEMANTIC_PLAN)
+    assert topic.plan_sha256 == expected_plan.plan_sha256
+    assert topic.baseline_required_coverage == 0.5
+    assert topic.candidate_required_coverage == 1.0
+    assert topic.required_coverage_delta == 0.5
+    assert topic.strict_full_rate_delta == 1.0
+    assert topic.improved_obligation_ids == ("f001-o001",)
+    assert topic.regressed_obligation_ids == ()
+    assert topic.baseline_artifact_sha256s
+    assert topic.candidate_artifact_sha256s
+    assert comparison.planner_calls == 0
+    assert comparison.candidate_judge_calls == 1
+    assert comparison.gates_passed is True
+    assert [request.stage for request in fixed_judge.requests] == ["judge"]
+    assert (candidate_coverage / TOPIC_ID / "plan.json").read_bytes() == (
+        baseline_coverage / TOPIC_ID / "plan.json"
+    ).read_bytes()
+    resumed_judge = _CoverageBackend([])
+    resumed = compare_semantic_runs(
+        baseline_handoff_path=baseline_handoff,
+        baseline_coverage_root=baseline_coverage,
+        candidate_handoff_path=candidate_handoff,
+        candidate_coverage_root=candidate_coverage,
+        topic_ids=(TOPIC_ID,),
+        judge=resumed_judge,
+    )
+    assert resumed == comparison
+    assert resumed_judge.requests == []
+
+
+def test_semantic_comparison_lists_regression_and_fails_macro_gate(
+    tmp_path: Path,
+) -> None:
+    _, _, _, baseline_handoff, candidate_handoff = _fixture(tmp_path)
+    baseline_coverage = tmp_path / "baseline-coverage"
+    _write_baseline_coverage(baseline_handoff, baseline_coverage, label="full")
+
+    comparison = compare_semantic_runs(
+        baseline_handoff_path=baseline_handoff,
+        baseline_coverage_root=baseline_coverage,
+        candidate_handoff_path=candidate_handoff,
+        candidate_coverage_root=tmp_path / "candidate-coverage",
+        topic_ids=(TOPIC_ID,),
+        judge=_CoverageBackend([_semantic_judgment("partial")]),
+    )
+
+    assert comparison.topics[0].regressed_obligation_ids == ("f001-o001",)
+    assert comparison.gates_passed is False
+    assert comparison.gate_failures == (
+        "topic-macro required coverage regressed",
+        "topic-macro strict-full rate regressed",
+    )
+
+
+def test_semantic_comparison_rejects_missing_complete_baseline(
+    tmp_path: Path,
+) -> None:
+    _, _, _, baseline_handoff, candidate_handoff = _fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="completed coverage bundle is missing"):
+        compare_semantic_runs(
+            baseline_handoff_path=baseline_handoff,
+            baseline_coverage_root=tmp_path / "missing-baseline",
+            candidate_handoff_path=candidate_handoff,
+            candidate_coverage_root=tmp_path / "candidate-coverage",
+            topic_ids=(TOPIC_ID,),
+            judge=_CoverageBackend([]),
+        )
