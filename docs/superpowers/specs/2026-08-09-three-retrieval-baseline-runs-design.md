@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-09
 
-**Status:** approved with exact semantics by Gemini Pro High and conditionally approved by Codex Sol xhigh; Claude Fable review did not complete
+**Status:** superseded for execution by `2026-08-09-cache-first-candidate-core-retrieval-design.md`; retained as the complete-union alternative
 **Input:** `/home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3`
 
 ## Goal
