@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 from typing import Callable, Sequence
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
@@ -31,6 +32,7 @@ from trec_rag.retrieval_baseline_runs import (
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _REVISION = re.compile(r"[0-9a-f]{40}\Z")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -60,6 +62,7 @@ def verify_publication_closure(
     *,
     expected_input_manifest_sha256: str,
     expected_source_revision: str,
+    expected_source_tree: str,
 ) -> dict[str, object]:
     """Verify the manifest-last publication and its exact checksum closure."""
 
@@ -70,6 +73,8 @@ def verify_publication_closure(
         raise ValueError("expected input manifest identity is invalid")
     if _REVISION.fullmatch(expected_source_revision) is None:
         raise ValueError("expected source revision is invalid")
+    if _REVISION.fullmatch(expected_source_tree) is None:
+        raise ValueError("expected source tree is invalid")
     sums_path = root / "SHA256SUMS"
     manifest_path = root / "publication-manifest.json"
     if any(path.is_symlink() or not path.is_file() for path in (sums_path, manifest_path)):
@@ -118,6 +123,7 @@ def verify_publication_closure(
         "schema_version",
         "sha256s_sha256",
         "source_revision",
+        "source_tree",
         "status",
         "task_name",
     }
@@ -125,7 +131,7 @@ def verify_publication_closure(
         not isinstance(manifest, dict)
         or set(manifest) != manifest_fields
         or manifest_body != _canonical_json(manifest)
-        or manifest.get("schema_version") != "retrieval-baseline-publication-v1"
+        or manifest.get("schema_version") != "retrieval-baseline-publication-v2"
         or manifest.get("status") != "complete"
     ):
         raise ValueError("publication manifest schema or canonical bytes differ")
@@ -133,6 +139,8 @@ def verify_publication_closure(
         raise ValueError("publication input manifest identity differs")
     if manifest.get("source_revision") != expected_source_revision:
         raise ValueError("publication source revision differs")
+    if manifest.get("source_tree") != expected_source_tree:
+        raise ValueError("publication source tree differs")
     if manifest.get("sha256s_sha256") != sha256(sums_path.read_bytes()).hexdigest():
         raise ValueError("publication SHA256SUMS digest differs")
     remote_digest = manifest.get("remote_scoring_receipt_sha256")
@@ -223,6 +231,7 @@ def replay_cache_only(
     score_cache_root: Path,
     output_dir: Path,
     source_revision: str,
+    source_tree: str,
     scorer_factory: Callable[[Path], object] | None = None,
 ) -> dict[str, object]:
     """Rebuild all remote matrices and runs from one read-only local cache."""
@@ -284,7 +293,9 @@ def replay_cache_only(
     finally:
         scorer.score_cache.close()  # type: ignore[attr-defined]
     previous_revision = os.environ.get("TREC_RAG_SOURCE_REVISION")
+    previous_tree = os.environ.get("TREC_RAG_SOURCE_TREE")
     os.environ["TREC_RAG_SOURCE_REVISION"] = source_revision
+    os.environ["TREC_RAG_SOURCE_TREE"] = source_tree
     try:
         export_runs(tuple(matrices), output_dir / "runs")
     finally:
@@ -292,6 +303,10 @@ def replay_cache_only(
             os.environ.pop("TREC_RAG_SOURCE_REVISION", None)
         else:
             os.environ["TREC_RAG_SOURCE_REVISION"] = previous_revision
+        if previous_tree is None:
+            os.environ.pop("TREC_RAG_SOURCE_TREE", None)
+        else:
+            os.environ["TREC_RAG_SOURCE_TREE"] = previous_tree
     _compare_bytes(
         publication_dir / "runs",
         output_dir / "runs",
@@ -317,6 +332,7 @@ def collect_remote_scoring(
     input_dir: Path,
     expected_input_manifest_sha256: str,
     expected_source_revision: str,
+    expected_source_tree: str,
     shared_cache_root: Path,
     work_root: Path,
     output_dir: Path,
@@ -340,6 +356,28 @@ def collect_remote_scoring(
         for second in roots[index + 1 :]:
             if first == second or first in second.parents or second in first.parents:
                 raise ValueError("collection roots must not overlap")
+    if _REVISION.fullmatch(expected_source_revision) is None or _REVISION.fullmatch(
+        expected_source_tree
+    ) is None:
+        raise ValueError("expected source revision or tree is invalid")
+    resolved_tree = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(_REPO_ROOT),
+            "rev-parse",
+            "--verify",
+            f"{expected_source_revision}^{{tree}}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if (
+        resolved_tree.returncode != 0
+        or resolved_tree.stdout.strip() != expected_source_tree
+    ):
+        raise ValueError("expected source revision tree differs")
     if work_root.exists() and any(work_root.iterdir()):
         raise ValueError("collection work root must be empty")
     if output_dir.exists() and any(output_dir.iterdir()):
@@ -350,6 +388,7 @@ def collect_remote_scoring(
         publication_dir,
         expected_input_manifest_sha256=expected_input_manifest_sha256,
         expected_source_revision=expected_source_revision,
+        expected_source_tree=expected_source_tree,
     )
     input_manifest = verify_input_directory(
         input_dir,
@@ -371,12 +410,14 @@ def collect_remote_scoring(
     if (
         not isinstance(remote_receipt, dict)
         or remote_receipt.get("schema_version")
-        != "retrieval-baseline-remote-scoring-v1"
+        != "retrieval-baseline-remote-scoring-v2"
         or remote_receipt.get("status") != "complete"
         or remote_receipt.get("topic_count") != 119
         or remote_receipt.get("topic_ids") != list(OFFICIAL_TOPIC_IDS)
         or remote_receipt.get("input_manifest_sha256")
         != expected_input_manifest_sha256
+        or remote_receipt.get("source_revision") != expected_source_revision
+        or remote_receipt.get("source_tree") != expected_source_tree
     ):
         raise ValueError("remote scoring receipt is incomplete or mismatched")
     portable = publication_dir / "portable-scores/complete.jsonl"
@@ -411,6 +452,7 @@ def collect_remote_scoring(
         score_cache_root=fresh_cache,
         output_dir=work_root / "fresh-replay",
         source_revision=expected_source_revision,
+        source_tree=expected_source_tree,
         scorer_factory=scorer_factory,
     )
 
@@ -424,11 +466,13 @@ def collect_remote_scoring(
         score_cache_root=shared_cache_root,
         output_dir=output_dir / "final",
         source_revision=expected_source_revision,
+        source_tree=expected_source_tree,
         scorer_factory=scorer_factory,
     )
     receipt = {
         "expected_input_manifest_sha256": expected_input_manifest_sha256,
         "expected_source_revision": expected_source_revision,
+        "expected_source_tree": expected_source_tree,
         "fresh_replay": fresh_replay,
         "input_source_export_manifest_sha256": input_manifest[
             "source_export_manifest_sha256"
@@ -437,7 +481,7 @@ def collect_remote_scoring(
             (output_dir / "merge-receipt.json").read_bytes()
         ).hexdigest(),
         "portable_cache_sha256": remote_receipt["portable_cache_sha256"],
-        "schema_version": "retrieval-baseline-local-collection-v1",
+        "schema_version": "retrieval-baseline-local-collection-v2",
         "shared_cache_final_replay": final_replay,
         "status": "complete",
         "topic_count": 119,
@@ -452,6 +496,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--input-manifest-sha256", required=True)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--source-tree", required=True)
     parser.add_argument("--shared-cache", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -465,6 +510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         input_dir=args.input_dir,
         expected_input_manifest_sha256=args.input_manifest_sha256,
         expected_source_revision=args.source_revision,
+        expected_source_tree=args.source_tree,
         shared_cache_root=args.shared_cache,
         work_root=args.work_root,
         output_dir=args.output_dir,

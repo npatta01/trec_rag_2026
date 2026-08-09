@@ -1857,10 +1857,15 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
             }
         )
     source_revision = os.environ.get("TREC_RAG_SOURCE_REVISION")
+    source_tree = os.environ.get("TREC_RAG_SOURCE_TREE")
     if source_revision is not None and re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
         raise ValueError("TREC_RAG_SOURCE_REVISION must be a lowercase Git commit")
+    if source_tree is not None and re.fullmatch(r"[0-9a-f]{40}", source_tree) is None:
+        raise ValueError("TREC_RAG_SOURCE_TREE must be a lowercase Git tree")
+    if (source_revision is None) != (source_tree is None):
+        raise ValueError("source revision and tree identities must be provided together")
     manifest = {
-        "schema_version": "retrieval-baseline-runs-manifest-v4",
+        "schema_version": "retrieval-baseline-runs-manifest-v5",
         "source_export_manifest_sha256": source_export_manifest_sha256,
         "run_files": run_files,
         "run_file_receipts": run_file_receipts,
@@ -1868,6 +1873,7 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
         "implementation_identity": {
             "module_sha256": sha256(Path(__file__).read_bytes()).hexdigest(),
             "source_revision": source_revision,
+            "source_tree": source_tree,
         },
         "scorer_identity": dict(ordered[0].scorer_identity),
         "chunker_identity": dict(ordered[0].chunker_identity),

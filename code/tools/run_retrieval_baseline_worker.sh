@@ -109,6 +109,7 @@ actual_source_tree=$(git write-tree) || die "could not derive transported source
 [[ $actual_source_tree == "$source_tree" ]] \
   || die "transported worker source differs from the reviewed tree"
 export TREC_RAG_SOURCE_REVISION="$source_revision"
+export TREC_RAG_SOURCE_TREE="$source_tree"
 image_python=$(command -v python3) || die "the pinned image has no python3 interpreter"
 image_python=$("$image_python" -c 'import os,sys; print(os.path.realpath(sys.executable))') \
   || die "could not resolve the image Python interpreter"
@@ -209,8 +210,8 @@ if actual != expected:
 value = json.loads(manifest.read_text(encoding="utf-8"))
 schema_status = (value.get("schema_version"), value.get("status"))
 if schema_status not in {
-    ("retrieval-baseline-publication-v1", "complete"),
-    ("retrieval-baseline-failure-publication-v1", "failed"),
+    ("retrieval-baseline-publication-v2", "complete"),
+    ("retrieval-baseline-failure-publication-v2", "failed"),
 } or value.get("sha256s_sha256") != sha256(sums.read_bytes()).hexdigest():
     raise SystemExit("publication manifest is invalid")
 receipt_field = (
@@ -225,6 +226,10 @@ receipt_name = (
 )
 if value.get(receipt_field) != sha256((root / receipt_name).read_bytes()).hexdigest():
     raise SystemExit("publication terminal receipt digest differs")
+receipt = json.loads((root / receipt_name).read_text(encoding="utf-8"))
+for field in ("input_manifest_sha256", "source_revision", "source_tree"):
+    if receipt.get(field) != value.get(field):
+        raise SystemExit(f"publication and terminal receipt {field} differ")
 PY
 }
 
@@ -294,7 +299,7 @@ if ((scoring_status != 0)); then
       | xargs -0 sha256sum >SHA256SUMS
     sha256sum -c SHA256SUMS
   )
-  "$venv_python" - "$publication" "$task_name" "$source_revision" "$input_manifest_sha256" <<'PY'
+  "$venv_python" - "$publication" "$task_name" "$source_revision" "$source_tree" "$input_manifest_sha256" <<'PY'
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -303,10 +308,11 @@ import sys
 root = Path(sys.argv[1])
 payload = {
     "failure_receipt_sha256": sha256((root / "remote-scoring-failure-receipt.json").read_bytes()).hexdigest(),
-    "input_manifest_sha256": sys.argv[4],
-    "schema_version": "retrieval-baseline-failure-publication-v1",
+    "input_manifest_sha256": sys.argv[5],
+    "schema_version": "retrieval-baseline-failure-publication-v2",
     "sha256s_sha256": sha256((root / "SHA256SUMS").read_bytes()).hexdigest(),
     "source_revision": sys.argv[3],
+    "source_tree": sys.argv[4],
     "status": "failed",
     "task_name": sys.argv[2],
 }
@@ -352,7 +358,7 @@ PY
     | xargs -0 sha256sum >SHA256SUMS
   sha256sum -c SHA256SUMS
 )
-"$venv_python" - "$publication" "$task_name" "$source_revision" "$input_manifest_sha256" <<'PY'
+"$venv_python" - "$publication" "$task_name" "$source_revision" "$source_tree" "$input_manifest_sha256" <<'PY'
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -360,11 +366,12 @@ import sys
 
 root = Path(sys.argv[1])
 payload = {
-    "input_manifest_sha256": sys.argv[4],
+    "input_manifest_sha256": sys.argv[5],
     "remote_scoring_receipt_sha256": sha256((root / "remote-scoring-receipt.json").read_bytes()).hexdigest(),
-    "schema_version": "retrieval-baseline-publication-v1",
+    "schema_version": "retrieval-baseline-publication-v2",
     "sha256s_sha256": sha256((root / "SHA256SUMS").read_bytes()).hexdigest(),
     "source_revision": sys.argv[3],
+    "source_tree": sys.argv[4],
     "status": "complete",
     "task_name": sys.argv[2],
 }

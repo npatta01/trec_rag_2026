@@ -159,6 +159,9 @@ def run_remote_scoring(
         raise ValueError(
             "remote scoring requires TREC_RAG_SOURCE_REVISION as a Git commit"
         )
+    source_tree = os.environ.get("TREC_RAG_SOURCE_TREE")
+    if source_tree is None or re.fullmatch(r"[0-9a-f]{40}", source_tree) is None:
+        raise ValueError("remote scoring requires TREC_RAG_SOURCE_TREE as a Git tree")
     topic_ids = tuple(verified["topic_ids"])
     canary_topic_ids = tuple(verified["canary_topic_ids"])
     ordered_scoring_phases(topic_ids, canary_topic_ids)
@@ -307,9 +310,10 @@ def run_remote_scoring(
                         ),
                         "failure_type": type(exc).__name__,
                         "input_manifest_sha256": input_manifest_sha256,
-                        "schema_version": "retrieval-baseline-remote-failure-v1",
+                        "schema_version": "retrieval-baseline-remote-failure-v2",
                         "scored_topic_ids": list(live_matrices),
                         "source_revision": source_revision,
+                        "source_tree": source_tree,
                         "status": "failed",
                     },
                 )
@@ -351,7 +355,9 @@ def run_remote_scoring(
         "input_manifest_sha256": input_manifest_sha256,
         "portable_cache_row_count": cache_export_receipt["row_count"],
         "portable_cache_sha256": cache_export_receipt["sha256"],
-        "schema_version": "retrieval-baseline-remote-scoring-v1",
+        "schema_version": "retrieval-baseline-remote-scoring-v2",
+        "source_revision": source_revision,
+        "source_tree": source_tree,
         "status": "complete",
         "topic_count": len(matrices),
         "topic_ids": list(OFFICIAL_TOPIC_IDS),

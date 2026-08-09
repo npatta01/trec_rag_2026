@@ -3,6 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -31,12 +32,14 @@ def _publication_fixture(tmp_path: Path) -> tuple[Path, str, str]:
     )
     input_digest = "a" * 64
     source_revision = "b" * 40
+    source_tree = "d" * 40
     manifest = {
         "input_manifest_sha256": input_digest,
         "remote_scoring_receipt_sha256": "c" * 64,
-        "schema_version": "retrieval-baseline-publication-v1",
+        "schema_version": "retrieval-baseline-publication-v2",
         "sha256s_sha256": sha256(sums.read_bytes()).hexdigest(),
         "source_revision": source_revision,
+        "source_tree": source_tree,
         "status": "complete",
         "task_name": "candidate-core-all",
     }
@@ -54,6 +57,7 @@ def test_publication_closure_accepts_exact_manifest_last_file_set(tmp_path: Path
         root,
         expected_input_manifest_sha256=input_digest,
         expected_source_revision=source_revision,
+        expected_source_tree="d" * 40,
     )
 
     assert verified["status"] == "complete"
@@ -70,6 +74,7 @@ def test_publication_closure_rejects_tamper_extra_files_and_wrong_identity(
             root,
             expected_input_manifest_sha256=input_digest,
             expected_source_revision=source_revision,
+            expected_source_tree="d" * 40,
         )
 
     root, input_digest, source_revision = _publication_fixture(tmp_path / "extra")
@@ -79,6 +84,7 @@ def test_publication_closure_rejects_tamper_extra_files_and_wrong_identity(
             root,
             expected_input_manifest_sha256=input_digest,
             expected_source_revision=source_revision,
+            expected_source_tree="d" * 40,
         )
 
     root, input_digest, source_revision = _publication_fixture(tmp_path / "identity")
@@ -87,6 +93,7 @@ def test_publication_closure_rejects_tamper_extra_files_and_wrong_identity(
             root,
             expected_input_manifest_sha256="d" * 64,
             expected_source_revision=source_revision,
+            expected_source_tree="d" * 40,
         )
 
 
@@ -175,6 +182,7 @@ def test_collection_wrapper_is_private_explicit_and_merges_only_after_download()
     assert "publication-manifest.json" in source
     assert "realpath -m" in source
     assert '[[ $first == / || $second == / ]] && return 0' in source
+    assert "source_revision^{tree}" in source
 
 
 @pytest.mark.parametrize(
@@ -203,6 +211,7 @@ def test_collection_rejects_nested_roots_before_writing(
             input_dir=input_dir,
             expected_input_manifest_sha256="a" * 64,
             expected_source_revision="b" * 40,
+            expected_source_tree="c" * 40,
             shared_cache_root=tmp_path / "shared-cache",
             work_root=work,
             output_dir=output,
@@ -211,3 +220,33 @@ def test_collection_rejects_nested_roots_before_writing(
     assert not publication.exists()
     assert not work.exists()
     assert not output.exists()
+
+
+def test_collection_rejects_revision_tree_mismatch_before_writing(
+    tmp_path: Path,
+) -> None:
+    source_revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    with pytest.raises(ValueError, match="revision tree"):
+        collect_remote_scoring(
+            publication_dir=tmp_path / "publication",
+            input_dir=input_dir,
+            expected_input_manifest_sha256="a" * 64,
+            expected_source_revision=source_revision,
+            expected_source_tree="f" * 40,
+            shared_cache_root=tmp_path / "shared-cache",
+            work_root=tmp_path / "work",
+            output_dir=tmp_path / "output",
+        )
+
+    assert not (tmp_path / "publication").exists()
+    assert not (tmp_path / "work").exists()
+    assert not (tmp_path / "output").exists()

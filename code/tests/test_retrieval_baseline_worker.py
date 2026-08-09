@@ -229,11 +229,11 @@ def test_worker_publishes_canary_failure_receipt_manifest_last() -> None:
     source = WORKER.read_text(encoding="utf-8")
 
     assert "remote-scoring-failure-receipt.json" in source
-    assert "retrieval-baseline-failure-publication-v1" in source
+    assert "retrieval-baseline-failure-publication-v2" in source
     assert '"status": "failed"' in source
     assert "failure_receipt_sha256" in source
     assert 'buckets sync "$publication" "$output_prefix"' in source
-    failure_manifest = source.index("retrieval-baseline-failure-publication-v1")
+    failure_manifest = source.index("retrieval-baseline-failure-publication-v2")
     failure_upload = source.index(
         '"$output_prefix/publication-manifest.json"', failure_manifest
     )

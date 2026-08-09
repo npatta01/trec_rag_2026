@@ -101,6 +101,9 @@ for ((first_index = 0; first_index < ${#collection_paths[@]}; first_index++)); d
 done
 
 cd "$REPO_ROOT"
+source_tree=$(git rev-parse --verify "$source_revision^{tree}") \
+  || die "--source-revision is not available in the local repository"
+[[ $source_tree =~ ^[0-9a-f]{40}$ ]] || die "resolved source tree is invalid"
 venv_python="$REPO_ROOT/.venv/bin/python"
 venv_hf="$REPO_ROOT/.venv/bin/hf"
 [[ -x $venv_python && -x $venv_hf ]] || die "the locked project environment is required"
@@ -125,6 +128,7 @@ mkdir -p "$publication_dir"
   --input-dir "$input_dir" \
   --input-manifest-sha256 "$input_manifest_sha256" \
   --source-revision "$source_revision" \
+  --source-tree "$source_tree" \
   --shared-cache "$shared_cache" \
   --work-root "$work_root" \
   --output-dir "$output_dir"

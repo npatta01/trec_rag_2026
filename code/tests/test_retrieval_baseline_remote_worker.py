@@ -3,6 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -104,7 +105,7 @@ class _Model:
 def _remote_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Path, object, _Model, dict[str, int], str]:
+) -> tuple[Path, object, _Model, dict[str, int], str, str]:
     input_dir = tmp_path / "input"
     source_run_id = "facet-deepseek-b40-v3"
     source_root = input_dir / "source" / source_run_id
@@ -244,8 +245,22 @@ def _remote_fixture(
         "trec_rag.retrieval_baseline_collection.load_topic_input",
         topic_loader,
     )
-    source_revision = "b" * 40
+    source_revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[2],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    source_tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=Path(__file__).resolve().parents[2],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     monkeypatch.setenv("TREC_RAG_SOURCE_REVISION", source_revision)
+    monkeypatch.setenv("TREC_RAG_SOURCE_TREE", source_tree)
     model = _Model()
     counters = {"loader_calls": 0}
 
@@ -266,16 +281,21 @@ def _remote_fixture(
         scorer._device = "cuda"
         return scorer
 
-    return input_dir, scorer_factory, model, counters, source_revision
+    return input_dir, scorer_factory, model, counters, source_revision, source_tree
 
 
 def test_canary_replay_failure_writes_redacted_receipt_and_stops(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_dir, scorer_factory, model, counters, source_revision = _remote_fixture(
-        tmp_path, monkeypatch
-    )
+    (
+        input_dir,
+        scorer_factory,
+        model,
+        counters,
+        source_revision,
+        source_tree,
+    ) = _remote_fixture(tmp_path, monkeypatch)
 
     def fail_compare(_first: Path, _second: Path) -> None:
         raise ValueError("forced secret-bearing mismatch detail")
@@ -302,9 +322,10 @@ def test_canary_replay_failure_writes_redacted_receipt_and_stops(
         "input_manifest_sha256": sha256(
             (input_dir / "input-manifest.json").read_bytes()
         ).hexdigest(),
-        "schema_version": "retrieval-baseline-remote-failure-v1",
+        "schema_version": "retrieval-baseline-remote-failure-v2",
         "scored_topic_ids": ["rag2026-1", "rag2026-18"],
         "source_revision": source_revision,
+        "source_tree": source_tree,
         "status": "failed",
     }
     assert sorted(path.name for path in (publication / "matrices").iterdir()) == [
@@ -327,9 +348,14 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_dir, scorer_factory, model, counters, source_revision = _remote_fixture(
-        tmp_path, monkeypatch
-    )
+    (
+        input_dir,
+        scorer_factory,
+        model,
+        counters,
+        source_revision,
+        source_tree,
+    ) = _remote_fixture(tmp_path, monkeypatch)
 
     receipt = run_remote_scoring(
         input_dir=input_dir,
@@ -367,9 +393,10 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
         "remote_scoring_receipt_sha256": sha256(
             (publication / "remote-scoring-receipt.json").read_bytes()
         ).hexdigest(),
-        "schema_version": "retrieval-baseline-publication-v1",
+        "schema_version": "retrieval-baseline-publication-v2",
         "sha256s_sha256": sha256(sums.read_bytes()).hexdigest(),
         "source_revision": source_revision,
+        "source_tree": source_tree,
         "status": "complete",
         "task_name": "candidate-core-all",
     }
@@ -384,6 +411,7 @@ def test_remote_scoring_uses_one_live_model_and_fresh_cache_replays(
         input_dir=input_dir,
         expected_input_manifest_sha256=input_manifest_sha256,
         expected_source_revision=source_revision,
+        expected_source_tree=source_tree,
         shared_cache_root=tmp_path / "shared-cache",
         work_root=tmp_path / "collection-work",
         output_dir=tmp_path / "collection-output",
