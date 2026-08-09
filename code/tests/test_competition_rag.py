@@ -204,8 +204,10 @@ def test_checked_in_competition_configs_use_only_the_full_handoff(
     )
 
     assert config.topic_ids is None
-    assert config.handoff_manifest_path == (
-        retrieval.output_dir / "generation_handoff_manifest.json"
+    assert config.handoff_manifest_path.parts[-3:] == (
+        "outputs",
+        retrieval.experiment.id,
+        "generation_handoff_manifest.json",
     )
     assert not hasattr(config, "queries_path")
     assert not hasattr(config, "run_path")
