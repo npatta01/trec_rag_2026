@@ -13,7 +13,7 @@
 - Work only in `.worktrees/retrieval-baseline-advisor-runs` on `codex/retrieval-baseline-advisor-runs`.
 - Source artifact is `outputs/facet-deepseek-b40-v3`, whose export code commit must equal current `origin/master` (`05fdf35d858bf52bec2843c699a4bfd85d4b8c61`) and whose export manifest SHA-256 is `cb5a81608c48a5c43692ada0c9121cd96b7160589f08f5bbaf4e20612001463a`.
 - Use the existing shared cache read-only while building the bundle. Remote inference writes to a new isolated cache.
-- Launch one remote task only: H200 preferred, H100 fallback, `max_duration: 2h`, and worst-case offer cost no more than $10.
+- Use H200 preferred and H100 fallback with `max_duration: 1h45m`; after two bounded failed attempts costing about $1.08 total, the relaunch remains bounded below $10 total at the configured `$5/hour` ceiling.
 - The exact declined dstack preview and price must be shown before launch. The user’s approval authorizes the implementation and the bounded run, but the preview remains the final infrastructure safety check.
 - The remote worker must process `rag2026-1` and `rag2026-18` first and stop immediately if their fresh-cache replay is not byte-identical or requires a model batch.
 - Never overwrite or delete existing shared cache rows. Any score conflict aborts the merge.
@@ -29,8 +29,8 @@
 - Modify `code/tools/run_retrieval_baseline_worker.sh`: canary gate followed by the remaining topics in one model process.
 - Modify `code/tools/apply_retrieval_baseline_worker.sh`: create and launch the all-topic clean snapshot.
 - Create `code/tools/collect_retrieval_baseline_worker.sh`: download and invoke local collection safely.
-- Modify `.dstack/rag26-retrieval-baseline-worker.yaml`: two-hour H200 profile.
-- Create `.dstack/rag26-retrieval-baseline-worker-h100.yaml`: two-hour H100 fallback profile.
+- Modify `.dstack/rag26-retrieval-baseline-worker.yaml`: bounded H200 profile.
+- Create `.dstack/rag26-retrieval-baseline-worker-h100.yaml`: bounded H100 fallback profile.
 - Modify `code/trec_rag/README.md`: reproducible build, preview, run, collect, and replay commands.
 - Create/modify focused tests under `code/tests/` for every module and shell contract above.
 
@@ -194,7 +194,7 @@ git commit -m "feat: seal all-topic candidate-core scoring bundle"
 
 **Step 1: Write failing shell-contract tests**
 
-Test that the worker derives all topic IDs from the authenticated bundle, rejects counts other than 119, scores canaries first, performs immediate fresh-cache canary replay, stops on any byte mismatch/model batch/missing row, then processes the remaining 117 without restarting the model. Test immutable output prefixes, complete cache export, SHA256SUMS, manifest-last publication, empty-prefix handling, two-hour duration, H200 primary, H100 fallback, and max price settings.
+Test that the worker derives all topic IDs from the authenticated bundle, rejects counts other than 119, scores canaries first, performs immediate fresh-cache canary replay, stops on any byte mismatch/model batch/missing row, then processes the remaining 117 without restarting the model. Test immutable output prefixes, complete cache export, SHA256SUMS, manifest-last publication, empty-prefix handling, bounded duration, H200 primary, H100 fallback, and max price settings.
 
 **Step 2: Run tests and confirm RED**
 
@@ -215,7 +215,7 @@ Test that the worker derives all topic IDs from the authenticated bundle, reject
 
 **Step 4: Configure bounded GPU fallback**
 
-Set both dstack profiles to two hours. Use an H200 marketplace selector first; use the H100 profile only when the H200 preview has no acceptable offer. Keep `max_price` low enough that the two-hour maximum remains under $10.
+Set both dstack profiles to one hour 45 minutes. Use an H200 marketplace selector first; use the H100 profile only when the H200 preview has no acceptable offer. Keep `max_price` low enough that cumulative attempts remain under $10.
 
 **Step 5: Run tests and confirm GREEN**
 
@@ -284,7 +284,7 @@ Exercise bundle build → canary gate → remaining topics → immutable publica
 
 **Step 2: Document exact operator commands**
 
-Include latest-artifact checks, bundle creation, upload, H200 declined preview, H100 fallback preview, launch, monitoring, download, local collection, final verification, and recovery after interruption. Clearly mark private artifact locations and the $10/two-hour limits.
+Include latest-artifact checks, bundle creation, upload, H200 declined preview, H100 fallback preview, launch, monitoring, download, local collection, final verification, and recovery after interruption. Clearly mark private artifact locations and the bounded-duration/cost limits.
 
 **Step 3: Run focused and broader verification**
 
@@ -327,11 +327,11 @@ Confirm origin/source identities, 119 topics, candidate distribution, exact cach
 
 **Step 3: Preview the H200 job**
 
-Run the exact dstack apply command without `--yes`. Show the selected offer, hourly price, maximum two-hour cost, source commit, bundle hash, 119-topic count, canaries, expected hits/misses, and output prefix. If there is no acceptable H200, decline it and preview the H100 profile instead. Do not run both.
+Run the exact dstack apply command without `--yes`. Show the selected offer, hourly price, maximum job cost, source commit, bundle hash, 119-topic count, canaries, expected hits/misses, and output prefix. If there is no acceptable H200, decline it and preview the H100 profile instead. Do not run both.
 
 **Step 4: Launch and monitor one job**
 
-After the preview safety check, launch the chosen job. Stop it if the canary gate fails, the job cannot finish within two hours, or projected spend can exceed $10.
+After the preview safety check, launch the chosen job. Stop it if the canary gate fails, the job cannot finish within one hour 45 minutes, or projected cumulative spend can exceed $10.
 
 **Step 5: Download, verify, and merge locally**
 

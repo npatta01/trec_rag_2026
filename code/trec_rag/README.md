@@ -904,8 +904,8 @@ BASELINE_OUTPUT_PREFIX=hf://buckets/Npatta01/trec_mlm_2026/experiments/retrieval
 
 Preview H200 first. Preview is declined by default and must be inspected before
 launch. H100 is only a fallback when no acceptable H200 offer exists. Both
-profiles have a two-hour duration and `$5/hour` ceiling, so either single job
-has a hard `$10` maximum:
+profiles have a one-hour-45-minute duration and `$5/hour` ceiling, so either
+single job has a hard `$8.75` maximum:
 
 ```bash
 BASELINE_MANIFEST_SHA=$(sha256sum "$BASELINE_INPUT/input-manifest.json" | cut -d' ' -f1)

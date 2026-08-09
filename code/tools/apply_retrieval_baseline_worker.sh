@@ -30,8 +30,8 @@ Usage:
     --input-manifest-sha256 SHA256 --output-prefix HF_PREFIX
 
 Preview is the default and declines submission. Use H200 first. Select H100
-only when the H200 preview has no acceptable offer. Both profiles stop at two
-hours and cap hourly price at $5, so worst-case spend is at most $10.
+only when the H200 preview has no acceptable offer. Both profiles stop at one
+hour 45 minutes and cap hourly price at $5, so worst-case spend is at most $8.75.
 EOF
 }
 
