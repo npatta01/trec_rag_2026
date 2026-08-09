@@ -2090,3 +2090,22 @@ strongest subnarrative percentiles, and run 3 first orders by how many pooled su
 contribute globally strong passages. The matrix artifact contains hashes, identifiers, ranks,
 and scores but no document text. Its manifest and the run manifest record exact matrix counts,
 source-pool membership hashes, cutoff statistics, admission overlap, fallback use, and `k_t`.
+
+For an NVIDIA smoke, package each completed source topic with
+`trec_rag.competition_cache_bundle` and publish those immutable private bundles under one
+`.../trec_rag_2026/artifacts/<input-id>/<topic-id>` prefix. The checked-in
+`.dstack/rag26-retrieval-baseline-worker.yaml` runs only through a clean committed snapshot and
+invokes `code/tools/run_retrieval_baseline_worker.sh`. The worker accepts one or two topics,
+restores and verifies their bundles, scores sequentially on one 48 GB GPU, and round-trip
+verifies its private output publication. It uploads only text-free matrices, run files,
+manifests, and receipts; document text and live caches remain inside the disposable worker.
+
+Run its credential-free argument/source preflight before previewing offers:
+
+```bash
+bash code/tools/run_retrieval_baseline_worker.sh --preflight \
+  --task-name smoke-0-37 \
+  --input-prefix hf://buckets/<private-bucket>/trec_rag_2026/artifacts/<input-id> \
+  --output-prefix hf://buckets/<private-bucket>/trec_rag_2026/experiments/<output-id> \
+  --topic rag2026-0 --topic rag2026-37
+```
