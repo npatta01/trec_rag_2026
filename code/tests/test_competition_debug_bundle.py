@@ -7,6 +7,7 @@ from dataclasses import fields, replace
 import gc
 from hashlib import sha256
 from html.parser import HTMLParser
+import os
 from pathlib import Path
 import socket
 import weakref
@@ -251,8 +252,8 @@ def test_bundle_failure_points_never_publish_a_partial_target(
     elif failure_point == "rename":
         monkeypatch.setattr(
             bundle_module,
-            "_rename_noreplace",
-            lambda *_args: (_ for _ in ()).throw(OSError("rename")),
+            "_rename_noreplace_fds",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("rename")),
         )
     else:
         monkeypatch.setattr(bundle_module, "_hash_matches", lambda *_args: False)
@@ -318,11 +319,13 @@ def test_bundle_cleanup_refuses_a_substituted_staging_directory(
     def substitute_after_index(path: Path, payload: bytes) -> None:
         real_write(path, payload)
         if path.name == "index.html":
-            staging = path.parent
-            moved = staging.with_name(staging.name + ".moved")
-            staging.rename(moved)
-            staging.mkdir(mode=0o700)
-            foreign_paths.append(staging)
+            payload_dir = path.parent.parent
+            guardian = payload_dir.parent
+            moved = guardian.with_name(guardian.name + ".moved")
+            guardian.rename(moved)
+            guardian.mkdir(mode=0o700)
+            (guardian / "foreign-sentinel").write_text("foreign", encoding="utf-8")
+            foreign_paths.append(guardian)
             moved_paths.append(moved)
             raise OSError("forced staging substitution")
 
@@ -332,8 +335,44 @@ def test_bundle_cleanup_refuses_a_substituted_staging_directory(
 
     assert len(foreign_paths) == len(moved_paths) == 1
     assert foreign_paths[0].is_dir()
+    assert (foreign_paths[0] / "foreign-sentinel").read_text(encoding="utf-8") == "foreign"
     assert moved_paths[0].is_dir()
     assert not target.exists()
+
+
+def test_bundle_cleanup_does_not_delete_substituted_foreign_guardian(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "cleanup-window"
+    real_write = bundle_module._write_bundle_file
+    real_remove = bundle_module._remove_guardian_path
+    foreign_paths: list[Path] = []
+    moved_paths: list[Path] = []
+
+    def fail_topic(path: Path, payload: bytes) -> None:
+        if path.name == "bundle-manifest.json":
+            raise OSError("forced cleanup")
+        real_write(path, payload)
+
+    def substitute_before_remove(path: Path, identity: object) -> None:
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        path.mkdir(mode=0o700)
+        foreign = path / "foreign-nonempty"
+        foreign.write_text("preserve", encoding="utf-8")
+        moved_paths.append(moved)
+        foreign_paths.append(foreign)
+        real_remove(path, identity)
+
+    monkeypatch.setattr(bundle_module, "_write_bundle_file", fail_topic)
+    monkeypatch.setattr(bundle_module, "_remove_guardian_path", substitute_before_remove)
+    with pytest.raises(OSError, match="forced cleanup"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    assert moved_paths and moved_paths[0].is_dir()
+    assert foreign_paths and foreign_paths[0].read_text(encoding="utf-8") == "preserve"
 
 
 @pytest.mark.parametrize("replacement", ("symlink", "file"))
@@ -346,24 +385,23 @@ def test_bundle_rejects_a_topic_replaced_after_initial_validation(
     target = fixture.retrieval_output / f"topic-{replacement}-substitution"
     foreign = fixture.retrieval_output / f"foreign-{replacement}.html"
     foreign.write_text("foreign topic bytes", encoding="utf-8")
-    real_fsync = bundle_module._fsync_directory
+    real_validate = bundle_module._validate_staging
     swapped = False
 
-    def replace_topic_before_final_reconciliation(path: Path) -> None:
+    def replace_topic_before_final_reconciliation(*args: object, **kwargs: object) -> None:
         nonlocal swapped
-        real_fsync(path)
-        if path.name == "topics" and not swapped:
+        real_validate(*args, **kwargs)
+        if not swapped:
             swapped = True
-            topic_path = path / "alpha-topic.html"
+            staging = args[0]
+            topic_path = staging / "topics" / "alpha-topic.html"
             topic_path.unlink()
             if replacement == "symlink":
                 topic_path.symlink_to(foreign)
             else:
                 topic_path.write_text("foreign topic bytes", encoding="utf-8")
 
-    monkeypatch.setattr(
-        bundle_module, "_fsync_directory", replace_topic_before_final_reconciliation
-    )
+    monkeypatch.setattr(bundle_module, "_validate_staging", replace_topic_before_final_reconciliation)
     with pytest.raises(ValueError, match="(?:identity|hash|reconciliation|link)"):
         debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
 
@@ -371,22 +409,154 @@ def test_bundle_rejects_a_topic_replaced_after_initial_validation(
     assert foreign.read_text(encoding="utf-8") == "foreign topic bytes"
 
 
+def test_bundle_rename_seam_publishes_pinned_payload_after_guardian_substitution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "guardian-rename-substitution"
+    real_rename = bundle_module._rename_noreplace_fds
+    moved_paths: list[Path] = []
+    foreign_paths: list[Path] = []
+
+    def substitute_guardian(
+        old_dir_fd: int,
+        old_name: str,
+        new_dir_fd: int,
+        new_name: str,
+        **kwargs: object,
+    ) -> None:
+        guardian = Path(os.readlink(f"/proc/self/fd/{old_dir_fd}"))
+        moved = guardian.with_name(guardian.name + ".moved")
+        guardian.rename(moved)
+        guardian.mkdir(mode=0o700)
+        foreign = guardian / "foreign.txt"
+        foreign.write_text("must survive", encoding="utf-8")
+        moved_paths.append(moved)
+        foreign_paths.append(foreign)
+        real_rename(old_dir_fd, old_name, new_dir_fd, new_name, **kwargs)
+
+    monkeypatch.setattr(bundle_module, "_rename_noreplace_fds", substitute_guardian)
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert (target / "topics" / "alpha-topic.html").is_file()
+    assert "must survive" not in (target / "index.html").read_text(encoding="utf-8")
+    assert moved_paths and moved_paths[0].is_dir()
+    assert foreign_paths and foreign_paths[0].read_text(encoding="utf-8") == "must survive"
+
+
+def test_bundle_rename_seam_refuses_a_replaced_payload_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "payload-rename-substitution"
+    real_rename = bundle_module._rename_noreplace_fds
+    moved_payloads: list[Path] = []
+    foreign_payloads: list[Path] = []
+
+    def substitute_payload(
+        old_dir_fd: int,
+        old_name: str,
+        new_dir_fd: int,
+        new_name: str,
+        **kwargs: object,
+    ) -> None:
+        guardian = Path(os.readlink(f"/proc/self/fd/{old_dir_fd}"))
+        moved = guardian / "payload.moved"
+        os.rename(old_name, moved.name, src_dir_fd=old_dir_fd, dst_dir_fd=old_dir_fd)
+        foreign = guardian / old_name
+        foreign.mkdir(mode=0o700)
+        (foreign / "foreign.txt").write_text("must survive", encoding="utf-8")
+        moved_payloads.append(moved)
+        foreign_payloads.append(foreign)
+        real_rename(old_dir_fd, old_name, new_dir_fd, new_name, **kwargs)
+
+    monkeypatch.setattr(bundle_module, "_rename_noreplace_fds", substitute_payload)
+    with pytest.raises(ValueError, match="payload identity"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    assert moved_payloads and moved_payloads[0].is_dir()
+    assert foreign_payloads and (foreign_payloads[0] / "foreign.txt").read_text(encoding="utf-8") == "must survive"
+
+
+def test_bundle_rejects_broken_relative_cross_page_fragment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "broken-cross-page-fragment"
+    real_summary = bundle_module.render_bundle_summary
+
+    def broken_summary(*args: object, **kwargs: object) -> str:
+        return real_summary(*args, **kwargs).replace(
+            "</main>", '<a href="topics/alpha-topic.html#missing-anchor">broken</a></main>', 1
+        )
+
+    monkeypatch.setattr(bundle_module, "render_bundle_summary", broken_summary)
+    with pytest.raises(ValueError, match="fragment"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+
+
+def test_bundle_link_validation_parses_each_page_once_per_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    target = fixture.retrieval_output / "single-scan"
+    real_feed = bundle_module.HTMLParser.feed
+    real_summary = bundle_module.render_bundle_summary
+    real_topic = bundle_module.render_debug_topic_page
+    feed_count = 0
+    anchor_links = "".join(
+        f'<a href="topics/alpha-topic.html#anchor-{index}">link</a>'
+        for index in range(10)
+    )
+    anchors = "".join(f'<a id="anchor-{index}"></a>' for index in range(10))
+
+    def summary_with_many_fragments(*args: object, **kwargs: object) -> str:
+        return real_summary(*args, **kwargs).replace("</main>", anchor_links + "</main>", 1)
+
+    def topic_with_anchors(*args: object, **kwargs: object) -> str:
+        return real_topic(*args, **kwargs).replace("</main>", anchors + "</main>", 1)
+
+    def observed_feed(parser: HTMLParser, page: str) -> None:
+        nonlocal feed_count
+        feed_count += 1
+        real_feed(parser, page)
+
+    monkeypatch.setattr(bundle_module.HTMLParser, "feed", observed_feed)
+    monkeypatch.setattr(bundle_module, "render_bundle_summary", summary_with_many_fragments)
+    monkeypatch.setattr(bundle_module, "render_debug_topic_page", topic_with_anchors)
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert feed_count == 3
+
+
 def test_bundle_rejects_a_late_empty_target_without_overwriting_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
     target = fixture.retrieval_output / "late-target"
-    real_rename = bundle_module._rename_noreplace
+    real_rename = bundle_module._rename_noreplace_fds
     injected = False
 
-    def inject_target(source: Path, destination: Path) -> None:
+    def inject_target(
+        old_dir_fd: int,
+        old_name: str,
+        new_dir_fd: int,
+        new_name: str,
+        **kwargs: object,
+    ) -> None:
         nonlocal injected
         if not injected:
             injected = True
-            destination.mkdir()
-        real_rename(source, destination)
+            target.mkdir()
+        real_rename(old_dir_fd, old_name, new_dir_fd, new_name, **kwargs)
 
-    monkeypatch.setattr(bundle_module, "_rename_noreplace", inject_target)
+    monkeypatch.setattr(bundle_module, "_rename_noreplace_fds", inject_target)
     with pytest.raises(FileExistsError):
         debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
 
@@ -400,18 +570,14 @@ def test_bundle_keeps_complete_target_when_post_rename_fsync_fails(
 ) -> None:
     fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
     target = fixture.retrieval_output / "durability-failure"
-    real_fsync = bundle_module._fsync_directory
-    parent_syncs = 0
+    real_fsync = bundle_module._fsync_directory_fd
 
-    def fail_after_rename(path: Path) -> None:
-        nonlocal parent_syncs
-        if path == target.parent:
-            parent_syncs += 1
-            if parent_syncs == 2:
-                raise OSError("forced post-rename parent fsync")
-        real_fsync(path)
+    def fail_after_rename(descriptor: int) -> None:
+        if target.exists():
+            raise OSError("forced post-rename parent fsync")
+        real_fsync(descriptor)
 
-    monkeypatch.setattr(bundle_module, "_fsync_directory", fail_after_rename)
+    monkeypatch.setattr(bundle_module, "_fsync_directory_fd", fail_after_rename)
     with pytest.raises(OSError, match="durability|post-rename"):
         debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
 

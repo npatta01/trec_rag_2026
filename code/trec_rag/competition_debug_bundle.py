@@ -16,7 +16,6 @@ from html.parser import HTMLParser
 import math
 import os
 import re
-import shutil
 import stat
 import statistics
 import sys
@@ -1073,8 +1072,38 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _rename_noreplace(source: Path, destination: Path) -> None:
-    """Atomically rename a complete staging directory without replacing a target."""
+def _open_directory_fd(path: Path) -> int:
+    return os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+
+
+def _fsync_directory_fd(descriptor: int) -> None:
+    os.fsync(descriptor)
+
+
+def _rename_noreplace_fds(
+    old_dir_fd: int,
+    old_name: str,
+    new_dir_fd: int,
+    new_name: str,
+    *,
+    expected_old_identity: _FileIdentity | None = None,
+) -> None:
+    """Atomically rename one descriptor-relative entry without replacing a target."""
+    if expected_old_identity is not None:
+        try:
+            source_record = os.stat(
+                old_name, dir_fd=old_dir_fd, follow_symlinks=False
+            )
+        except FileNotFoundError as error:
+            raise ValueError("bundle staging payload disappeared before publication") from error
+        if stat.S_ISLNK(source_record.st_mode) or (
+            source_record.st_dev,
+            source_record.st_ino,
+        ) != expected_old_identity:
+            raise ValueError("bundle staging payload identity changed before publication")
     if sys.platform != "linux":
         raise OSError(
             errno.ENOTSUP,
@@ -1093,15 +1122,31 @@ def _rename_noreplace(source: Path, destination: Path) -> None:
     ]
     renameat2.restype = ctypes.c_int
     result = renameat2(
-        -100,
-        os.fsencode(source),
-        -100,
-        os.fsencode(destination),
+        old_dir_fd,
+        os.fsencode(old_name),
+        new_dir_fd,
+        os.fsencode(new_name),
         1,
     )
     if result != 0:
         error_number = ctypes.get_errno()
-        raise OSError(error_number, os.strerror(error_number), str(destination))
+        raise OSError(error_number, os.strerror(error_number), new_name)
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    """Compatibility wrapper for descriptor-relative no-replace publication."""
+    old_dir_fd = _open_directory_fd(source.parent)
+    new_dir_fd = _open_directory_fd(destination.parent)
+    try:
+        _rename_noreplace_fds(
+            old_dir_fd,
+            source.name,
+            new_dir_fd,
+            destination.name,
+        )
+    finally:
+        os.close(old_dir_fd)
+        os.close(new_dir_fd)
 
 
 def _safe_topic_filename(topic_id: str) -> str:
@@ -1138,67 +1183,88 @@ def _resolve_bundle_output(data: DebugReportData, output_dir: Path) -> Path:
     return target
 
 
-def _local_hrefs(page: str) -> tuple[str, ...]:
-    class HrefParser(HTMLParser):
+@dataclass(frozen=True)
+class _PageLinkGraph:
+    hrefs: tuple[str, ...]
+    anchors: frozenset[str]
+
+
+def _parse_page_links(page: str) -> _PageLinkGraph:
+    class LinkParser(HTMLParser):
         def __init__(self) -> None:
             super().__init__()
             self.hrefs: list[str] = []
-
-        def handle_starttag(
-            self, tag: str, attrs: list[tuple[str, str | None]]
-        ) -> None:
-            if tag == "a":
-                href = dict(attrs).get("href")
-                if href:
-                    self.hrefs.append(href)
-
-    parser = HrefParser()
-    parser.feed(page)
-    return tuple(
-        href
-        for href in parser.hrefs
-        if not href.startswith(("http://", "https://", "mailto:"))
-    )
-
-
-def _page_anchors(page: str) -> frozenset[str]:
-    class AnchorParser(HTMLParser):
-        def __init__(self) -> None:
-            super().__init__()
             self.anchors: set[str] = set()
 
         def handle_starttag(
             self, tag: str, attrs: list[tuple[str, str | None]]
         ) -> None:
             attributes = dict(attrs)
+            href = attributes.get("href")
+            if tag == "a" and href:
+                self.hrefs.append(href)
             for key in ("id", "name"):
                 value = attributes.get(key)
                 if value:
                     self.anchors.add(value)
 
-    parser = AnchorParser()
+    parser = LinkParser()
     parser.feed(page)
-    return frozenset(parser.anchors)
+    return _PageLinkGraph(
+        hrefs=tuple(
+        href
+        for href in parser.hrefs
+        if not href.startswith(("http://", "https://", "mailto:"))
+        ),
+        anchors=frozenset(parser.anchors),
+    )
+
+
+def _read_page_link_graph(
+    staging: Path, page_paths: Mapping[Path, Path]
+) -> Mapping[Path, _PageLinkGraph]:
+    graph: dict[Path, _PageLinkGraph] = {}
+    for relative, page in page_paths.items():
+        page_text = page.read_text(encoding="utf-8")
+        graph[relative] = _parse_page_links(page_text)
+        del page_text
+    return graph
+
+
+def _validate_link_graph(
+    staging: Path, graph: Mapping[Path, _PageLinkGraph]
+) -> None:
+    for source_relative, links in graph.items():
+        source = staging / source_relative
+        for href in links.hrefs:
+            parsed = urlsplit(href)
+            if parsed.scheme or parsed.netloc or parsed.path.startswith("/"):
+                raise ValueError(f"bundle page contains an unsafe link: {href}")
+            relative = parsed.path
+            destination = source if not relative else (source.parent / relative).resolve()
+            if relative and (
+                not destination.is_relative_to(staging) or not destination.is_file()
+            ):
+                raise ValueError(f"bundle page link does not resolve: {href}")
+            destination_relative = destination.relative_to(staging)
+            destination_links = graph.get(destination_relative)
+            if destination_links is None:
+                raise ValueError(f"bundle page link does not resolve: {href}")
+            fragment = unquote(parsed.fragment)
+            if fragment and fragment not in destination_links.anchors:
+                raise ValueError(f"bundle page fragment does not resolve: {href}")
 
 
 def _validate_page_links(staging: Path, page: Path) -> None:
-    page_text = page.read_text(encoding="utf-8")
-    for href in _local_hrefs(page_text):
-        parsed = urlsplit(href)
-        if parsed.scheme or parsed.netloc or parsed.path.startswith("/"):
-            raise ValueError(f"bundle page contains an unsafe link: {href}")
-        relative = parsed.path
-        destination = page if not relative else (page.parent / relative).resolve()
-        if relative and (
-            not destination.is_relative_to(staging) or not destination.is_file()
-        ):
-            raise ValueError(f"bundle page link does not resolve: {href}")
-        fragment = unquote(parsed.fragment)
-        if fragment:
-            if not destination.is_file() or fragment not in _page_anchors(
-                destination.read_text(encoding="utf-8")
-            ):
-                raise ValueError(f"bundle page fragment does not resolve: {href}")
+    """Compatibility helper for one page; publication uses the compact graph."""
+    relative = page.relative_to(staging)
+    graph = _read_page_link_graph(staging, {relative: page})
+    _validate_link_graph(staging, graph)
+
+
+def _validate_staging_links(staging: Path, page_paths: Mapping[Path, Path]) -> None:
+    graph = _read_page_link_graph(staging, page_paths)
+    _validate_link_graph(staging, graph)
 
 
 def _validate_staging(
@@ -1229,6 +1295,43 @@ def _validate_staging(
     if len(set(item.path for item in topic_receipts)) != len(topic_receipts):
         raise ValueError("bundle topic paths are not unique")
     pages = (index_receipt, *topic_receipts)
+    page_paths: dict[Path, Path] = {}
+    for receipt in pages:
+        path = staging / Path(receipt.path)
+        page_paths[Path(receipt.path)] = path
+        identity = file_identities.get(receipt.path)
+        if identity is None or not _identity_matches(path, identity):
+            raise ValueError(f"bundle file identity changed for {receipt.path}")
+        if not _hash_matches(path, receipt.sha256, receipt.bytes):
+            raise ValueError(f"bundle hash reconciliation failed for {receipt.path}")
+        if not _identity_matches(path, identity):
+            raise ValueError(f"bundle file identity changed for {receipt.path}")
+    _validate_staging_links(staging, page_paths)
+
+
+def _final_reconcile_staging(
+    staging: Path,
+    staging_identity: _FileIdentity,
+    data: DebugReportData,
+    index_receipt: _PageReceipt,
+    topic_receipts: Sequence[_PageReceipt],
+    file_identities: Mapping[str, _FileIdentity],
+) -> None:
+    """Reconcile only compact filesystem receipts after link validation."""
+    if not _identity_matches(staging, staging_identity, directory=True):
+        raise ValueError("bundle staging payload identity changed")
+    expected_files = {Path(index_receipt.path), *(Path(item.path) for item in topic_receipts), Path("bundle-manifest.json")}
+    actual_files = {
+        path.relative_to(staging)
+        for path in staging.rglob("*")
+        if not path.is_dir() or path.is_symlink()
+    }
+    if actual_files != expected_files:
+        raise ValueError("bundle staging contains unlisted or missing files")
+    topic_ids = tuple(topic.topic_id for topic in data.topics)
+    if topic_ids != tuple(item.topic_id for item in topic_receipts):
+        raise ValueError("bundle topic coverage or order does not reconcile")
+    pages = (index_receipt, *topic_receipts)
     for receipt in pages:
         path = staging / Path(receipt.path)
         identity = file_identities.get(receipt.path)
@@ -1238,26 +1341,66 @@ def _validate_staging(
             raise ValueError(f"bundle hash reconciliation failed for {receipt.path}")
         if not _identity_matches(path, identity):
             raise ValueError(f"bundle file identity changed for {receipt.path}")
-        _validate_page_links(staging, path)
 
 
-def _cleanup_staging(
-    staging: Path | None, staging_identity: _FileIdentity | None, target: Path
-) -> None:
-    if staging is None:
-        return
+@dataclass
+class _StagingState:
+    guardian_path: Path
+    guardian_identity: _FileIdentity
+    guardian_fd: int
+    payload_path: Path
+    payload_identity: _FileIdentity
+    payload_fd: int
+    topics_path: Path
+    topics_identity: _FileIdentity
+    file_identities: dict[str, _FileIdentity]
+    payload_published: bool = False
+
+
+def _remove_guardian_path(path: Path, identity: _FileIdentity) -> bool:
+    """Remove only an unchanged empty guardian pathname."""
+    if not _identity_matches(path, identity, directory=True):
+        return False
     try:
-        if staging.parent.resolve() != target.parent.resolve():
-            return
-        if not staging.name.startswith(f".{target.name}.") or not staging.name.endswith(".tmp"):
-            return
-        if staging_identity is None or not _identity_matches(
-            staging, staging_identity, directory=True
-        ):
-            return
-        shutil.rmtree(staging)
-    except FileNotFoundError:
-        pass
+        path.rmdir()
+    except OSError:
+        return False
+    return True
+
+
+def _cleanup_staging(state: _StagingState | None, target: Path) -> None:
+    if state is None:
+        return
+    guardian = state.guardian_path
+    if guardian.parent.resolve() != target.parent.resolve():
+        return
+    if not guardian.name.startswith(f".{target.name}.") or not guardian.name.endswith(".tmp"):
+        return
+    if not _identity_matches(guardian, state.guardian_identity, directory=True):
+        # The guardian pathname was moved or replaced.  Never follow it; the
+        # pinned moved guardian is left for manual recovery.
+        return
+    if state.payload_published:
+        _remove_guardian_path(guardian, state.guardian_identity)
+        return
+    if not _identity_matches(state.payload_path, state.payload_identity, directory=True):
+        return
+    if not _identity_matches(state.topics_path, state.topics_identity, directory=True):
+        return
+    for relative_path, identity in tuple(state.file_identities.items()):
+        file_path = state.payload_path / Path(relative_path)
+        if not _identity_matches(file_path, identity):
+            continue
+        try:
+            os.unlink(relative_path, dir_fd=state.payload_fd)
+        except FileNotFoundError:
+            pass
+    try:
+        os.rmdir("topics", dir_fd=state.payload_fd)
+        os.rmdir("payload", dir_fd=state.guardian_fd)
+    except OSError:
+        return
+    _remove_guardian_path(guardian, state.guardian_identity)
 
 
 def _render_and_write_topic(
@@ -1314,31 +1457,53 @@ def build_bundle_from_data(
         else None
     )
     summary = build_run_summary(data, evaluation)
-    staging: Path | None = None
-    staging_identity: _FileIdentity | None = None
+    parent_fd: int | None = None
+    state: _StagingState | None = None
+    guardian: Path | None = None
+    guardian_identity: _FileIdentity | None = None
+    guardian_fd: int | None = None
+    payload: Path | None = None
+    payload_identity: _FileIdentity | None = None
+    payload_fd: int | None = None
     try:
-        staging = Path(
+        parent_fd = _open_directory_fd(target.parent)
+        guardian = Path(
             tempfile.mkdtemp(
                 dir=target.parent,
                 prefix=f".{target.name}.",
                 suffix=".tmp",
             )
         )
-        staging_identity = _lstat_identity(staging, directory=True)
-        staging.chmod(0o700)
-        topics_dir = staging / "topics"
+        guardian_identity = _lstat_identity(guardian, directory=True)
+        guardian.chmod(0o700)
+        guardian_fd = _open_directory_fd(guardian)
+        payload = guardian / "payload"
+        payload.mkdir(mode=0o700)
+        payload_identity = _lstat_identity(payload, directory=True)
+        payload_fd = _open_directory_fd(payload)
+        topics_dir = payload / "topics"
         topics_dir.mkdir(mode=0o700)
+        topics_identity = _lstat_identity(topics_dir, directory=True)
+        state = _StagingState(
+            guardian_path=guardian,
+            guardian_identity=guardian_identity,
+            guardian_fd=guardian_fd,
+            payload_path=payload,
+            payload_identity=payload_identity,
+            payload_fd=payload_fd,
+            topics_path=topics_dir,
+            topics_identity=topics_identity,
+            file_identities={},
+        )
 
         index_body = render_bundle_summary(summary, denylist=_summary_denylist(data)).encode("utf-8")
-        index_path = staging / "index.html"
+        index_path = payload / "index.html"
         index_written_identity = _write_bundle_file(index_path, index_body)
         del index_body
         if index_written_identity is None:
             index_written_identity = _lstat_identity(index_path)
         index_receipt = _file_receipt(index_path, "index.html")
-        file_identities: dict[str, _FileIdentity] = {
-            "index.html": index_written_identity
-        }
+        state.file_identities["index.html"] = index_written_identity
 
         topic_receipts: list[_PageReceipt] = []
         total_topics = len(data.topics)
@@ -1358,15 +1523,15 @@ def build_bundle_from_data(
                 relative_path=f"topics/{filename}",
             )
             topic_receipts.append(topic_receipt)
-            file_identities[topic_receipt.path] = topic_identity
+            state.file_identities[topic_receipt.path] = topic_identity
 
         _validate_staging(
-            staging,
-            staging_identity,
+            payload,
+            payload_identity,
             data,
             index_receipt,
             topic_receipts,
-            file_identities,
+            state.file_identities,
         )
         pages = (index_receipt, *topic_receipts)
         manifest: dict[str, Any] = {
@@ -1396,7 +1561,7 @@ def build_bundle_from_data(
             if manifest["total_bytes"] == total:
                 break
             manifest["total_bytes"] = total
-        manifest_path = staging / "bundle-manifest.json"
+        manifest_path = payload / "bundle-manifest.json"
         manifest_bytes = len(body)
         manifest_sha256 = sha256(body).hexdigest()
         manifest_written_identity = _write_bundle_file(manifest_path, body)
@@ -1404,33 +1569,43 @@ def build_bundle_from_data(
             manifest_written_identity = _lstat_identity(manifest_path)
         manifest_receipt = _file_receipt(manifest_path, "bundle-manifest.json")
         del body
-        file_identities[manifest_receipt.path] = manifest_written_identity
+        state.file_identities[manifest_receipt.path] = manifest_written_identity
         if (
             manifest_receipt.bytes != manifest_bytes
             or manifest_receipt.sha256 != manifest_sha256
         ):
             raise ValueError("bundle manifest hash reconciliation failed")
-        _validate_manifest_file(staging, manifest_receipt, file_identities)
+        _validate_manifest_file(payload, manifest_receipt, state.file_identities)
         _fsync_directory(topics_dir)
-        _fsync_directory(staging)
-        _fsync_directory(target.parent)
-        _validate_staging(
-            staging,
-            staging_identity,
+        _fsync_directory(payload)
+        _fsync_directory_fd(guardian_fd)
+        if parent_fd is None:
+            raise OSError("bundle target parent descriptor was not opened")
+        _fsync_directory_fd(parent_fd)
+        _final_reconcile_staging(
+            payload,
+            payload_identity,
             data,
             index_receipt,
             topic_receipts,
-            file_identities,
+            state.file_identities,
         )
-        _validate_manifest_file(staging, manifest_receipt, file_identities)
+        _validate_manifest_file(payload, manifest_receipt, state.file_identities)
         if target.exists() or target.is_symlink():
             raise ValueError("bundle output must remain absent before publication")
-        if not _identity_matches(staging, staging_identity, directory=True):
-            raise ValueError("bundle staging directory identity changed")
-        _rename_noreplace(staging, target)
-        staging = None
+        if not _identity_matches(payload, payload_identity, directory=True):
+            raise ValueError("bundle staging payload identity changed")
+        _rename_noreplace_fds(
+            guardian_fd,
+            "payload",
+            parent_fd,
+            target.name,
+            expected_old_identity=payload_identity,
+        )
+        state.payload_published = True
+        _remove_guardian_path(guardian, guardian_identity)
         try:
-            _fsync_directory(target.parent)
+            _fsync_directory_fd(parent_fd)
         except Exception as error:
             raise OSError(
                 "bundle published but target parent durability fsync failed"
@@ -1450,7 +1625,32 @@ def build_bundle_from_data(
             evaluation_included=evaluation is not None,
         )
     finally:
-        _cleanup_staging(staging, staging_identity, target)
+        try:
+            _cleanup_staging(state, target)
+        finally:
+            if state is not None:
+                os.close(state.payload_fd)
+                os.close(state.guardian_fd)
+            else:
+                if payload_fd is not None:
+                    os.close(payload_fd)
+                if guardian_fd is not None:
+                    os.close(guardian_fd)
+                if (
+                    guardian is not None
+                    and guardian_identity is not None
+                    and payload is not None
+                    and payload_identity is not None
+                    and _identity_matches(guardian, guardian_identity, directory=True)
+                    and _identity_matches(payload, payload_identity, directory=True)
+                ):
+                    try:
+                        payload.rmdir()
+                    except OSError:
+                        pass
+                    _remove_guardian_path(guardian, guardian_identity)
+            if parent_fd is not None:
+                os.close(parent_fd)
 
 
 __all__ = [
