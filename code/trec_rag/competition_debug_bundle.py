@@ -10,18 +10,32 @@ from __future__ import annotations
 
 import json
 import html
+from html.parser import HTMLParser
 import math
+import os
+import re
+import shutil
 import statistics
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlsplit
 
-from trec_rag.competition_debug_report import DebugReportData, TopicReport
+from trec_rag.competition_debug_report import (
+    DebugReportData,
+    DebugReportBundleReceipt,
+    TopicPageNavigation,
+    TopicReport,
+    _REPORT_SCHEMA_VERSION,
+    render_debug_topic_page,
+)
 from trec_rag.friendly_report import assert_publishable, build_presentation
 from trec_rag.offline_evaluation import EvaluationError, load_manifest
+from trec_rag.repo_env import find_repo_root
 
 
 @dataclass(frozen=True)
@@ -931,6 +945,327 @@ def _summary_denylist(data: DebugReportData) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
+# ---------------------------------------------------------------------------
+# Create-only bundle publication
+# ---------------------------------------------------------------------------
+
+
+_BUNDLE_SCHEMA_VERSION = "competition_debug_report_bundle_v1"
+_SAFE_TOPIC_FILENAME = re.compile(r"[^/\\\x00-\x1f\x7f]+")
+
+
+@dataclass(frozen=True)
+class _PageReceipt:
+    path: str
+    bytes: int
+    sha256: str
+    topic_id: str | None = None
+
+    def as_json(self) -> dict[str, str | int]:
+        value: dict[str, str | int] = {
+            "path": self.path,
+            "bytes": self.bytes,
+            "sha256": self.sha256,
+        }
+        if self.topic_id is not None:
+            value["topic_id"] = self.topic_id
+        return value
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _write_bundle_file(path: Path, payload: bytes) -> None:
+    """Exclusively create one private bundle file and durably write its bytes."""
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as destination:
+            descriptor = -1
+            destination.write(payload)
+            destination.flush()
+            os.fsync(destination.fileno())
+    except Exception:
+        if descriptor != -1:
+            os.close(descriptor)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _file_receipt(path: Path, relative_path: str, *, topic_id: str | None = None) -> _PageReceipt:
+    digest = sha256()
+    size = 0
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    return _PageReceipt(
+        path=relative_path,
+        bytes=size,
+        sha256=digest.hexdigest(),
+        topic_id=topic_id,
+    )
+
+
+def _hash_matches(path: Path, expected_sha256: str, expected_bytes: int) -> bool:
+    actual = _file_receipt(path, "")
+    return actual.bytes == expected_bytes and actual.sha256 == expected_sha256
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _safe_topic_filename(topic_id: str) -> str:
+    if (
+        not isinstance(topic_id, str)
+        or topic_id in {".", ".."}
+        or not topic_id
+        or _SAFE_TOPIC_FILENAME.fullmatch(topic_id) is None
+    ):
+        raise ValueError(f"topic ID {topic_id!r} is not a safe topic filename")
+    return f"{topic_id}.html"
+
+
+def _resolve_bundle_output(data: DebugReportData, output_dir: Path) -> Path:
+    requested = Path(output_dir)
+    if requested.exists() or requested.is_symlink():
+        if requested.is_symlink():
+            raise ValueError("bundle output must be absent and not a symbolic link")
+        raise ValueError("bundle output must be absent")
+    if not requested.is_absolute():
+        requested = Path.cwd() / requested
+    parent = requested.parent.resolve()
+    if not parent.is_dir():
+        raise ValueError("bundle output parent must be an existing directory")
+    target = (parent / requested.name).resolve()
+    repo_root = find_repo_root(data.retrieval_config_path.parent).resolve()
+    retrieval_output = data.output_dir.resolve()
+    if not (target.is_relative_to(repo_root) or target.is_relative_to(retrieval_output)):
+        raise ValueError(
+            "bundle output must remain inside the repository or retrieval output"
+        )
+    if target.exists() or target.is_symlink():
+        raise ValueError("bundle output must be absent and not a symbolic link")
+    return target
+
+
+def _local_hrefs(page: str) -> tuple[str, ...]:
+    class HrefParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.hrefs: list[str] = []
+
+        def handle_starttag(
+            self, tag: str, attrs: list[tuple[str, str | None]]
+        ) -> None:
+            if tag == "a":
+                href = dict(attrs).get("href")
+                if href:
+                    self.hrefs.append(href)
+
+    parser = HrefParser()
+    parser.feed(page)
+    return tuple(
+        href
+        for href in parser.hrefs
+        if not href.startswith(("http://", "https://", "mailto:", "#"))
+    )
+
+
+def _validate_page_links(staging: Path, page: Path) -> None:
+    for href in _local_hrefs(page.read_text(encoding="utf-8")):
+        parsed = urlsplit(href)
+        if parsed.scheme or parsed.netloc or parsed.path.startswith("/"):
+            raise ValueError(f"bundle page contains an unsafe link: {href}")
+        relative = parsed.path
+        if not relative:
+            continue
+        destination = (page.parent / relative).resolve()
+        if not destination.is_relative_to(staging) or not destination.is_file():
+            raise ValueError(f"bundle page link does not resolve: {href}")
+
+
+def _validate_staging(
+    staging: Path,
+    data: DebugReportData,
+    index_receipt: _PageReceipt,
+    topic_receipts: Sequence[_PageReceipt],
+) -> None:
+    expected_files = {Path(index_receipt.path), *(Path(item.path) for item in topic_receipts)}
+    actual_files = {
+        path.relative_to(staging)
+        for path in staging.rglob("*")
+        if path.is_file()
+    }
+    if actual_files != expected_files:
+        raise ValueError("bundle staging contains unlisted or missing files")
+    topic_ids = tuple(topic.topic_id for topic in data.topics)
+    if topic_ids != tuple(item.topic_id for item in topic_receipts):
+        raise ValueError("bundle topic coverage or order does not reconcile")
+    if len(set(topic_ids)) != len(topic_ids):
+        raise ValueError("bundle topic coverage repeats a topic")
+    if len(set(item.path for item in topic_receipts)) != len(topic_receipts):
+        raise ValueError("bundle topic paths are not unique")
+    pages = (index_receipt, *topic_receipts)
+    for receipt in pages:
+        path = staging / Path(receipt.path)
+        if not _hash_matches(path, receipt.sha256, receipt.bytes):
+            raise ValueError(f"bundle hash reconciliation failed for {receipt.path}")
+        _validate_page_links(staging, path)
+
+
+def _cleanup_staging(staging: Path | None, target: Path) -> None:
+    if staging is None:
+        return
+    try:
+        if staging.parent.resolve() != target.parent.resolve():
+            return
+        if not staging.name.startswith(f".{target.name}.") or not staging.name.endswith(".tmp"):
+            return
+        if staging.is_symlink():
+            return
+        if staging.is_dir():
+            shutil.rmtree(staging)
+    except FileNotFoundError:
+        pass
+
+
+def build_bundle_from_data(
+    data: DebugReportData,
+    *,
+    output_dir: Path,
+    evaluation_manifest_path: Path | None = None,
+) -> DebugReportBundleReceipt:
+    """Publish one validated run as a deterministic create-only HTML bundle."""
+    target = _resolve_bundle_output(data, Path(output_dir))
+    if not data.topics:
+        raise ValueError("bundle requires at least one topic")
+    topic_filenames = tuple(_safe_topic_filename(topic.topic_id) for topic in data.topics)
+    if len(set(topic_filenames)) != len(topic_filenames):
+        raise ValueError("bundle topic filenames are not unique")
+    evaluation = (
+        load_evaluation_overlay(Path(evaluation_manifest_path), tuple(topic.topic_id for topic in data.topics))
+        if evaluation_manifest_path is not None
+        else None
+    )
+    summary = build_run_summary(data, evaluation)
+    staging: Path | None = None
+    try:
+        staging = Path(
+            tempfile.mkdtemp(
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+            )
+        )
+        staging.chmod(0o700)
+        topics_dir = staging / "topics"
+        topics_dir.mkdir(mode=0o700)
+
+        index_body = render_bundle_summary(summary, denylist=_summary_denylist(data)).encode("utf-8")
+        index_path = staging / "index.html"
+        _write_bundle_file(index_path, index_body)
+        index_receipt = _file_receipt(index_path, "index.html")
+
+        topic_receipts: list[_PageReceipt] = []
+        total_topics = len(data.topics)
+        for position, (topic, filename) in enumerate(zip(data.topics, topic_filenames, strict=True)):
+            navigation = TopicPageNavigation(
+                summary_href="../index.html",
+                position=position + 1,
+                total=total_topics,
+                previous_href=None if position == 0 else f"{topic_filenames[position - 1]}",
+                next_href=None if position + 1 == total_topics else f"{topic_filenames[position + 1]}",
+            )
+            body = render_debug_topic_page(topic, navigation=navigation).encode("utf-8")
+            topic_path = topics_dir / filename
+            _write_bundle_file(topic_path, body)
+            topic_receipts.append(
+                _file_receipt(topic_path, f"topics/{filename}", topic_id=topic.topic_id)
+            )
+
+        _validate_staging(staging, data, index_receipt, topic_receipts)
+        pages = (index_receipt, *topic_receipts)
+        manifest: dict[str, Any] = {
+            "schema_version": _BUNDLE_SCHEMA_VERSION,
+            "report_schema_version": _REPORT_SCHEMA_VERSION,
+            "topic_ids": [topic.topic_id for topic in data.topics],
+            "index": index_receipt.as_json(),
+            "topics": [receipt.as_json() for receipt in topic_receipts],
+            "sources": dict(sorted(data.source_sha256s.items())),
+            "rag_included": data.rag_config_path is not None,
+            "evaluation": (
+                {
+                    "included": True,
+                    "schema_version": "trec_rag_offline_evaluation_bundle_v1",
+                    "sha256": evaluation.manifest_sha256,
+                }
+                if evaluation is not None
+                else {"included": False, "schema_version": None, "sha256": None}
+            ),
+            "page_count": len(pages),
+            "total_bytes": 0,
+        }
+        manifest["total_bytes"] = sum(page.bytes for page in pages)
+        while True:
+            body = _canonical_json_bytes(manifest)
+            total = sum(page.bytes for page in pages) + len(body)
+            if manifest["total_bytes"] == total:
+                break
+            manifest["total_bytes"] = total
+        manifest_path = staging / "bundle-manifest.json"
+        _write_bundle_file(manifest_path, body)
+        manifest_receipt = _file_receipt(manifest_path, "bundle-manifest.json")
+        if not _hash_matches(
+            manifest_path, manifest_receipt.sha256, manifest_receipt.bytes
+        ) or manifest_receipt.bytes != len(body) or manifest_receipt.sha256 != sha256(body).hexdigest():
+            raise ValueError("bundle manifest hash reconciliation failed")
+        _fsync_directory(topics_dir)
+        _fsync_directory(staging)
+        _fsync_directory(target.parent)
+        if target.exists() or target.is_symlink():
+            raise ValueError("bundle output must remain absent before publication")
+        os.rename(staging, target)
+        staging = None
+        all_bytes = sum(page.bytes for page in pages) + manifest_receipt.bytes
+        return DebugReportBundleReceipt(
+            schema_version=_BUNDLE_SCHEMA_VERSION,
+            report_schema_version=_REPORT_SCHEMA_VERSION,
+            output_dir=target,
+            index_path=target / "index.html",
+            manifest_path=target / "bundle-manifest.json",
+            topic_ids=tuple(topic.topic_id for topic in data.topics),
+            bundle_manifest_sha256=manifest_receipt.sha256,
+            page_count=len(pages),
+            total_bytes=all_bytes,
+            rag_included=data.rag_config_path is not None,
+            evaluation_included=evaluation is not None,
+        )
+    finally:
+        _cleanup_staging(staging, target)
+
+
 __all__ = [
     "EvaluationOverlay",
     "MetricAvailability",
@@ -938,6 +1273,7 @@ __all__ = [
     "RunSummary",
     "TopicSummary",
     "build_run_summary",
+    "build_bundle_from_data",
     "load_evaluation_overlay",
     "render_bundle_summary",
 ]

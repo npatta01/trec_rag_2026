@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import fields, replace
 from hashlib import sha256
+from html.parser import HTMLParser
 from pathlib import Path
+import socket
 
 import pytest
 
 from offline_evaluation_fixture import TopicSpec, build_run
+import trec_rag.competition_debug_bundle as bundle_module
+import trec_rag.competition_debug_report as debug_report
 from trec_rag.competition_debug_report import load_debug_report_data
 from trec_rag.friendly_report import ReportPrivacyError
 from trec_rag.offline_evaluation import (
@@ -21,6 +25,283 @@ from trec_rag.offline_evaluation import (
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
+
+
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class _HrefParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hrefs: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag == "a" and dict(attrs).get("href"):
+            self.hrefs.append(str(dict(attrs)["href"]))
+
+
+def _local_hrefs(page: str) -> tuple[str, ...]:
+    parser = _HrefParser()
+    parser.feed(page)
+    return tuple(
+        href
+        for href in parser.hrefs
+        if not href.startswith(("http://", "https://", "mailto:", "#"))
+    )
+
+
+def test_build_bundle_writes_summary_topics_and_manifest_with_matching_receipt(
+    tmp_path: Path,
+) -> None:
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    target = fixture.retrieval_output / "debug-bundle"
+
+    receipt = debug_report.build_debug_report_bundle(
+        fixture.retrieval_config,
+        rag_config_path=fixture.rag_config,
+        output_dir=target,
+    )
+
+    assert receipt.output_dir == target.resolve()
+    assert receipt.index_path == target.resolve() / "index.html"
+    assert receipt.topic_ids == ("alpha-topic", "beta-topic")
+    assert receipt.page_count == 3
+    manifest = json.loads(receipt.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "competition_debug_report_bundle_v1"
+    assert [item["topic_id"] for item in manifest["topics"]] == list(receipt.topic_ids)
+    assert manifest["index"]["sha256"] == _file_sha256(target / "index.html")
+    assert all(
+        item["sha256"] == _file_sha256(target / item["path"])
+        for item in manifest["topics"]
+    )
+    assert receipt.bundle_manifest_sha256 == _file_sha256(receipt.manifest_path)
+    assert receipt.total_bytes == sum(
+        path.stat().st_size for path in target.rglob("*") if path.is_file()
+    )
+
+
+def test_bundle_is_deterministic_and_loads_run_data_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    first = fixture.retrieval_output / "bundle-a"
+    second = fixture.retrieval_output / "bundle-b"
+    real_load = debug_report.load_debug_report_data
+    calls = 0
+
+    def observed_load(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(debug_report, "load_debug_report_data", observed_load)
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=first)
+    assert calls == 1
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=second)
+    assert calls == 2
+    first_files = {
+        path.relative_to(first): path.read_bytes()
+        for path in first.rglob("*")
+        if path.is_file()
+    }
+    second_files = {
+        path.relative_to(second): path.read_bytes()
+        for path in second.rglob("*")
+        if path.is_file()
+    }
+    assert first_files == second_files
+
+
+@pytest.mark.parametrize("existing_kind", ("file", "directory", "symlink"))
+def test_bundle_refuses_every_existing_target(
+    tmp_path: Path, existing_kind: str
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "existing-bundle"
+    if existing_kind == "file":
+        target.write_text("owned by somebody else", encoding="utf-8")
+    elif existing_kind == "directory":
+        target.mkdir()
+        (target / "owned.txt").write_text("owned by somebody else", encoding="utf-8")
+    else:
+        destination = fixture.retrieval_output / "symlink-destination"
+        destination.mkdir()
+        target.symlink_to(destination, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="bundle output.*(?:absent|symbolic link)"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert target.exists() or target.is_symlink()
+
+
+@pytest.mark.parametrize("topic_id", ("bad/topic", "..", "bad\x00topic"))
+def test_bundle_rejects_unsafe_topic_filenames(tmp_path: Path, topic_id: str) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    data = load_debug_report_data(fixture.retrieval_config)
+    unsafe = replace(data, topics=(replace(data.topics[0], topic_id=topic_id),))
+    target = fixture.retrieval_output / "unsafe-topic-bundle"
+
+    with pytest.raises(ValueError, match="safe topic filename"):
+        bundle_module.build_bundle_from_data(unsafe, output_dir=target, evaluation_manifest_path=None)
+
+    assert not target.exists()
+
+
+def test_bundle_rejects_an_external_output_directory(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    fixture = build_run(run_root, (TopicSpec("alpha-topic", "alpha"),))
+    external_parent = tmp_path / "external"
+    external_parent.mkdir()
+
+    with pytest.raises(ValueError, match="inside the repository or retrieval output"):
+        debug_report.build_debug_report_bundle(
+            fixture.retrieval_config,
+            output_dir=external_parent / "bundle",
+        )
+
+
+@pytest.mark.parametrize("failed_name", ("index.html", "bundle-manifest.json"))
+def test_bundle_write_failure_removes_only_owned_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_name: str
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "failed-bundle"
+    sentinel = fixture.retrieval_output / "unrelated.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    real_write = bundle_module._write_bundle_file
+
+    def fail_named(path: Path, payload: bytes) -> None:
+        if path.name == failed_name:
+            raise OSError(f"forced {failed_name} failure")
+        real_write(path, payload)
+
+    monkeypatch.setattr(bundle_module, "_write_bundle_file", fail_named)
+    with pytest.raises(OSError, match="forced"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    assert list(fixture.retrieval_output.glob(".failed-bundle.*.tmp")) == []
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_bundle_manifest_is_written_last_and_all_links_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    target = fixture.retrieval_output / "ordered-bundle"
+    writes: list[str] = []
+    real_write = bundle_module._write_bundle_file
+
+    def observed(path: Path, payload: bytes) -> None:
+        writes.append(path.name)
+        real_write(path, payload)
+
+    monkeypatch.setattr(bundle_module, "_write_bundle_file", observed)
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert writes[-1] == "bundle-manifest.json"
+    for page in target.rglob("*.html"):
+        for href in _local_hrefs(page.read_text(encoding="utf-8")):
+            assert (page.parent / href.split("#", 1)[0]).resolve().is_file()
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ("topic-render", "summary-render", "directory-fsync", "rename", "hash"),
+)
+def test_bundle_failure_points_never_publish_a_partial_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "partial-bundle"
+    if failure_point == "topic-render":
+        monkeypatch.setattr(
+            bundle_module,
+            "render_debug_topic_page",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("topic-render")),
+        )
+    elif failure_point == "summary-render":
+        monkeypatch.setattr(
+            bundle_module,
+            "render_bundle_summary",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("summary-render")),
+        )
+    elif failure_point == "directory-fsync":
+        monkeypatch.setattr(
+            bundle_module,
+            "_fsync_directory",
+            lambda *_args: (_ for _ in ()).throw(OSError("directory-fsync")),
+        )
+    elif failure_point == "rename":
+        monkeypatch.setattr(
+            bundle_module.os,
+            "rename",
+            lambda *_args: (_ for _ in ()).throw(OSError("rename")),
+        )
+    else:
+        monkeypatch.setattr(bundle_module, "_hash_matches", lambda *_args: False)
+
+    with pytest.raises((OSError, RuntimeError, ValueError), match=failure_point):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    assert list(fixture.retrieval_output.glob(".partial-bundle.*.tmp")) == []
+
+
+def test_bundle_build_does_not_modify_source_artifacts(tmp_path: Path) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    before = {
+        path.relative_to(fixture.retrieval_output): _file_sha256(path)
+        for path in fixture.retrieval_output.rglob("*")
+        if path.is_file()
+    }
+
+    debug_report.build_debug_report_bundle(
+        fixture.retrieval_config,
+        output_dir=fixture.retrieval_output / "immutable-source-bundle",
+    )
+
+    after = {
+        relative: _file_sha256(fixture.retrieval_output / relative)
+        for relative in before
+    }
+    assert after == before
+
+
+def test_bundle_makes_no_network_call_or_candidate_ledger_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "offline-bundle"
+    real_open = Path.open
+
+    def guarded_open(path: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if path.name == "candidates.jsonl":
+            raise AssertionError("candidate ledger was opened")
+        return real_open(path, *args, **kwargs)
+
+    def forbid_socket(*args: object, **kwargs: object) -> socket.socket:
+        raise AssertionError("network access attempted")
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    monkeypatch.setattr(socket, "socket", forbid_socket)
+
+    debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+    assert (target / "bundle-manifest.json").is_file()
 
 
 def test_summary_projection_projects_only_safe_counts_and_attention_state(

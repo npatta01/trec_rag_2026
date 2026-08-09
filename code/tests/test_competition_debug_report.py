@@ -4116,6 +4116,63 @@ def test_cli_emits_one_compact_stable_json_receipt(tmp_path: Path, capsys: pytes
     assert target.read_text(encoding="utf-8").startswith("<!doctype html>")
 
 
+def test_bundle_cli_emits_one_compact_stable_json_receipt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "custom-debug-bundle"
+    argv = [
+        "--retrieval-config", str(config_path),
+        "--topic", "rag2026-0",
+        "--output-dir", str(target),
+    ]
+
+    assert debug_report.main(argv) == 0
+    stdout = capsys.readouterr().out
+
+    assert stdout.endswith("\n") and stdout.count("\n") == 1
+    assert " " not in stdout
+    receipt = json.loads(stdout)
+    assert set(receipt) == {
+        "bundle_manifest_sha256",
+        "evaluation_included",
+        "index_path",
+        "manifest_path",
+        "output_dir",
+        "page_count",
+        "rag_included",
+        "report_schema_version",
+        "schema_version",
+        "topic_ids",
+        "total_bytes",
+    }
+    assert list(receipt) == sorted(receipt)
+    assert receipt["schema_version"] == "competition_debug_report_bundle_v1"
+    assert receipt["report_schema_version"] == "competition_debug_report_v1"
+    assert receipt["output_dir"] == str(target.resolve())
+    assert receipt["index_path"] == str((target / "index.html").resolve())
+    assert receipt["manifest_path"] == str((target / "bundle-manifest.json").resolve())
+    assert receipt["topic_ids"] == ["rag2026-0"]
+    assert receipt["page_count"] == 2
+    assert receipt["rag_included"] is False
+    assert receipt["evaluation_included"] is False
+
+
+def test_evaluation_manifest_requires_bundle_output_dir(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path, _retrieval_output = _write_debug_run(tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        debug_report.main([
+            "--retrieval-config", str(config_path),
+            "--evaluation-manifest", str(tmp_path / "evaluation.json"),
+        ])
+
+    assert "--evaluation-manifest requires --output-dir" in str(raised.value)
+    assert capsys.readouterr() == ("", "")
+
+
 def test_cli_reports_concise_error_and_preserves_interrupt_exit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

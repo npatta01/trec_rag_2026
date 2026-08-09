@@ -407,6 +407,21 @@ class DebugReportReceipt:
     source_sha256s: Mapping[str, str]
 
 
+@dataclass(frozen=True)
+class DebugReportBundleReceipt:
+    schema_version: str
+    report_schema_version: str
+    output_dir: Path
+    index_path: Path
+    manifest_path: Path
+    topic_ids: tuple[str, ...]
+    bundle_manifest_sha256: str
+    page_count: int
+    total_bytes: int
+    rag_included: bool
+    evaluation_included: bool
+
+
 def load_debug_report_data(
     retrieval_config_path: Path,
     *,
@@ -3823,6 +3838,29 @@ def build_debug_report(
     )
 
 
+def build_debug_report_bundle(
+    retrieval_config_path: Path,
+    *,
+    rag_config_path: Path | None = None,
+    topic_ids: Sequence[str] | None = None,
+    evaluation_manifest_path: Path | None = None,
+    output_dir: Path,
+) -> DebugReportBundleReceipt:
+    """Validate and publish a deterministic create-only multipage bundle."""
+    data = load_debug_report_data(
+        Path(retrieval_config_path),
+        rag_config_path=None if rag_config_path is None else Path(rag_config_path),
+        topic_ids=topic_ids,
+    )
+    from trec_rag.competition_debug_bundle import build_bundle_from_data
+
+    return build_bundle_from_data(
+        data,
+        output_dir=Path(output_dir),
+        evaluation_manifest_path=evaluation_manifest_path,
+    )
+
+
 def _resolve_report_output(data: DebugReportData, output_path: Path | None) -> Path:
     repo_root = find_repo_root(data.retrieval_config_path.parent).resolve()
     default_target = data.output_dir / "competition_debug_report.html"
@@ -4057,28 +4095,49 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.add_argument("--retrieval-config", type=Path, required=True)
         parser.add_argument("--rag-config", type=Path)
         parser.add_argument("--topic", action="append", dest="topic_ids")
-        parser.add_argument("--output", type=Path)
+        destination = parser.add_mutually_exclusive_group()
+        destination.add_argument("--output", type=Path)
+        destination.add_argument("--output-dir", type=Path)
+        parser.add_argument("--evaluation-manifest", type=Path)
         arguments = parser.parse_args(argv)
-        receipt = build_debug_report(
-            arguments.retrieval_config,
-            rag_config_path=arguments.rag_config,
-            topic_ids=arguments.topic_ids,
-            output_path=arguments.output,
-        )
-        print(
-            json.dumps(
-                {
-                    "schema_version": receipt.schema_version,
-                    "output_path": str(receipt.output_path),
-                    "topic_ids": list(receipt.topic_ids),
-                    "rag_included": receipt.rag_included,
-                    "source_sha256s": dict(receipt.source_sha256s),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
+        if arguments.evaluation_manifest is not None and arguments.output_dir is None:
+            raise ValueError("--evaluation-manifest requires --output-dir")
+        if arguments.output_dir is not None:
+            receipt = build_debug_report_bundle(
+                arguments.retrieval_config,
+                rag_config_path=arguments.rag_config,
+                topic_ids=arguments.topic_ids,
+                evaluation_manifest_path=arguments.evaluation_manifest,
+                output_dir=arguments.output_dir,
             )
-        )
+            payload = {
+                "bundle_manifest_sha256": receipt.bundle_manifest_sha256,
+                "evaluation_included": receipt.evaluation_included,
+                "index_path": str(receipt.index_path),
+                "manifest_path": str(receipt.manifest_path),
+                "output_dir": str(receipt.output_dir),
+                "page_count": receipt.page_count,
+                "rag_included": receipt.rag_included,
+                "report_schema_version": receipt.report_schema_version,
+                "schema_version": receipt.schema_version,
+                "topic_ids": list(receipt.topic_ids),
+                "total_bytes": receipt.total_bytes,
+            }
+        else:
+            receipt = build_debug_report(
+                arguments.retrieval_config,
+                rag_config_path=arguments.rag_config,
+                topic_ids=arguments.topic_ids,
+                output_path=arguments.output,
+            )
+            payload = {
+                "schema_version": receipt.schema_version,
+                "output_path": str(receipt.output_path),
+                "topic_ids": list(receipt.topic_ids),
+                "rag_included": receipt.rag_included,
+                "source_sha256s": dict(receipt.source_sha256s),
+            }
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
         return 0
     except KeyboardInterrupt:
         raise SystemExit(130)
