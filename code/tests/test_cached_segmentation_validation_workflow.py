@@ -119,6 +119,35 @@ def test_probe_failure_preserves_the_underlying_exit_status() -> None:
     assert "probe failed with status 137" in result.stderr
 
 
+def test_launcher_preview_accepts_five_empty_approval_fields() -> None:
+    launcher = LAUNCHER.read_text()
+    match = re.search(
+        r"(?ms)^approval_fields_empty\(\) \{\n.*?^\}\n",
+        launcher,
+    )
+    assert match is not None
+
+    empty = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"{match.group(0)}\napproval_fields_empty '' '' '' '' ''",
+        ],
+        check=False,
+    )
+    populated = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"{match.group(0)}\napproval_fields_empty '' runpod '' '' ''",
+        ],
+        check=False,
+    )
+
+    assert empty.returncode == 0
+    assert populated.returncode == 1
+
+
 def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> None:
     wrapper = WRAPPER.read_text()
     launcher = LAUNCHER.read_text()

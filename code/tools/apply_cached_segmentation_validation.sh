@@ -23,6 +23,13 @@ die() {
   exit 2
 }
 
+approval_fields_empty() {
+  local value
+  for value in "$@"; do
+    [[ -z $value ]] || return 1
+  done
+}
+
 cleanup() {
   [[ -n $transport_tmp ]] || return 0
   case "$transport_tmp" in
@@ -73,7 +80,8 @@ approval_values=(
   "$approved_gpu" "$approved_hourly_price"
 )
 if [[ $mode == preview ]]; then
-  [[ -z ${approval_values[*]} ]] || die "approved offer fields are launch-only"
+  approval_fields_empty "${approval_values[@]}" \
+    || die "approved offer fields are launch-only"
 else
   [[ $approved_backend =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] \
     || die "--approved-backend is unsafe"
