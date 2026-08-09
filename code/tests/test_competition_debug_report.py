@@ -2650,6 +2650,410 @@ def test_html_renderer_is_semantic_self_contained_and_escapes_hostile_source_tex
     assert script == baseline_script
 
 
+def test_standalone_topic_page_contains_one_complete_trace_and_relative_navigation(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    data = load_debug_report_data(config_path)
+    page = debug_report.render_debug_topic_page(
+        data.topics[0],
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=2,
+            total=3,
+            previous_href="rag2026-0.html",
+            next_href="rag2026-2.html",
+        ),
+    )
+
+    assert page.startswith("<!doctype html>")
+    assert "Topic rag2026-0" in page
+    assert _standalone_stage_ids(page) == _EXPECTED_STANDALONE_STAGE_IDS
+    assert 'href="../index.html"' in page
+    assert 'href="rag2026-0.html"' in page
+    assert 'href="rag2026-2.html"' in page
+    assert "Topic 2 of 3" in page
+    assert "https://" not in page
+
+
+_EXPECTED_STANDALONE_STAGE_LINKS = (
+    ("#stage-literal-rag2026-0-narrative", "Narrative"),
+    ("#stage-literal-rag2026-0-subnarratives", "Subnarratives"),
+    ("#stage-literal-rag2026-0-final-rag", "Final RAG"),
+    ("#stage-literal-rag2026-0-funnel-overview", "Funnel overview"),
+    ("#stage-literal-rag2026-0-new-documents", "New documents"),
+    ("#stage-literal-rag2026-0-selected-documents", "Selected documents"),
+    ("#stage-literal-rag2026-0-top-passages", "Top passages"),
+    ("#stage-literal-rag2026-0-final-selected-nuggets", "Final selected nuggets"),
+    ("#stage-literal-rag2026-0-final-retrieval", "Final retrieval"),
+)
+
+
+def _standalone_navigation_links(page: str) -> tuple[tuple[str, str], ...]:
+    navigation = page.split(
+        '<nav class="topic-page-nav" aria-label="Report navigation">', 1
+    )[1].split("</nav>", 1)[0]
+    return tuple(
+        (html.unescape(href), html.unescape(label))
+        for href, label in re.findall(
+            r'<a class="[^"]+" href="([^"]+)">([^<]+)</a>', navigation
+        )
+    )
+
+
+def test_standalone_topic_navigation_has_exact_primary_and_stage_link_order(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=2,
+            total=3,
+            previous_href="rag2026-prev.html",
+            next_href="rag2026-next.html",
+        ),
+    )
+
+    assert _standalone_navigation_links(page) == (
+        ("../index.html", "Back to summary"),
+        ("rag2026-prev.html", "Previous topic"),
+        ("rag2026-next.html", "Next topic"),
+        *_EXPECTED_STANDALONE_STAGE_LINKS,
+    )
+    ids = set(re.findall(r'\bid="([^"]+)"', page))
+    assert all(href.removeprefix("#") in ids for href, _label in _EXPECTED_STANDALONE_STAGE_LINKS)
+
+
+@pytest.mark.parametrize(
+    ("position", "previous_href", "next_href", "primary_links"),
+    (
+        (
+            1,
+            "must-not-render-before-first.html",
+            "rag2026-next.html",
+            (
+                ("../index.html", "Back to summary"),
+                ("rag2026-next.html", "Next topic"),
+            ),
+        ),
+        (
+            3,
+            "rag2026-prev.html",
+            "must-not-render-after-last.html",
+            (
+                ("../index.html", "Back to summary"),
+                ("rag2026-prev.html", "Previous topic"),
+            ),
+        ),
+    ),
+)
+def test_standalone_topic_navigation_omits_first_and_last_boundary_links(
+    tmp_path: Path,
+    position: int,
+    previous_href: str | None,
+    next_href: str | None,
+    primary_links: tuple[tuple[str, str], ...],
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=position,
+            total=3,
+            previous_href=previous_href,
+            next_href=next_href,
+        ),
+    )
+
+    assert _standalone_navigation_links(page) == (
+        *primary_links,
+        *_EXPECTED_STANDALONE_STAGE_LINKS,
+    )
+
+
+def test_standalone_stage_menu_uses_native_keyboard_semantics_and_escaped_links(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    hostile_href = '../index.html?label=<private>&quote="'
+
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href=hostile_href, position=1, total=1
+        ),
+    )
+
+    navigation = page.split(
+        '<nav class="topic-page-nav" aria-label="Report navigation">', 1
+    )[1].split("</nav>", 1)[0]
+    assert '<details class="topic-stage-menu">' in navigation
+    assert '<summary>Stages</summary>' in navigation
+    assert '<ul aria-label="Stage navigation">' in navigation
+    assert 'role="button"' not in navigation
+    assert "tabindex=" not in navigation
+    assert hostile_href not in page
+    assert 'href="../index.html?label=&lt;private&gt;&amp;quote=&quot;"' in page
+
+
+def test_standalone_topic_page_omits_missing_boundary_links_and_escapes_text(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    page = debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=1,
+            total=1,
+        ),
+    )
+
+    assert "Previous topic" not in page
+    assert "Next topic" not in page
+    assert 'Original &lt;narrative&gt; &amp; &quot;quotes&quot;' in page
+    assert 'id="stage-literal-rag2026-0-narrative"' in page
+    assert page == debug_report.render_debug_topic_page(
+        topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=1,
+            total=1,
+        ),
+    )
+
+
+_EXPECTED_STANDALONE_STAGE_IDS = (
+    "stage-literal-rag2026-0-narrative",
+    "stage-literal-rag2026-0-subnarratives",
+    "stage-literal-rag2026-0-final-rag",
+    "stage-literal-rag2026-0-funnel-overview",
+    "stage-literal-rag2026-0-new-documents",
+    "stage-literal-rag2026-0-selected-documents",
+    "stage-literal-rag2026-0-top-passages",
+    "stage-literal-rag2026-0-final-selected-nuggets",
+    "stage-literal-rag2026-0-final-retrieval",
+)
+
+
+def _standalone_stage_ids(page: str) -> tuple[str, ...]:
+    topic_content = page.split('<div class="topic-content">', 1)[1]
+    return tuple(
+        re.findall(
+            r'<section id="(stage-literal-rag2026-0-[^"]+)"',
+            topic_content,
+        )
+    )
+
+
+@pytest.mark.parametrize("rag_supplied", (False, True))
+def test_standalone_topic_page_has_exact_stage_ids_for_rag_branches(
+    tmp_path: Path, rag_supplied: bool
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config = None
+    if rag_supplied:
+        rag_config, _rag_output, _output_sha256 = _write_rag_run(
+            tmp_path, retrieval_output
+        )
+    data = load_debug_report_data(config_path, rag_config_path=rag_config)
+
+    page = debug_report.render_debug_topic_page(
+        data.topics[0],
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html", position=1, total=1
+        ),
+    )
+
+    assert _standalone_stage_ids(page) == _EXPECTED_STANDALONE_STAGE_IDS
+
+
+@pytest.mark.parametrize(
+    ("position", "total"),
+    (
+        (1.5, 2.5),
+        (True, 2),
+        (1, True),
+        (0, 1),
+        (-1, 1),
+        (1, 0),
+        (1, -1),
+        (3, 2),
+    ),
+)
+def test_standalone_topic_page_requires_positive_integer_navigation(
+    tmp_path: Path, position: object, total: object
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+
+    with pytest.raises(ValueError, match="topic page position"):
+        debug_report.render_debug_topic_page(
+            topic,
+            navigation=debug_report.TopicPageNavigation(
+                summary_href="../index.html",
+                position=position,
+                total=total,
+            ),
+        )
+
+
+@pytest.mark.parametrize("window_size", ("1280,720", "390,844"))
+def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
+    tmp_path: Path, window_size: str
+) -> None:
+    """The raw topic nav remains visible after scrolling through a long trace."""
+    chrome = shutil.which("google-chrome") or shutil.which("chromium")
+    if chrome is None:
+        pytest.skip("headless Chrome is not available")
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    long_topic = replace(
+        topic,
+        narrative=" ".join(
+            f"long-narrative-word-{index}" for index in range(3000)
+        ),
+    )
+    page = debug_report.render_debug_topic_page(
+        long_topic,
+        navigation=debug_report.TopicPageNavigation(
+            summary_href="../index.html",
+            position=2,
+            total=3,
+            previous_href="rag2026-prev.html",
+            next_href="rag2026-next.html",
+        ),
+    )
+    document_path = tmp_path / f"sticky-{window_size.replace(',', '-')}.html"
+    recorder = (
+        '<script>setTimeout(() => {'
+        'const target = document.getElementById("stage-literal-rag2026-0-final-retrieval");'
+        'document.documentElement.style.scrollBehavior = "auto";'
+        'window.scrollTo(0, target.offsetTop);'
+        'const nav = document.querySelector(".topic-page-nav");'
+        'const rect = nav.getBoundingClientRect();'
+        'const stageMenu = nav.querySelector(".topic-stage-menu");'
+        'const stageSummary = stageMenu.querySelector(":scope > summary");'
+        'stageSummary.focus({preventScroll: true});'
+        'const stageFocus = getComputedStyle(stageSummary);'
+        'stageSummary.click();'
+        'const stageList = stageMenu.querySelector(":scope > ul");'
+        'const hitTestsTo = (element) => {'
+        'const bounds = element.getBoundingClientRect();'
+        'const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);'
+        'return hit === element || element.contains(hit);'
+        '};'
+        'const summaryRect = stageSummary.getBoundingClientRect();'
+        'const listRect = stageList.getBoundingClientRect();'
+        'const listStyle = getComputedStyle(stageList);'
+        'const primaryLinks = Array.from(nav.querySelectorAll(":scope > .topic-page-link"));'
+        'const stageSummaryHit = hitTestsTo(stageSummary);'
+        'const primaryLinksHit = primaryLinks.every(hitTestsTo);'
+        'const stageListHorizontal = listRect.left >= 0 && listRect.right <= innerWidth;'
+        'const stageListVertical = listRect.top >= summaryRect.bottom && listRect.bottom <= innerHeight;'
+        'const stageListBounded = listRect.height <= innerHeight * 0.7 + 1 && listStyle.overflowY === "auto";'
+        'stageSummary.click();'
+        'const stageClosed = !stageMenu.open;'
+        'stageSummary.click();'
+        'const stageReopened = stageMenu.open;'
+        'document.documentElement.setAttribute("data-scroll-y", String(Math.round(scrollY)));'
+        'document.documentElement.setAttribute("data-target-top", String(Math.round(target.getBoundingClientRect().top)));'
+        'document.documentElement.setAttribute("data-nav-top", String(Math.round(rect.top)));'
+        'document.documentElement.setAttribute("data-nav-bottom", String(Math.round(rect.bottom)));'
+        'document.documentElement.setAttribute("data-viewport-height", String(innerHeight));'
+        'document.documentElement.setAttribute("data-stage-native", String(stageMenu.tagName === "DETAILS"));'
+        'document.documentElement.setAttribute("data-stage-open", String(stageMenu.open));'
+        'document.documentElement.setAttribute("data-stage-focus", String(document.activeElement === stageSummary));'
+        'document.documentElement.setAttribute("data-stage-focus-visible", String(stageSummary.matches(":focus-visible") || stageFocus.outlineStyle !== "none"));'
+        'document.documentElement.setAttribute("data-no-overflow", String(document.documentElement.scrollWidth <= document.documentElement.clientWidth));'
+        'document.documentElement.setAttribute("data-stage-summary-hit", String(stageSummaryHit));'
+        'document.documentElement.setAttribute("data-primary-links-hit", String(primaryLinksHit));'
+        'document.documentElement.setAttribute("data-stage-list-horizontal", String(stageListHorizontal));'
+        'document.documentElement.setAttribute("data-stage-list-vertical", String(stageListVertical));'
+        'document.documentElement.setAttribute("data-stage-list-bounded", String(stageListBounded));'
+        'document.documentElement.setAttribute("data-stage-close-reopen", String(stageClosed && stageReopened));'
+        '}, 150);</script>'
+    )
+    document_path.write_text(
+        page.replace("</body>", f"{recorder}</body>"), encoding="utf-8"
+    )
+    completed = subprocess.run(
+        [
+            chrome,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            f"--window-size={window_size}",
+            "--virtual-time-budget=500",
+            "--dump-dom",
+            f"{document_path.as_uri()}#stage-literal-rag2026-0-final-retrieval",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    scroll_y = re.search(r'data-scroll-y="(\d+)"', completed.stdout)
+    target_top = re.search(r'data-target-top="(-?\d+)"', completed.stdout)
+    nav_top = re.search(r'data-nav-top="(-?\d+)"', completed.stdout)
+    nav_bottom = re.search(r'data-nav-bottom="(-?\d+)"', completed.stdout)
+    viewport_height = re.search(
+        r'data-viewport-height="(\d+)"', completed.stdout
+    )
+    stage_native = re.search(r'data-stage-native="(true|false)"', completed.stdout)
+    stage_open = re.search(r'data-stage-open="(true|false)"', completed.stdout)
+    stage_focus = re.search(r'data-stage-focus="(true|false)"', completed.stdout)
+    stage_focus_visible = re.search(
+        r'data-stage-focus-visible="(true|false)"', completed.stdout
+    )
+    geometry = {
+        name: re.search(rf'data-{name}="(true|false)"', completed.stdout)
+        for name in (
+            "no-overflow",
+            "stage-summary-hit",
+            "primary-links-hit",
+            "stage-list-horizontal",
+            "stage-list-vertical",
+            "stage-list-bounded",
+            "stage-close-reopen",
+        )
+    }
+    assert scroll_y is not None and target_top is not None
+    assert nav_top is not None and nav_bottom is not None
+    assert viewport_height is not None
+    assert stage_native is not None and stage_open is not None
+    assert stage_focus is not None
+    assert stage_focus_visible is not None
+    assert int(scroll_y.group(1)) > 0
+    assert 0 <= int(target_top.group(1)) < int(viewport_height.group(1))
+    assert -1 <= int(nav_top.group(1)) <= 1
+    assert 44 <= int(nav_bottom.group(1)) <= min(160, int(viewport_height.group(1)))
+    assert stage_native.group(1) == "true"
+    assert stage_open.group(1) == "true"
+    assert stage_focus.group(1) == "true"
+    assert stage_focus_visible.group(1) == "true"
+    assert all(match is not None for match in geometry.values())
+    assert {name: match.group(1) for name, match in geometry.items() if match} == {
+        "no-overflow": "true",
+        "stage-summary-hit": "true",
+        "primary-links-hit": "true",
+        "stage-list-horizontal": "true",
+        "stage-list-vertical": "true",
+        "stage-list-bounded": "true",
+        "stage-close-reopen": "true",
+    }
+
+
 def test_html_topics_use_one_open_native_panel_and_a_progressive_switcher(
     tmp_path: Path,
 ) -> None:
@@ -3912,6 +4316,63 @@ def test_cli_emits_one_compact_stable_json_receipt(tmp_path: Path, capsys: pytes
     assert list(receipt["source_sha256s"]) == sorted(receipt["source_sha256s"])
     assert receipt["source_sha256s"]["rag/rag_output_trec_rag_2026.jsonl"] == output_sha256
     assert target.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_bundle_cli_emits_one_compact_stable_json_receipt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "custom-debug-bundle"
+    argv = [
+        "--retrieval-config", str(config_path),
+        "--topic", "rag2026-0",
+        "--output-dir", str(target),
+    ]
+
+    assert debug_report.main(argv) == 0
+    stdout = capsys.readouterr().out
+
+    assert stdout.endswith("\n") and stdout.count("\n") == 1
+    assert " " not in stdout
+    receipt = json.loads(stdout)
+    assert set(receipt) == {
+        "bundle_manifest_sha256",
+        "evaluation_included",
+        "index_path",
+        "manifest_path",
+        "output_dir",
+        "page_count",
+        "rag_included",
+        "report_schema_version",
+        "schema_version",
+        "topic_ids",
+        "total_bytes",
+    }
+    assert list(receipt) == sorted(receipt)
+    assert receipt["schema_version"] == "competition_debug_report_bundle_v1"
+    assert receipt["report_schema_version"] == "competition_debug_report_v1"
+    assert receipt["output_dir"] == str(target.resolve())
+    assert receipt["index_path"] == str((target / "index.html").resolve())
+    assert receipt["manifest_path"] == str((target / "bundle-manifest.json").resolve())
+    assert receipt["topic_ids"] == ["rag2026-0"]
+    assert receipt["page_count"] == 2
+    assert receipt["rag_included"] is False
+    assert receipt["evaluation_included"] is False
+
+
+def test_evaluation_manifest_requires_bundle_output_dir(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path, _retrieval_output = _write_debug_run(tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        debug_report.main([
+            "--retrieval-config", str(config_path),
+            "--evaluation-manifest", str(tmp_path / "evaluation.json"),
+        ])
+
+    assert "--evaluation-manifest requires --output-dir" in str(raised.value)
+    assert capsys.readouterr() == ("", "")
 
 
 def test_cli_reports_concise_error_and_preserves_interrupt_exit(

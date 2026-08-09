@@ -38,7 +38,55 @@ Standing authorization stops at that boundary. Ask first before retrieval, reran
   --topic TOPIC_ID
 ```
 
-Omit `--rag-config` for retrieval-only reports. Omit `--topic` when the user requests every topic. Let the CLI choose its private default output unless the user explicitly requests an in-repository HTML path.
+Omit `--rag-config` for retrieval-only reports. Omit `--topic` when the user requests every topic. For exactly one explicitly requested topic, let the CLI choose its private default output unless the user explicitly requests an in-repository HTML path; use the bundle workflow below for two or more topics or all topics.
+
+### Output selection for one topic versus a bundle
+
+For exactly one explicitly requested topic, retain the legacy single-file
+behavior. Use the existing command above, adding `--topic TOPIC_ID` and, when
+an explicit destination is needed, `--output REPORT_HTML`. Do not use
+`--output-dir` for this single-file path.
+
+For two or more explicitly requested topics, or for all exported topics, use
+the multipage bundle form in an ignored retrieval-output location. Repeat
+`--topic TOPIC_ID` for a deliberate subset; omit it for all topics:
+
+```bash
+.venv/bin/python \
+  -m trec_rag.competition_debug_report \
+  --retrieval-config RETRIEVAL_CONFIG \
+  --output-dir BUNDLE_DIR
+```
+
+The bundle contains a privacy-safe `index.html` summary, private raw pages at
+`topics/TOPIC_ID.html`, and a manifest-last `bundle-manifest.json`. The target
+is create-only: the builder renders and validates a sibling staging directory,
+then atomically renames it into the previously absent bundle directory. A
+bundle reduces the browser loading unit to the summary or one topic page; it
+may leave total bytes near the raw trace size rather than substantially
+reducing disk use.
+
+An `--evaluation-manifest EVALUATION_MANIFEST` is an optional local score
+overlay only when the manifest already exists and has been validated and the
+user asks to include scores. Supplying it does not authorize judging or resume
+of judging. Rendering performs no retrieval, generation, judging, hosted call,
+or serving action. Keep retrieval, RAG, and evaluation artifacts private.
+
+For a bundle, read the compact stdout receipt and verify `index_path`, the
+ordered `topic_ids`, `page_count`, `total_bytes`, `bundle_manifest_sha256`,
+`rag_included`, and `evaluation_included`. Keep retrieval relevance, nugget or
+obligation coverage, and answer and citation quality as separate metric
+families. An unavailable metric remains `Unavailable` with its reason; never
+render unavailable as zero or combine unlike families into one score.
+
+Receipt values are exact reconciliation checks: `page_count` must equal
+`1 + len(topic_ids)`—one `index.html` plus one topic HTML page per ordered
+topic ID, excluding `bundle-manifest.json`—so an all-119-topic bundle has
+`page_count: 120`. `total_bytes` must equal the on-disk byte sum of
+`index.html`, every topic HTML page, and `bundle-manifest.json`, and must match
+the corresponding manifest and actual-file reconciliation exactly. The
+`bundle_manifest_sha256` must equal the SHA-256 of the `bundle-manifest.json`
+bytes exactly; do not accept estimates or merely plausible values.
 
 ## Examples
 
@@ -59,7 +107,10 @@ Retrieval plus RAG:
   --rag-config configs/rag26_competition_rag_gpt_sol_v2.yaml
 ```
 
-4. Read the single JSON receipt from stdout. Confirm it contains `schema_version`, an absolute `output_path`, `topic_ids`, `rag_included`, and `source_sha256s`, and that its topics and RAG status match the request.
+These examples preserve the legacy single-file form. Do not use them for two
+or more topics or for all topics; use the bundle command above.
+
+4. Read the JSON receipt from stdout. For the legacy single-file path, confirm it contains `schema_version`, an absolute `output_path`, `topic_ids`, `rag_included`, and `source_sha256s`, and that its topics and RAG status match the request. For a bundle, verify `index_path`, ordered `topic_ids`, `page_count`, `total_bytes`, `bundle_manifest_sha256`, `rag_included`, and `evaluation_included`.
 
 ## Evaluated Friendly Report
 
