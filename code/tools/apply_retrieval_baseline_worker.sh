@@ -16,6 +16,7 @@ mode=preview
 run_name=""
 task_name=""
 input_prefix=""
+input_manifest_sha256=""
 output_prefix=""
 topic_ids=()
 transport_tmp=""
@@ -24,7 +25,8 @@ usage() {
   cat <<'EOF'
 Usage:
   apply_retrieval_baseline_worker.sh [--preview|--launch] --name NAME \
-    --task-name SAFE_TASK --input-prefix HF_PREFIX --output-prefix HF_PREFIX \
+    --task-name SAFE_TASK --input-prefix HF_PREFIX \
+    --input-manifest-sha256 SHA256 --output-prefix HF_PREFIX \
     --topic SAFE_ID [--topic SAFE_ID]
 
 Preview is the default and declines submission. --launch submits detached and
@@ -40,8 +42,15 @@ die() {
 safe_task() { [[ $1 =~ ^[a-z][a-z0-9-]{0,62}$ ]]; }
 safe_topic() { [[ $1 =~ ^rag2026-[0-9]+$ ]]; }
 safe_hf_prefix() {
-  local path=${1#hf://}
-  [[ $1 == hf://buckets/* && $1 != *' '* && $path != *'//'* && $path != *'/../'* && $path != */.. ]]
+  local path=${1#hf://buckets/}
+  local components=()
+  [[ $1 == hf://buckets/* && $1 != *' '* && $path != *'//'* ]] || return 1
+  IFS=/ read -r -a components <<<"$path"
+  ((${#components[@]} >= 3)) || return 1
+  for component in "${components[@]}"; do
+    [[ $component =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $component != . && $component != .. ]] \
+      || return 1
+  done
 }
 regular_file() { [[ -f $1 && ! -L $1 ]] || die "file must be regular and non-symlink: $1"; }
 
@@ -52,6 +61,7 @@ while (($#)); do
     --name) (($# >= 2)) || die "--name needs a value"; run_name=$2; shift 2 ;;
     --task-name) (($# >= 2)) || die "--task-name needs a value"; task_name=$2; shift 2 ;;
     --input-prefix) (($# >= 2)) || die "--input-prefix needs a value"; input_prefix=$2; shift 2 ;;
+    --input-manifest-sha256) (($# >= 2)) || die "--input-manifest-sha256 needs a value"; input_manifest_sha256=$2; shift 2 ;;
     --output-prefix) (($# >= 2)) || die "--output-prefix needs a value"; output_prefix=$2; shift 2 ;;
     --topic) (($# >= 2)) || die "--topic needs a value"; topic_ids+=("$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -63,6 +73,8 @@ done
 safe_task "$task_name" || die "--task-name must be safe lowercase task text"
 safe_hf_prefix "$input_prefix" || die "--input-prefix must be a safe private hf:// prefix"
 safe_hf_prefix "$output_prefix" || die "--output-prefix must be a safe private hf:// prefix"
+[[ $input_manifest_sha256 =~ ^[0-9a-f]{64}$ ]] \
+  || die "--input-manifest-sha256 must be a lowercase SHA-256 digest"
 [[ $input_prefix != "$output_prefix" ]] || die "input and output prefixes must differ"
 ((${#topic_ids[@]} >= 1 && ${#topic_ids[@]} <= 2)) || die "one or two --topic selectors are required"
 declare -A seen_topics=()
@@ -84,6 +96,8 @@ git --no-pager diff --check "$tracking_ref"
 source_status=$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none) || die "unable to inspect source worktree"
 [[ -z $source_status ]] || die "source worktree must be clean before dstack preview or launch"
 tracking_remote=$(git config --get "branch.${source_branch}.remote") || die "source branch has no tracking remote"
+tracking_merge=$(git config --get "branch.${source_branch}.merge") || die "source branch has no tracking branch"
+case "$tracking_merge" in refs/heads/*) tracking_branch=${tracking_merge#refs/heads/} ;; *) die "tracking ref is invalid" ;; esac
 remote_url=$(git remote get-url "$tracking_remote") || die "tracking remote has no URL"
 case "$remote_url" in "$CANONICAL_HTTPS"|"$CANONICAL_SCP"|"$CANONICAL_SSH") ;; *) die "tracking remote is not canonical" ;; esac
 
@@ -108,7 +122,15 @@ chmod 700 "$transport_tmp"
 
 snapshot="$transport_tmp/repository"
 git clone --quiet --no-hardlinks "$REPO_ROOT" "$snapshot"
+snapshot_branch=$(git -C "$snapshot" symbolic-ref --quiet --short HEAD 2>/dev/null) \
+  || die "snapshot clone is detached"
+[[ $snapshot_branch == "$source_branch" ]] || die "snapshot branch differs"
 [[ $(git -C "$snapshot" rev-parse 'HEAD^{commit}') == "$source_head" ]] || die "snapshot HEAD differs"
+git -C "$snapshot" remote set-url origin "$remote_url"
+git -C "$snapshot" update-ref "refs/remotes/origin/$tracking_branch" "$tracking_commit"
+git -C "$snapshot" branch --set-upstream-to="origin/$tracking_branch" "$snapshot_branch" >/dev/null
+[[ $(git -C "$snapshot" rev-parse '@{upstream}^{commit}') == "$tracking_commit" ]] \
+  || die "snapshot tracking commit differs"
 [[ ! -e $snapshot/.env && ! -e $snapshot/.env.local ]] || die "secret env file entered snapshot"
 task_config="$transport_tmp/rag26-retrieval-baseline-worker.yaml"
 "$project_python" - "$snapshot/${TASK_TEMPLATE#"$REPO_ROOT"/}" "$task_config" "$snapshot" <<'PY'
@@ -129,6 +151,7 @@ PY
 worker_args=(
   --task-name "$task_name"
   --input-prefix "$input_prefix"
+  --input-manifest-sha256 "$input_manifest_sha256"
   --output-prefix "$output_prefix"
 )
 for topic_id in "${topic_ids[@]}"; do worker_args+=(--topic "$topic_id"); done

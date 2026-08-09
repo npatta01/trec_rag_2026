@@ -2111,9 +2111,10 @@ only the already-cached reranker rows needed by those topics. Publish it to one 
 `.../trec_rag_2026/artifacts/<input-id>` prefix. The checked-in
 `.dstack/rag26-retrieval-baseline-worker.yaml` runs only through a clean committed snapshot and
 invokes `code/tools/run_retrieval_baseline_worker.sh`. The worker accepts one or two topics,
-restores and verifies the input, scores sequentially on one 48 GB GPU, and round-trip
-verifies its private output publication. It uploads only text-free matrices, run files,
-manifests, and receipts; document text and live caches remain inside the disposable worker.
+restores and verifies the input against its locally approved manifest digest, scores sequentially
+on one 48 GB GPU, exports the complete text-free portable score cache, and proves a fresh-cache
+replay uses zero model batches and produces byte-identical matrices. It then round-trip verifies
+the private output publication. Document text remains inside the disposable worker.
 
 Run its credential-free argument/source preflight before previewing offers:
 
@@ -2121,6 +2122,7 @@ Run its credential-free argument/source preflight before previewing offers:
 bash code/tools/run_retrieval_baseline_worker.sh --preflight \
   --task-name smoke-0-37 \
   --input-prefix hf://buckets/<private-bucket>/trec_rag_2026/artifacts/<input-id> \
+  --input-manifest-sha256 <sha256-from-verify> \
   --output-prefix hf://buckets/<private-bucket>/trec_rag_2026/experiments/<output-id> \
   --topic rag2026-0 --topic rag2026-37
 ```
@@ -2133,6 +2135,17 @@ bash code/tools/apply_retrieval_baseline_worker.sh --preview \
   --name rag26-baseline-smoke-0-37 \
   --task-name smoke-0-37 \
   --input-prefix hf://buckets/<private-bucket>/trec_rag_2026/artifacts/<input-id> \
+  --input-manifest-sha256 <sha256-from-verify> \
   --output-prefix hf://buckets/<private-bucket>/trec_rag_2026/experiments/<output-id> \
   --topic rag2026-0 --topic rag2026-37
+```
+
+After a completed worker, download the private publication into a new empty directory, compare
+and verify `SHA256SUMS`, run `retrieval_baseline_runs verify`, then strictly import the purchased
+scores for local and later full-run reuse:
+
+```bash
+.venv/bin/python -m trec_rag.retrieval_baseline_input_bundle import-cache \
+  --portable <download>/portable-scores/complete.jsonl \
+  --score-cache cache/reranker
 ```

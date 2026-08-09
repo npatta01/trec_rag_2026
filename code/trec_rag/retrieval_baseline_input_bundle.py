@@ -10,6 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import tempfile
 from typing import Mapping, Sequence
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
@@ -364,6 +365,7 @@ def build_input_directory(
         read_only=True,
     )
     hit_pairs: list[tuple[str, str]] = []
+    seen_cache_keys: set[str] = set()
     hits = 0
     misses = 0
     try:
@@ -381,12 +383,12 @@ def build_input_directory(
                 results = scorer.score_cache.lookup_many(pairs)
                 unique: dict[str, tuple[tuple[str, str], float | None]] = {}
                 for pair, result in zip(pairs, results, strict=True):
-                    unique.setdefault(
-                        scorer.score_cache.cache_key(
-                            query_text=pair[0], text=pair[1]
-                        ),
-                        (pair, result),
+                    cache_key = scorer.score_cache.cache_key(
+                        query_text=pair[0], text=pair[1]
                     )
+                    if cache_key not in seen_cache_keys:
+                        unique[cache_key] = (pair, result)
+                        seen_cache_keys.add(cache_key)
                 for pair, result in unique.values():
                     if result is None:
                         misses += 1
@@ -433,22 +435,78 @@ def import_portable_scores(input_dir: Path, score_cache_root: Path) -> dict[str,
     portable = tuple(sorted((Path(input_dir) / "portable-scores").glob("*.jsonl")))
     if len(portable) != 1:
         raise InputBundleError("input must contain exactly one portable score context")
+    receipt = import_portable_score_file(portable[0], score_cache_root)
+    return {**receipt, "topic_ids": verified["topic_ids"]}
+
+
+def export_portable_score_cache(
+    score_cache_root: Path,
+    destination: Path,
+) -> dict[str, object]:
+    """Export the complete pinned cache context as immutable portable JSONL."""
+
+    destination = Path(destination)
+    if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+        raise InputBundleError("portable score destination must be a regular file")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
     scorer = MixedbreadPassageScorer(
         score_cache_root=score_cache_root,
-        device="cuda",
+        device="cpu",
+        batch_size=32,
+        read_only=True,
+    )
+    try:
+        receipt = scorer.score_cache.export_portable_jsonl(temporary)
+        with temporary.open("rb") as stream:
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if _file_receipt(temporary) != _file_receipt(destination):
+                raise InputBundleError(
+                    f"conflicting immutable portable score artifact: {destination}"
+                ) from None
+    finally:
+        scorer.score_cache.close()
+        temporary.unlink(missing_ok=True)
+    size, digest = _file_receipt(destination)
+    if digest != receipt["sha256"]:
+        raise InputBundleError("portable score export digest changed")
+    return {**receipt, "byte_count": size}
+
+
+def import_portable_score_file(
+    source: Path,
+    score_cache_root: Path,
+) -> dict[str, object]:
+    """Strictly import one authenticated pinned-context portable cache file."""
+
+    source = Path(source)
+    if source.is_symlink() or not source.is_file():
+        raise InputBundleError("portable score source must be a regular file")
+    scorer = MixedbreadPassageScorer(
+        score_cache_root=score_cache_root,
+        device="cpu",
         batch_size=32,
         read_only=False,
     )
     try:
         context_sha256 = scorer.score_cache.context_sha256
-        receipt = scorer.score_cache.import_portable_jsonl(portable[0])
+        receipt = scorer.score_cache.import_portable_jsonl(source)
     finally:
         scorer.score_cache.close()
     return {
         "context_sha256": context_sha256,
         "inserted_count": receipt["inserted_count"],
         "source_row_count": receipt["source_row_count"],
-        "topic_ids": verified["topic_ids"],
+        "source_sha256": receipt["source_sha256"],
     }
 
 
@@ -467,6 +525,12 @@ def _parser() -> argparse.ArgumentParser:
     import_scores = commands.add_parser("import-scores")
     import_scores.add_argument("input_dir", type=Path)
     import_scores.add_argument("--score-cache", type=Path, required=True)
+    export_cache = commands.add_parser("export-cache")
+    export_cache.add_argument("--score-cache", type=Path, required=True)
+    export_cache.add_argument("--output", type=Path, required=True)
+    import_cache = commands.add_parser("import-cache")
+    import_cache.add_argument("--portable", type=Path, required=True)
+    import_cache.add_argument("--score-cache", type=Path, required=True)
     return parser
 
 
@@ -494,8 +558,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "source_run_id": verified["source_run_id"],
             "topic_ids": verified["topic_ids"],
         }
-    else:
+    elif args.command == "import-scores":
         receipt = import_portable_scores(args.input_dir, args.score_cache)
+    elif args.command == "export-cache":
+        receipt = export_portable_score_cache(args.score_cache, args.output)
+    else:
+        receipt = import_portable_score_file(args.portable, args.score_cache)
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return 0
 

@@ -22,6 +22,8 @@ def test_worker_credential_free_preflight_accepts_two_topics() -> None:
             "smoke-0-37",
             "--input-prefix",
             "hf://buckets/private/trec_rag_2026/artifacts/baseline-smoke-v1",
+            "--input-manifest-sha256",
+            "a" * 64,
             "--output-prefix",
             "hf://buckets/private/trec_rag_2026/experiments/baseline-smoke-v1",
             "--topic",
@@ -37,6 +39,7 @@ def test_worker_credential_free_preflight_accepts_two_topics() -> None:
 
     assert "preflight=ok" in completed.stdout
     assert "topic_ids=rag2026-0,rag2026-37" in completed.stdout
+    assert f"input_manifest_sha256={'a' * 64}" in completed.stdout
     assert "sequential_topic_processes=1" in completed.stdout
 
 
@@ -50,6 +53,8 @@ def test_worker_preflight_rejects_duplicate_topics() -> None:
             "duplicate",
             "--input-prefix",
             "hf://buckets/private/trec_rag_2026/artifacts/baseline-v1",
+            "--input-manifest-sha256",
+            "a" * 64,
             "--output-prefix",
             "hf://buckets/private/trec_rag_2026/experiments/baseline-v1",
             "--topic",
@@ -93,3 +98,21 @@ def test_launcher_defaults_to_declined_preview_and_uses_clean_snapshot() -> None
     assert '[[ -z $source_status ]]' in source
     assert '"$dstack_bin" apply' in source
     assert ' -y -d -- ' in source
+    assert "--input-manifest-sha256" in source
+
+
+def test_worker_checks_privacy_and_output_before_model_scoring() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+
+    privacy_offset = source.index('buckets info "$bucket"')
+    empty_offset = source.index('require_empty_prefix "$output_prefix"')
+    model_offset = source.index("snapshot_download(model, revision=revision)")
+    scoring_offset = source.index("retrieval_baseline_runs score-topic")
+    assert privacy_offset < model_offset
+    assert empty_offset < model_offset
+    assert model_offset < scoring_offset
+    assert "--no-managed-python" in source
+    assert "--no-python-downloads" in source
+    assert "--cache-only" in source
+    assert "export-cache" in source
+    assert 'cmp -- "$publication/SHA256SUMS" "$roundtrip/SHA256SUMS"' in source
