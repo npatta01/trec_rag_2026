@@ -24,10 +24,24 @@ Use this sheet with the exact sibling file `r_output_trec_rag_2026.tsv`.
 
 Copy and paste:
 
-> For each narrative, we applied a robust threshold independently to the original-narrative source lane and every authenticated subnarrative source lane. For lane u, the median and MAD were computed among documents present in that lane. A document was admitted when its aggregate score was at least median(A_u) + 2.5 x 1.4826 x MAD(A_u); when MAD was zero, its score had to exceed the median. We submitted the union of those admissions. If the union had been empty, we would have retained one original-narrative argmax with deterministic retrieval-rank and document-ID ties. This produced variable k from 1 to 121 across 119 narratives (61 distinct depths), with no padding, truncation, or fallback topics. All three submitted variants share this selected set.
+> Each narrative was allowed to return its own number of documents.
+>
+> We examined the original narrative and each subnarrative separately. Within each source lane, the median represented a typical document score and the median absolute deviation (MAD) represented normal score variation. We kept documents whose scores were unusually strong for that lane.
+>
+> Exact rule: when MAD was greater than zero, we kept a document if its aggregate score was at least median(A_u) + 2.5 x 1.4826 x MAD(A_u). When MAD was zero, its score had to exceed the median.
+>
+> We then combined the documents kept by any lane. If no lane had kept a document, we would have returned the highest-scoring original-narrative document, with deterministic retrieval-rank and document-ID tie-breaking.
+>
+> This produced a different k for different narratives: 1 to 121 documents across 119 narratives, with 61 distinct depths. No topic was padded or truncated, and no topic needed the fallback. All three submitted variants use this same document set.
 
 ## Short description of this run
 
 Copy and paste:
 
-> Automatic multi-stage real run. A bounded, one-shot open-weight DeepSeek V4 Flash planner decomposed each narrative into subnarratives. Candidates came from the organizer's Pyserini REST API over ClimbMix-400b and were passage-scored with the open-weight Mixedbread mxbai-rerank-base-v2 cross-encoder. Each authenticated subnarrative text lane was treated as one pooled source. The final ordering prioritizes evidence breadth: first the number of distinct supported subnarratives, then the number of strong overlap-suppressed supporting passages, then the narrative-plus-subnarrative combo score. Codex agents assisted development through design, implementation, review, and validation; they did not select documents at runtime. The retrieval pipeline used no proprietary model. Hosted services provided inference for open-weight models.
+> Planning: A bounded, one-shot, open-weight DeepSeek V4 Flash planner decomposed each narrative into subnarratives.
+>
+> Retrieval and scoring: This was an automatic, multi-stage real run. Candidates came from the organizer's Pyserini REST API over ClimbMix-400b. The open-weight Mixedbread mxbai-rerank-base-v2 cross-encoder scored passages. Each authenticated subnarrative text lane was treated as one pooled source.
+>
+> Ranking: The final ordering prioritized evidence breadth: first the number of distinct supported subnarratives, then the number of strong overlap-suppressed supporting passages, and then the narrative-plus-subnarrative combo score.
+>
+> Development disclosure: Codex agents assisted with design, implementation, review, and validation, but did not select documents at runtime. The retrieval pipeline used no proprietary model. Hosted services provided inference for open-weight models.
