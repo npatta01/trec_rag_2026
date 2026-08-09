@@ -117,6 +117,7 @@ git --no-pager diff --check "$tracking_ref"
   || die "source worktree must be clean and committed"
 
 remote_name=$(git config --get "branch.${source_branch}.remote")
+tracking_branch=${tracking_ref#"$remote_name"/}
 remote_url=$(git remote get-url "$remote_name")
 case "$remote_url" in
   https://github.com/npatta01/trec_rag_2026.git|git@github.com:npatta01/trec_rag_2026.git|ssh://git@github.com/npatta01/trec_rag_2026.git) ;;
@@ -148,8 +149,17 @@ transport_tmp=$(mktemp -d /tmp/trec-rag-segmentation-transport.XXXXXXXX)
 chmod 700 "$transport_tmp"
 snapshot="$transport_tmp/repository"
 git clone --quiet --no-hardlinks "$REPO_ROOT" "$snapshot"
+snapshot_branch=$(git -C "$snapshot" symbolic-ref --quiet --short HEAD) \
+  || die "snapshot clone is detached"
+[[ $snapshot_branch == "$source_branch" ]] || die "snapshot branch changed"
+git -C "$snapshot" remote set-url origin "$remote_url"
+git -C "$snapshot" update-ref "refs/remotes/origin/$tracking_branch" "$tracking_head"
+git -C "$snapshot" branch --set-upstream-to="origin/$tracking_branch" \
+  "$snapshot_branch" >/dev/null
 [[ $(git -C "$snapshot" rev-parse 'HEAD^{commit}') == "$source_head" ]] \
   || die "snapshot HEAD changed"
+[[ $(git -C "$snapshot" rev-parse '@{upstream}^{commit}') == "$tracking_head" ]] \
+  || die "snapshot tracking commit changed"
 [[ -z $(git -C "$snapshot" status --porcelain=v1 --untracked-files=all) ]] \
   || die "snapshot is not clean"
 [[ ! -e $snapshot/.env && ! -e $snapshot/.env.local ]] \

@@ -202,5 +202,8 @@ def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> N
     assert '"--instance-type" "$approved_instance_type"' in launcher
     assert '"--gpu" "${approved_gpu}:1"' in launcher
     assert '"--max-price" "$approved_hourly_price"' in launcher
+    assert 'remote set-url origin "$remote_url"' in launcher
+    assert 'update-ref "refs/remotes/origin/$tracking_branch" "$tracking_head"' in launcher
+    assert 'branch --set-upstream-to="origin/$tracking_branch"' in launcher
     assert "modal" not in wrapper.casefold()
     assert "modal" not in launcher.casefold()
