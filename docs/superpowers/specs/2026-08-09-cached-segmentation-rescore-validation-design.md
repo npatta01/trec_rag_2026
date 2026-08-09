@@ -84,13 +84,13 @@ kept one CPU core busy while GPU utilization was sparse, used about 6.7 GiB of
 host RSS and 2.32 GiB of VRAM, and took more than fifty minutes downstream.
 The task therefore requires at least 24 CPU cores and 192 GB host RAM.
 
-A same-machine, three-minute two-worker probe runs in isolated cache/output
+A same-machine, fifteen-minute two-worker probe runs in isolated cache/output
 roots and records GPU identity, elapsed time, idle VRAM, and peak VRAM. Its
 expected timeout is success; every other nonzero status fails. Twenty workers
 are admitted only when the exact linear
 projection `idle + 10 * (peak - idle)` stays at or below 90% of device memory.
 The probe must also observe at least 4096 MiB above idle, and its exact
-180-second duration plus exit status are bound into the verified decision; an
+900-second duration plus exit status are bound into the verified decision; an
 idle-only or short timed probe cannot become promotable.
 The result verifier binds the decision to the config and export and accepts
 exactly twenty workers. Topic 407's known structural canary thresholds are

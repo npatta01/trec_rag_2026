@@ -1036,7 +1036,7 @@ def _comparison_sources(
         or not driver_version
         or decision.get("probe_topics") != ["14", "31"]
         or decision.get("probe_workers") != 2
-        or decision.get("probe_duration_seconds") != 180
+        or decision.get("probe_duration_seconds") != 900
         or decision.get("probe_exit_status") not in {0, 124}
         or decision.get("minimum_peak_delta_mib") != 4096
         or decision.get("selected_workers") != selected_workers

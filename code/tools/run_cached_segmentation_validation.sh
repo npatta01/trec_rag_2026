@@ -10,7 +10,7 @@ MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 MINILM_REVISION="1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
 SOURCE_VERIFY_WORKERS=8
 PROBE_WORKERS=2
-PROBE_DURATION_SECONDS=180
+PROBE_DURATION_SECONDS=900
 MINIMUM_PROBE_PEAK_DELTA_MIB=4096
 SELECTED_WORKERS=20
 
@@ -436,7 +436,7 @@ if probe_workers != 2 or selected_workers < probe_workers or selected_workers > 
     raise SystemExit("worker selection is outside the validated range")
 if selected_workers % probe_workers:
     raise SystemExit("selected workers must be an exact multiple of probe workers")
-if probe_duration != 180 or probe_status not in {0, 124} or minimum_delta != 4096:
+if probe_duration != 900 or probe_status not in {0, 124} or minimum_delta != 4096:
     raise SystemExit("probe timing contract changed")
 samples = []
 for line in source.read_text().splitlines():

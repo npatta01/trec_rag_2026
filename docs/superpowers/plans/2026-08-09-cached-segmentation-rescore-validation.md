@@ -4,7 +4,7 @@
 
 **Goal:** Re-score all 22 cached RAG 2025 development topics with the fixed sentence segmenter on one fast dstack GPU, prove that planning/retrieval/passage scoring performed no new work, and compare old versus fixed canonical nuggets against the exact same frozen obligation plans.
 
-**Architecture:** Add one explicit three-value retrieval execution policy and a read-only document-store seam so `cached-upstream-rescore` fails before forbidden upstream work while allowing sentence scoring, similarity, and canonicalization. Add an authenticated A/B validator that reports fragmentation metrics, reuses the 22 completed baseline coverage plans, and makes one candidate-arm judge call per topic. One dstack task restores the portable bundles, runs a three-minute isolated two-topic probe, then all topics in one twenty-worker wave on a high-memory GPU host, and publishes a private verified result bundle.
+**Architecture:** Add one explicit three-value retrieval execution policy and a read-only document-store seam so `cached-upstream-rescore` fails before forbidden upstream work while allowing sentence scoring, similarity, and canonicalization. Add an authenticated A/B validator that reports fragmentation metrics, reuses the 22 completed baseline coverage plans, and makes one candidate-arm judge call per topic. One dstack task restores the portable bundles, runs a fifteen-minute isolated two-topic probe, then all topics in one twenty-worker wave on a high-memory GPU host, and publishes a private verified result bundle.
 
 **Tech Stack:** Python 3.12, pytest, spaCy `en_core_web_sm` 3.8.0, PyTorch CUDA, SQLite, dstack 0.20.29, private Hugging Face Buckets, deterministic tar+zstd, OpenRouter `openai/gpt-5.6-sol`.
 
@@ -48,7 +48,7 @@
   the CPU-heavy downstream stages while the H100 remains lightly utilized.
   Retry 6 was stopped during authenticated input restoration before scoring
   because sequential completed canary/probe runs could not meet the deadline.
-  Retry 7 uses a three-minute isolated probe, one twenty-worker wave, eight-way
+  Retry 10 uses a fifteen-minute isolated probe, one twenty-worker wave, eight-way
   semantic judging, and fresh result and diagnostic prefixes.
 
 ## Global Constraints
@@ -61,7 +61,7 @@
 - Sentence scoring and similarity may use local GPU work. Canonicalization may make bounded hosted calls.
 - Reuse existing baseline `plan.json` bytes and make at most 22 candidate-arm judge calls; make no planner calls.
 - Use one on-demand machine with at least 24 CPU cores, 192 GB RAM, 100 GB disk, and one H200/H100 GPU with at least 80 GB VRAM.
-- The full run uses exactly `execution.topic_workers: 20`, gated by a same-machine three-minute two-worker VRAM projection; Topic 407 validates before promotion from the completed wave.
+- The full run uses exactly `execution.topic_workers: 20`, gated by a same-machine fifteen-minute two-worker VRAM projection; Topic 407 validates before promotion from the completed wave.
 - Enforce a 160m wrapper deadline with ten minutes for diagnostic preservation and a 170m hard task cap.
 - Keep caches, outputs, evidence, nuggets, provider responses, and reports private and out of git.
 - Ignore Modal completely: no Modal dependency, config key, import, test, or execution path.
@@ -456,7 +456,7 @@ apply_cached_segmentation_validation.sh --preview|--launch --name NAME \
 
 - [ ] **Step 1: Write executable workflow tests first**
 
-Run the real wrapper against fake `hf`, `uv`, `git`, `nvidia-smi`, and nested Python. Assert: exact 22 source pairs; empty private destination; verify-all-then-merge; isolated three-minute two-topic probe; one twenty-worker all-topic run; Topic 407 and full structural gates before promotion; no planner and at most 22 judge calls; archive-before-marker upload; list/download/byte-compare/reverify; failure propagation; committed-only launch; preview declines and never submits.
+Run the real wrapper against fake `hf`, `uv`, `git`, `nvidia-smi`, and nested Python. Assert: exact 22 source pairs; empty private destination; verify-all-then-merge; isolated fifteen-minute two-topic probe; one twenty-worker all-topic run; Topic 407 and full structural gates before promotion; no planner and at most 22 judge calls; archive-before-marker upload; list/download/byte-compare/reverify; failure propagation; committed-only launch; preview declines and never submits.
 
 - [ ] **Step 2: Verify RED**
 
@@ -474,7 +474,7 @@ Generate ignored two- and twenty-worker configs from tracked
 `configs/rag25_competition_retrieval_v1.yaml`:
 
 ```text
-warm probe 14,31: two active topics for three minutes in isolated roots
+warm probe 14,31: two active topics for fifteen minutes in isolated roots
 final 22: one twenty-worker production wave
 ```
 

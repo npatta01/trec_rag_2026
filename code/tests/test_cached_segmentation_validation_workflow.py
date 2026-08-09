@@ -71,7 +71,7 @@ def test_wrapper_preflight_freezes_all22_and_zero_upstream_expectations() -> Non
     assert "candidate_judge_calls_max=22" in result.stdout
     assert "topic_407_gate=post-full-structural" in result.stdout
     assert "warm_probe_topics=14,31" in result.stdout
-    assert "warm_probe_seconds=180" in result.stdout
+    assert "warm_probe_seconds=900" in result.stdout
 
 
 def test_live_wrapper_validates_topics_after_creating_the_locked_environment() -> None:
@@ -281,7 +281,7 @@ def test_workflow_source_encodes_short_probe_full_run_and_marker_last() -> None:
     assert '"gpu_uuid": gpu_uuid' in wrapper
     assert "SELECTED_WORKERS=20" in wrapper
     assert 'make_config "$final_config" "$run_id" "$SELECTED_WORKERS"' in wrapper
-    assert "PROBE_DURATION_SECONDS=180" in wrapper
+    assert "PROBE_DURATION_SECONDS=900" in wrapper
     assert "MINIMUM_PROBE_PEAK_DELTA_MIB=4096" in wrapper
     assert 'probe_cache_root="$work_root/probe-cache"' in wrapper
     assert 'make_config "$probe_config" "${run_id}-probe" "$PROBE_WORKERS"' in wrapper
