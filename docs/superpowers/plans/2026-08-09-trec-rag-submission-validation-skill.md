@@ -100,7 +100,7 @@
 - Consumes: `Path` objects for a topics file and one Retrieval runfile.
 - Produces: `load_topics(path: Path) -> tuple[Topic, ...]`, `validate_retrieval(path: Path, topics: tuple[Topic, ...]) -> ArtifactResult`, immutable `Topic`, `Finding`, and `ArtifactResult` records, and statuses `pass`, `pass-with-warnings`, or `fail`.
 
-- [ ] **Step 1: Write failing Retrieval tests before the script exists**
+- [x] **Step 1: Write failing Retrieval tests before the script exists**
 
   Create tests that load the future script with `importlib.util.spec_from_file_location`. Use temporary files and begin with this valid variable-depth case:
 
@@ -125,9 +125,9 @@
       self.assertEqual((1, 2), (result.depth_min, result.depth_max))
   ```
 
-  Add table-driven cases for malformed column count, blank row, wrong `Q0`, missing and extra topics, rank not starting at 1, rank gaps, duplicate topic/document pair, increasing score, `nan`/`inf`, invalid ClimbMix ID, conflicting run IDs, invalid UTF-8, and an empty run.
+  Add table-driven cases for malformed column count, wrong `Q0`, missing and extra topics, rank not starting at 1, rank gaps, duplicate topic/document pair, increasing score, `nan`/`inf`, invalid ClimbMix ID, conflicting run IDs, invalid UTF-8, and an empty run. Add a positive case showing that blank lines are ignored rather than interpreted as submission rows.
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
   Run:
 
@@ -139,7 +139,7 @@
 
   Expected: FAIL because `scripts/validate_submission.py` does not exist. Fix test-loader mistakes until the failure is specifically the missing production script.
 
-- [ ] **Step 3: Implement minimal immutable result types and topics loading**
+- [x] **Step 3: Implement minimal immutable result types and topics loading**
 
   Add these stable shapes:
 
@@ -170,15 +170,15 @@
 
   `load_topics` must accept the exact two-column TSV or Request JSONL with `request_id` and `title`, reject duplicates/blank identities, and preserve source order.
 
-- [ ] **Step 4: Implement the Retrieval parser and validator**
+- [x] **Step 4: Implement the Retrieval parser and validator**
 
   Implement `validate_retrieval` as one file snapshot read. Collect violations instead of failing at the first line. Maintain per-topic last rank, last score, and document set. Require `math.isfinite(score)` and `re.fullmatch(r"shard_\d+_\d+", docid)`. Compare the final topic set with the supplied topics and calculate depths only from structurally accepted rows.
 
-- [ ] **Step 5: Run Retrieval tests and verify GREEN**
+- [x] **Step 5: Run Retrieval tests and verify GREEN**
 
   Run the Task 2 test command. Expected: all Retrieval tests pass with no network access.
 
-- [ ] **Step 6: Commit the Retrieval validator slice in the submodule**
+- [x] **Step 6: Commit the Retrieval validator slice in the submodule**
 
   ```bash
   git -C trec-rag-skills add \
@@ -200,7 +200,7 @@
 - Consumes: repeatable `--retrieval PATH`, repeatable `--rag PATH`, one `--topics PATH`, and optional `--strict-rag`.
 - Produces: `Runner = Callable[..., subprocess.CompletedProcess[str]]`, `prepare_autojudge_topics(topics_path: Path, destination: Path) -> Path`, `build_autojudge_command(strict: bool) -> tuple[str, ...]`, `validate_rag(path: Path, topics_path: Path, *, strict: bool, runner: Runner = subprocess.run) -> ArtifactResult`, and `main(argv: Sequence[str] | None = None) -> int`.
 
-- [ ] **Step 1: Write failing RAG routing and CLI tests**
+- [x] **Step 1: Write failing RAG routing and CLI tests**
 
   Add a recording runner that returns `subprocess.CompletedProcess` without invoking the network. Verify:
 
@@ -224,11 +224,11 @@
 
   Also test `--strict-rag`, compatible local-package selection, isolated `uv` fallback, missing dependency failure, AutoJudge exit 255, warning detection, passthrough JSONL topics, repeated inputs, combined Retrieval+RAG summary, and nonzero worst-result exit status.
 
-- [ ] **Step 2: Run the focused new tests and verify RED**
+- [x] **Step 2: Run the focused new tests and verify RED**
 
   Run the Task 2 unittest command. Expected: the existing Retrieval tests pass and new RAG/CLI tests fail because the RAG functions and CLI flags are absent.
 
-- [ ] **Step 3: Implement topics conversion and AutoJudge command selection**
+- [x] **Step 3: Implement topics conversion and AutoJudge command selection**
 
   Parse the installed distribution version with `importlib.metadata.version("autojudge-base")`; accept numeric versions at or above `(0, 4, 3)`. When unavailable or older, require `shutil.which("uv")` and construct:
 
@@ -242,13 +242,13 @@
 
   Convert TSV topics to Request JSONL in a `TemporaryDirectory`; pass Request JSONL through unchanged after validating its topic identities.
 
-- [ ] **Step 4: Implement RAG status mapping and the combined CLI**
+- [x] **Step 4: Implement RAG status mapping and the combined CLI**
 
   Run AutoJudge once per RAG artifact with `--spec rag26 --topics NORMALIZED_TOPICS` and optional `--strict`. Preserve its stdout/stderr in `ArtifactResult.detail`. Map return code zero plus a `SMELL` block to `pass-with-warnings`, zero without smells to `pass`, and any nonzero result to `fail`.
 
   The CLI must validate every requested file, print one concise result line per artifact followed by validator detail, and return 1 if any result failed. `argparse` must reject an invocation with neither `--retrieval` nor `--rag`.
 
-- [ ] **Step 5: Add and run a real isolated AutoJudge integration test**
+- [x] **Step 5: Add and run a real isolated AutoJudge integration test**
 
   Before changing production behavior for this test, add a `unittest.skipUnless(shutil.which("uv"), "uv required")` case using temporary one-topic fixtures:
 
@@ -268,7 +268,7 @@
 
   Run the full unittest command. Expected: the fixture returns `pass`, and a second fixture with a changed narrative returns `fail` from real AutoJudge.
 
-- [ ] **Step 6: Run the script against real local artifacts**
+- [x] **Step 6: Run the script against real local artifacts**
 
   ```bash
   python trec-rag-skills/skills/validate-trec-rag-2026-submissions/scripts/validate_submission.py \
@@ -279,7 +279,7 @@
 
   Expected: Retrieval passes with 119 topics and 4,246 rows; the known incomplete RAG artifact fails. The combined command returns nonzero because the worst result is a failure.
 
-- [ ] **Step 7: Commit the RAG/CLI slice in the submodule**
+- [x] **Step 7: Commit the RAG/CLI slice in the submodule**
 
   ```bash
   git -C trec-rag-skills add \
@@ -301,7 +301,7 @@
 - Consumes: baseline failures from Task 1 and the stable CLI from Tasks 2–3.
 - Produces: a discoverable skill under 500 words whose quick-reference commands invoke the bundled script and whose UI metadata names `$validate-trec-rag-2026-submissions`.
 
-- [ ] **Step 1: Replace the scaffold with the minimal skill that addresses RED**
+- [x] **Step 1: Replace the scaffold with the minimal skill that addresses RED**
 
   Use this frontmatter trigger:
 
@@ -314,7 +314,7 @@
 
   The body must contain: core principle, required `trec-rag-2026-track-guidelines` background, the task-routing rule, one combined command, a quick-reference table, result interpretation, privacy boundaries, repository-specific additive checks, and common mistakes derived from the baseline. Use a positive command recipe rather than a long prohibition list.
 
-- [ ] **Step 2: Regenerate UI metadata from the finished skill**
+- [x] **Step 2: Regenerate UI metadata from the finished skill**
 
   ```bash
   python /home/npatta01/.codex/skills/.system/skill-creator/scripts/generate_openai_yaml.py \
@@ -324,7 +324,7 @@
     --interface 'default_prompt=Use $validate-trec-rag-2026-submissions to validate my TREC RAG 2026 Retrieval and RAG submission files.'
   ```
 
-- [ ] **Step 3: Run structural and content quality checks**
+- [x] **Step 3: Run structural and content quality checks**
 
   ```bash
   python /home/npatta01/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
@@ -336,7 +336,7 @@
 
   Expected: quick validation succeeds, `SKILL.md` is below 500 words, and the placeholder scan has no matches.
 
-- [ ] **Step 4: Commit the deployable skill in the submodule**
+- [x] **Step 4: Commit the deployable skill in the submodule**
 
   ```bash
   git -C trec-rag-skills add \
@@ -359,15 +359,15 @@
 - Consumes: the finished skill, raw local Retrieval/RAG artifacts, official topics, and all test results.
 - Produces: forward-test evidence, independent review findings resolved test-first, a final submodule commit, and one superproject commit recording the submodule pointer and plan evidence.
 
-- [ ] **Step 1: Forward-test a fresh agent with the finished skill**
+- [x] **Step 1: Forward-test a fresh agent with the finished skill**
 
   Give one fresh Luna xhigh agent the skill path, official topics TSV, valid full Retrieval run, and known incomplete RAG output. Require read-only combined validation. Success requires correct task routing, Retrieval pass evidence, RAG failure evidence, no qrels/gold access, and no claim that AutoJudge directly validated Retrieval ranks/scores.
 
-- [ ] **Step 2: Record GREEN evidence and close any discovered gap test-first**
+- [x] **Step 2: Record GREEN evidence and close any discovered gap test-first**
 
   Append the fresh agent's commands and outcome under `## Skill TDD Evidence` in this plan. If it misroutes, overclaims, or accesses prohibited data, add a failing unit/application scenario first, then minimally revise the script or `SKILL.md` and repeat the same forward test.
 
-- [ ] **Step 3: Run the complete verification suite fresh**
+- [x] **Step 3: Run the complete verification suite fresh**
 
   ```bash
   python -m unittest discover \
@@ -383,11 +383,11 @@
 
   Re-run the combined real-artifact command from Task 3 and confirm the expected mixed pass/fail result.
 
-- [ ] **Step 4: Request independent code review**
+- [x] **Step 4: Request independent code review**
 
   Dispatch one `sol_reviewer` with ownership limited to reviewing the new skill directory and its tests. Ask for correctness, security/privacy, false pass/fail risk, AutoJudge version handling, exit semantics, and missing verification. Do not send submission contents; provide repository paths only.
 
-- [ ] **Step 5: Resolve review findings and commit final submodule fixes**
+- [x] **Step 5: Resolve review findings and commit final submodule fixes**
 
   For every accepted behavior fix, write and observe a failing test before editing production code. Then run the complete suite and commit only the new skill files:
 
@@ -399,7 +399,7 @@
 
   Skip this commit if review requires no changes.
 
-- [ ] **Step 6: Record final evidence and commit the superproject pointer**
+- [x] **Step 6: Record final evidence and commit the superproject pointer**
 
   Update this plan's checkboxes and evidence with exact command outputs. Then stage only the plan and submodule pointer:
 
@@ -410,7 +410,7 @@
   git commit -m "Add TREC RAG submission validation skill"
   ```
 
-- [ ] **Step 7: Final handoff**
+- [x] **Step 7: Final handoff**
 
   Report the skill path, supported commands, Retrieval/RAG validation evidence, submodule commit, superproject commit, and any warnings. Do not push, open a PR, or publish artifacts without separate authorization.
 
@@ -424,3 +424,21 @@ A fresh Luna xhigh agent received only the official topics TSV, one valid full R
 - It manually converted the official topics TSV to temporary AutoJudge Request JSONL, then invoked isolated AutoJudge 0.4.4. The RAG file failed with a raw `JSONDecodeError` before submission checks ran.
 
 The baseline therefore demonstrated the target gap without a new skill: correct validation required ad hoc code and manual format adaptation, there was no stable combined command, and dependency/parser failures were not normalized into per-artifact results. The new skill must preserve the correct task routing while making it deterministic and repeatable.
+
+### GREEN forward test — 2026-08-09
+
+A fresh Luna xhigh agent received only the finished skill path and the same three artifact paths. It followed the skill read-only and ran the bundled combined command. The process returned 1 because the native Retrieval check passed with 4,246 rows, all 119 topics, and depths 1–121, while organizer AutoJudge rejected the incomplete RAG JSONL with `JSONDecodeError`. The agent explicitly distinguished the two validators, did not claim AutoJudge checked Retrieval ranks or scores, and reported no access to qrels, gold nuggets, RAGDoll scores, corpus text, provider responses, environment files, or credentials.
+
+The forward test found one presentation gap: the normalized malformed-JSONL finding did not surface AutoJudge's available line and column. A focused regression test was observed failing, then the wrapper was changed to include that location while retaining the complete AutoJudge detail. The focused test passed after the change.
+
+### Final verification and review — 2026-08-09
+
+The final fresh verification run completed with these results:
+
+- `unittest discover`: 35 tests passed, including real isolated AutoJudge acceptance, narrative-mismatch rejection, and exact-whitespace rejection.
+- `quick_validate.py`: `Skill is valid!`
+- `compileall`: completed successfully using an isolated temporary bytecode cache.
+- `git -C trec-rag-skills diff --check`: no errors.
+- Real combined preflight: Retrieval `PASS` with 4,246 rows, 119 topics, and depths 1–121; RAG `FAIL` with normalized `JSONDecodeError` at line 1, column 1; expected combined exit status 1.
+
+Independent Sol review initially found Retrieval I/O exceptions that could abort a batch, loss of exact narrative whitespace during TSV conversion, and incomplete compatible-version selection for PEP 440 post/local AutoJudge releases. Each was reproduced with a failing test and fixed. A focused rereview then found and reproduced hyphenated prerelease handling; the comparator and regression matrix were tightened. The final rereview reported no remaining actionable findings. The hardening changes are committed in submodule commit `825573c`.
