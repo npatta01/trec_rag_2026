@@ -334,6 +334,8 @@ def test_source_loader_authenticates_revision_and_prompt_exposes_decision_contex
     assert "op001" in prompt and "a001" in prompt
     assert "fully_supported" in prompt
     assert "replacement_safe" in prompt
+    assert "coherent candidate subset" in prompt
+    assert "another retained operation" in prompt
     assert "decisions only" in prompt
     assert "never rewrite" in prompt
 
