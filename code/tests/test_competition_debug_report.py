@@ -2946,6 +2946,25 @@ def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
         'stageSummary.focus({preventScroll: true});'
         'const stageFocus = getComputedStyle(stageSummary);'
         'stageSummary.click();'
+        'const stageList = stageMenu.querySelector(":scope > ul");'
+        'const hitTestsTo = (element) => {'
+        'const bounds = element.getBoundingClientRect();'
+        'const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);'
+        'return hit === element || element.contains(hit);'
+        '};'
+        'const summaryRect = stageSummary.getBoundingClientRect();'
+        'const listRect = stageList.getBoundingClientRect();'
+        'const listStyle = getComputedStyle(stageList);'
+        'const primaryLinks = Array.from(nav.querySelectorAll(":scope > .topic-page-link"));'
+        'const stageSummaryHit = hitTestsTo(stageSummary);'
+        'const primaryLinksHit = primaryLinks.every(hitTestsTo);'
+        'const stageListHorizontal = listRect.left >= 0 && listRect.right <= innerWidth;'
+        'const stageListVertical = listRect.top >= summaryRect.bottom && listRect.bottom <= innerHeight;'
+        'const stageListBounded = listRect.height <= innerHeight * 0.7 + 1 && listStyle.overflowY === "auto";'
+        'stageSummary.click();'
+        'const stageClosed = !stageMenu.open;'
+        'stageSummary.click();'
+        'const stageReopened = stageMenu.open;'
         'document.documentElement.setAttribute("data-scroll-y", String(Math.round(scrollY)));'
         'document.documentElement.setAttribute("data-target-top", String(Math.round(target.getBoundingClientRect().top)));'
         'document.documentElement.setAttribute("data-nav-top", String(Math.round(rect.top)));'
@@ -2955,6 +2974,13 @@ def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
         'document.documentElement.setAttribute("data-stage-open", String(stageMenu.open));'
         'document.documentElement.setAttribute("data-stage-focus", String(document.activeElement === stageSummary));'
         'document.documentElement.setAttribute("data-stage-focus-visible", String(stageSummary.matches(":focus-visible") || stageFocus.outlineStyle !== "none"));'
+        'document.documentElement.setAttribute("data-no-overflow", String(document.documentElement.scrollWidth <= document.documentElement.clientWidth));'
+        'document.documentElement.setAttribute("data-stage-summary-hit", String(stageSummaryHit));'
+        'document.documentElement.setAttribute("data-primary-links-hit", String(primaryLinksHit));'
+        'document.documentElement.setAttribute("data-stage-list-horizontal", String(stageListHorizontal));'
+        'document.documentElement.setAttribute("data-stage-list-vertical", String(stageListVertical));'
+        'document.documentElement.setAttribute("data-stage-list-bounded", String(stageListBounded));'
+        'document.documentElement.setAttribute("data-stage-close-reopen", String(stageClosed && stageReopened));'
         '}, 150);</script>'
     )
     document_path.write_text(
@@ -2990,6 +3016,18 @@ def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
     stage_focus_visible = re.search(
         r'data-stage-focus-visible="(true|false)"', completed.stdout
     )
+    geometry = {
+        name: re.search(rf'data-{name}="(true|false)"', completed.stdout)
+        for name in (
+            "no-overflow",
+            "stage-summary-hit",
+            "primary-links-hit",
+            "stage-list-horizontal",
+            "stage-list-vertical",
+            "stage-list-bounded",
+            "stage-close-reopen",
+        )
+    }
     assert scroll_y is not None and target_top is not None
     assert nav_top is not None and nav_bottom is not None
     assert viewport_height is not None
@@ -3004,6 +3042,16 @@ def test_standalone_topic_navigation_stays_sticky_at_final_retrieval(
     assert stage_open.group(1) == "true"
     assert stage_focus.group(1) == "true"
     assert stage_focus_visible.group(1) == "true"
+    assert all(match is not None for match in geometry.values())
+    assert {name: match.group(1) for name, match in geometry.items() if match} == {
+        "no-overflow": "true",
+        "stage-summary-hit": "true",
+        "primary-links-hit": "true",
+        "stage-list-horizontal": "true",
+        "stage-list-vertical": "true",
+        "stage-list-bounded": "true",
+        "stage-close-reopen": "true",
+    }
 
 
 def test_html_topics_use_one_open_native_panel_and_a_progressive_switcher(

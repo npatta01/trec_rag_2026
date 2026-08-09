@@ -2863,7 +2863,7 @@ html.topic-page-document, body.topic-page-document { overflow-x: clip; }
 .topic-stage-menu ul { position: absolute; top: calc(100% + .35rem); right: 0; width: min(22rem, calc(100vw - 1.5rem)); max-height: min(70vh, 32rem); overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem; margin: 0; padding: .65rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); box-shadow: 0 .6rem 2rem rgb(30 50 90 / 18%); list-style: none; }
 .topic-stage-link { min-height: 44px; display: flex; align-items: center; padding: .55rem .7rem; border-radius: .45rem; color: var(--ink); font-size: .86rem; font-weight: 700; text-decoration: none; }
 .topic-stage-link:hover, .topic-stage-link:focus-visible { color: var(--accent-ink); background: var(--accent); }
-@media (max-width: 42rem) { .topic-page-nav { margin-inline: -.75rem; padding-inline: .75rem; } .topic-page-link { flex: 1 1 auto; padding-inline: .75rem; font-size: .88rem; } .topic-stage-menu { flex: 1 1 auto; } .topic-stage-menu > summary { justify-content: center; padding-inline: .75rem; font-size: .88rem; } .topic-stage-menu ul { position: fixed; top: 4.25rem; right: .75rem; left: .75rem; width: auto; } }
+@media (max-width: 42rem) { .topic-page-nav { margin-inline: -.75rem; padding-inline: .75rem; } .topic-page-link { flex: 1 1 auto; padding-inline: .75rem; font-size: .88rem; } .topic-stage-menu { flex: 1 1 auto; } .topic-stage-menu > summary { justify-content: center; padding-inline: .75rem; font-size: .88rem; } .topic-stage-menu ul { max-height: min(60vh, 24rem); grid-template-columns: 1fr; } }
 """
 _LEGACY_TOPIC_SCRIPT = """(() => {
   const panels = Array.from(document.querySelectorAll(".topic-panel"));

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 from dataclasses import fields, replace
 import gc
@@ -13,10 +15,12 @@ import shutil
 import socket
 import stat
 import subprocess
+import time
 from types import MappingProxyType
 import weakref
 
 import pytest
+from websockets.sync.client import ClientConnection, connect
 
 from offline_evaluation_fixture import TopicSpec, build_run
 import trec_rag.competition_debug_bundle as bundle_module
@@ -54,21 +58,163 @@ class _HrefParser(HTMLParser):
             self.hrefs.append(str(dict(attrs)["href"]))
 
 
-class _BrowserResultParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.result: dict[str, object] | None = None
+class _CdpClient:
+    def __init__(self, websocket: ClientConnection) -> None:
+        self._websocket = websocket
+        self._next_id = 0
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
+    def call(
+        self,
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, object]:
+        self._next_id += 1
+        request: dict[str, object] = {"id": self._next_id, "method": method}
+        if params is not None:
+            request["params"] = params
+        if session_id is not None:
+            request["sessionId"] = session_id
+        self._websocket.send(json.dumps(request))
+        while True:
+            response = json.loads(self._websocket.recv(timeout=5))
+            if response.get("id") != self._next_id:
+                continue
+            if "error" in response:
+                raise AssertionError(f"Chrome DevTools Protocol error: {response['error']}")
+            result = response.get("result", {})
+            assert isinstance(result, dict)
+            return result
+
+
+class _CdpPage:
+    def __init__(self, client: _CdpClient, session_id: str) -> None:
+        self._client = client
+        self._session_id = session_id
+
+    def call(
+        self, method: str, params: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        return self._client.call(method, params, session_id=self._session_id)
+
+    def evaluate(self, expression: str) -> object:
+        response = self.call(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
+        assert "exceptionDetails" not in response
+        remote_object = response.get("result")
+        assert isinstance(remote_object, dict)
+        return remote_object.get("value")
+
+    def press_key(
+        self,
+        *,
+        key: str,
+        code: str,
+        virtual_key: int,
+        modifiers: int = 0,
+        text: str | None = None,
     ) -> None:
-        if tag != "html":
-            return
-        value = dict(attrs).get("data-browser-result")
-        if value is not None:
-            loaded = json.loads(value)
-            assert isinstance(loaded, dict)
-            self.result = loaded
+        for event_type in ("keyDown" if text is not None else "rawKeyDown", "keyUp"):
+            event: dict[str, object] = {
+                "type": event_type,
+                "key": key,
+                "code": code,
+                "windowsVirtualKeyCode": virtual_key,
+                "nativeVirtualKeyCode": virtual_key,
+                "modifiers": modifiers,
+            }
+            if text is not None and event_type == "keyDown":
+                event.update({"text": text, "unmodifiedText": text})
+            self.call(
+                "Input.dispatchKeyEvent",
+                event,
+            )
+
+    def press_tab(self, *, shift: bool = False) -> None:
+        self.press_key(
+            key="Tab", code="Tab", virtual_key=9, modifiers=8 if shift else 0
+        )
+
+
+@contextmanager
+def _open_chrome_page(
+    chrome: str,
+    *,
+    profile: Path,
+    viewport: tuple[int, int],
+    url: str,
+) -> Iterator[_CdpPage]:
+    process = subprocess.Popen(
+        [
+            chrome,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-background-networking",
+            "--remote-debugging-port=0",
+            "--remote-allow-origins=*",
+            f"--user-data-dir={profile}",
+            "about:blank",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    try:
+        port_file = profile / "DevToolsActivePort"
+        deadline = time.monotonic() + 10
+        while not port_file.exists() and time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise AssertionError("headless Chrome exited before CDP was available")
+            time.sleep(0.02)
+        if not port_file.exists():
+            raise AssertionError("headless Chrome did not expose CDP within 10 seconds")
+        port, browser_path = port_file.read_text(encoding="utf-8").splitlines()
+        websocket_url = f"ws://127.0.0.1:{port}{browser_path}"
+        with connect(websocket_url, open_timeout=5, close_timeout=1) as websocket:
+            client = _CdpClient(websocket)
+            target = client.call("Target.createTarget", {"url": "about:blank"})
+            target_id = target.get("targetId")
+            assert isinstance(target_id, str)
+            attachment = client.call(
+                "Target.attachToTarget", {"targetId": target_id, "flatten": True}
+            )
+            session_id = attachment.get("sessionId")
+            assert isinstance(session_id, str)
+            page = _CdpPage(client, session_id)
+            width, height = viewport
+            page.call(
+                "Emulation.setDeviceMetricsOverride",
+                {
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": 1,
+                    "mobile": False,
+                },
+            )
+            page.call("Page.enable")
+            page.call("Runtime.enable")
+            page.call("Page.navigate", {"url": url})
+            deadline = time.monotonic() + 10
+            while page.evaluate("document.readyState") != "complete":
+                if time.monotonic() >= deadline:
+                    raise AssertionError("headless Chrome did not load the report")
+                time.sleep(0.02)
+            yield page
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def _local_hrefs(page: str) -> tuple[str, ...]:
@@ -1852,30 +1998,86 @@ def test_summary_browser_filter_sort_accessibility_and_responsive_layout(
     page = bundle_module.render_bundle_summary(
         summary, denylist=tuple(fixture.docids.values())
     )
-    browser_probe = r"""
-<script>
+
+    for viewport in ("1440,1000", "390,844"):
+        document_path = tmp_path / f"summary-browser-{viewport.replace(',', '-')}.html"
+        document_path.write_text(page, encoding="utf-8")
+        dimensions = tuple(int(value) for value in viewport.split(","))
+        with _open_chrome_page(
+            chrome,
+            profile=tmp_path / f"chrome-{viewport.replace(',', '-')}",
+            viewport=(dimensions[0], dimensions[1]),
+            url=document_path.as_uri(),
+        ) as browser:
+            browser.evaluate(
+                r"""
 (() => {
   const result = {};
   const order = () => Array.from(document.querySelectorAll("#topic-table tbody tr"))
     .filter((row) => !row.hidden).map((row) => row.dataset.topicId);
-  result.noOverflow = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+  result.noOverflow = document.documentElement.scrollWidth <=
+    document.documentElement.clientWidth;
   const search = document.querySelector("#topic-search");
   search.value = "ALPHA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   result.filter = order();
   search.value = "";
   search.dispatchEvent(new Event("input", { bubbles: true }));
+  window.__browserResult = result;
+  window.__trustedTab = false;
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Tab" && event.isTrusted) window.__trustedTab = true;
+  }, { capture: true });
+  document.activeElement?.blur();
+})()
+"""
+            )
+            for _index in range(40):
+                browser.press_tab()
+                if browser.evaluate(
+                    'document.activeElement?.closest("th")?.dataset.metric === '
+                    '"retrieval:ndcg@10"'
+                ):
+                    break
+            browser.press_key(
+                key="Enter", code="Enter", virtual_key=13, text="\r"
+            )
+            browser.evaluate(
+                r"""
+(() => {
+  const order = () => Array.from(document.querySelectorAll("#topic-table tbody tr"))
+    .filter((row) => !row.hidden).map((row) => row.dataset.topicId);
+  const header = document.querySelector('th[data-metric="retrieval:ndcg@10"]');
+  window.__browserResult.ascending = order();
+  window.__browserResult.ascendingAria = header.getAttribute("aria-sort");
+})()
+"""
+            )
+            browser.press_key(
+                key="Enter", code="Enter", virtual_key=13, text="\r"
+            )
+            browser.evaluate(
+                r"""
+(() => {
+  const order = () => Array.from(document.querySelectorAll("#topic-table tbody tr"))
+    .filter((row) => !row.hidden).map((row) => row.dataset.topicId);
+  const header = document.querySelector('th[data-metric="retrieval:ndcg@10"]');
+  window.__browserResult.descending = order();
+  window.__browserResult.descendingAria = header.getAttribute("aria-sort");
+})()
+"""
+            )
+            result = browser.evaluate(
+                r"""
+(() => {
+  const result = window.__browserResult;
+  const order = () => Array.from(document.querySelectorAll("#topic-table tbody tr"))
+    .filter((row) => !row.hidden).map((row) => row.dataset.topicId);
   const header = document.querySelector('th[data-metric="retrieval:ndcg@10"]');
   const button = header.querySelector("button");
-  button.click();
-  result.ascending = order();
-  result.ascendingAria = header.getAttribute("aria-sort");
-  button.click();
-  result.descending = order();
-  result.descendingAria = header.getAttribute("aria-sort");
-  button.focus({ focusVisible: true });
   const focusStyle = getComputedStyle(button);
   result.keyboardFocus = document.activeElement === button;
+  result.trustedKeyboardFocus = window.__trustedTab;
   result.visibleFocus = button.matches(":focus-visible") ||
     focusStyle.outlineStyle !== "none" ||
     focusStyle.textDecorationLine.includes("underline");
@@ -1886,36 +2088,11 @@ def test_summary_browser_filter_sort_accessibility_and_responsive_layout(
   const gammaCell = gamma.querySelector('td[data-metric="retrieval:ndcg@10"]');
   result.unavailableText = gammaCell.textContent.trim();
   result.unavailableHasSortValue = gammaCell.hasAttribute("data-sort-value");
-  document.documentElement.dataset.browserResult = JSON.stringify(result);
-})();
-</script>
+  return result;
+})()
 """
-    page = page.replace("</body>", f"{browser_probe}</body>", 1)
-
-    for viewport in ("1440,1000", "390,844"):
-        document_path = tmp_path / f"summary-browser-{viewport.replace(',', '-')}.html"
-        document_path.write_text(page, encoding="utf-8")
-        completed = subprocess.run(
-            [
-                chrome,
-                "--headless=new",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-background-networking",
-                f"--user-data-dir={tmp_path / ('chrome-' + viewport.replace(',', '-'))}",
-                f"--window-size={viewport}",
-                "--virtual-time-budget=500",
-                "--dump-dom",
-                document_path.as_uri(),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        parser = _BrowserResultParser()
-        parser.feed(completed.stdout)
-        assert parser.result == {
+            )
+        assert result == {
             "noOverflow": True,
             "filter": ["alpha-topic"],
             "ascending": ["alpha-topic", "beta-topic", "gamma-topic"],
@@ -1923,6 +2100,7 @@ def test_summary_browser_filter_sort_accessibility_and_responsive_layout(
             "descending": ["beta-topic", "alpha-topic", "gamma-topic"],
             "descendingAria": "descending",
             "keyboardFocus": True,
+            "trustedKeyboardFocus": True,
             "visibleFocus": True,
             "reset": ["beta-topic", "gamma-topic", "alpha-topic"],
             "resetAria": "none",
