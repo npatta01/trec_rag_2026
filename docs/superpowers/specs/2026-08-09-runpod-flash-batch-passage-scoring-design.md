@@ -19,13 +19,17 @@ distributed canonical score cache are intentionally outside this first cut.
 
 ## Selected Approach
 
-Implement a queue-based, class-form Runpod Flash `@Endpoint` and an optional
+Implement a queue-based, function-form Runpod Flash `@Endpoint` and an optional
 remote prediction backend behind `MixedbreadPassageScorer`.
 
-The class-form endpoint loads the pinned CrossEncoder once per worker. Each job
-contains one query and an ordered batch of passages. The local scorer checks and
-claims cache misses before submitting a job, validates the complete response,
-and commits accepted scores through `GlobalScoreCache`. Cache hits never contact
+The endpoint keeps the pinned CrossEncoder in a worker-global lazy cache, so it
+loads once per worker and remains available throughout that worker's warm
+lifetime. Function form is required because the production crawler calls the
+documented queue JSON API directly; Flash class decorators use a serialized
+Python class-method protocol intended for Flash's Python stub. Each job contains
+one query and an ordered batch of passages. The local scorer checks and claims
+cache misses before submitting a job, validates the complete response, and
+commits accepted scores through `GlobalScoreCache`. Cache hits never contact
 Runpod.
 
 This approach is preferred over two alternatives:
@@ -71,7 +75,7 @@ competition runner.
 
 The initial deployment contract is:
 
-- Queue-based class `@Endpoint`.
+- Queue-based function `@Endpoint` with a worker-global lazy model cache.
 - `workers=(0, 3)` so no GPU worker remains active indefinitely.
 - `idle_timeout=900` seconds so bursts of adaptive searches reuse a warm model.
 - One GPU per worker from the 24 GB Ada group for the initial benchmark.
@@ -147,9 +151,9 @@ Caching is deliberately layered:
    local topic processes. Cache hits bypass the endpoint.
 2. A Runpod Network Volume stores the pinned Hugging Face model snapshot. A
    worker that starts after scale-down reuses the downloaded snapshot.
-3. The endpoint class holds one loaded CrossEncoder in memory for the life of a
-   warm worker. The 15-minute idle timeout amortizes model initialization across
-   nearby adaptive searches.
+3. The endpoint's worker-global cache holds one loaded CrossEncoder in memory
+   for the life of a warm worker. The 15-minute idle timeout amortizes model
+   initialization across nearby adaptive searches.
 
 The endpoint does not store raw queries, passages, or score-result records on
 the Network Volume. Request and worker logs must not print query or passage
