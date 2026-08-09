@@ -1412,11 +1412,12 @@ def weighted_passage_score(passages: tuple[PassageScore, ...]) -> float:
     if not retained:
         raise ValueError("at least one passage score is required")
     weights = _TOP_PASSAGE_WEIGHTS[: len(retained)]
-    denominator = sum(weights)
-    return sum(
-        weight * passage.raw_score
-        for weight, passage in zip(weights, retained, strict=True)
-    ) / denominator
+    denominator = 0.0
+    numerator = 0.0
+    for weight, passage in zip(weights, retained, strict=True):
+        denominator += weight
+        numerator += weight * passage.raw_score
+    return numerator / denominator
 
 
 def midrank_percentiles(values: Mapping[_Key, float]) -> dict[_Key, float]:

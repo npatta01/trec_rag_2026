@@ -66,6 +66,17 @@ def test_weighted_passage_score_renormalizes_the_available_top_four() -> None:
     assert weighted_passage_score(passages) == pytest.approx(3.375)
 
 
+def test_weighted_passage_score_is_python_version_independent() -> None:
+    passages = (
+        PassageScore(start_char=0, end_char=10, raw_score=4.9375),
+        PassageScore(start_char=20, end_char=30, raw_score=4.625),
+        PassageScore(start_char=40, end_char=50, raw_score=4.5625),
+        PassageScore(start_char=60, end_char=70, raw_score=3.4375),
+    )
+
+    assert weighted_passage_score(passages).hex() == "0x1.2d28f5c28f5c2p+2"
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_passage_score_rejects_nonfinite_model_values(value: float) -> None:
     with pytest.raises(ValueError, match="finite"):
