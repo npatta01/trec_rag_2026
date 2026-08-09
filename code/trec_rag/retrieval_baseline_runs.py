@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from hashlib import sha256
 import math
 import json
@@ -27,6 +27,11 @@ from trec_rag.mixedbread_passage_scorer import (
     SCORE_REPRESENTATION as MIXEDBREAD_SCORE_REPRESENTATION,
     MixedbreadPassageScorer,
     ScoredPassage,
+)
+from trec_rag.retrieval_candidate_core import (
+    CandidateCore,
+    candidate_core_from_dict,
+    candidate_core_to_dict,
 )
 
 
@@ -208,7 +213,7 @@ class RankedTopic:
     topic_id: str
     document_scores: tuple[DocumentScore, ...]
     breadth_passages: tuple[BreadthPassage, ...]
-    cutoff: CutoffDecision
+    candidate_core: CandidateCore
     rankings: RunRankings
 
 
@@ -278,6 +283,7 @@ class MatrixPassage:
 @dataclass(frozen=True)
 class TopicMatrix:
     topic_id: str
+    candidate_core: CandidateCore
     documents: tuple[MatrixDocument, ...]
     units: tuple[MatrixUnit, ...]
     chunks: tuple[MatrixChunk, ...]
@@ -588,6 +594,12 @@ def load_topic_input(
         loaded=loaded,
         bodies=source_bodies,
     )
+    lane_scores_body = (topic_dir / "scoring/lane_scores.jsonl").read_bytes()
+    if not lane_scores_body:
+        raise ValueError("authenticated lane-score artifact must be nonempty")
+    source_sha256s["scoring/lane_scores.jsonl"] = sha256(
+        lane_scores_body
+    ).hexdigest()
 
     decomposition = loaded["decomposition/result.json"]
     if decomposition.get("error") is not None:
@@ -725,18 +737,47 @@ def _counter_snapshot(scorer: PassageScorer) -> dict[str, int]:
     return result
 
 
+def _validate_candidate_core_for_topic(
+    topic: TopicInput,
+    candidate_core: CandidateCore,
+) -> tuple[SourceDocument, ...]:
+    if not isinstance(candidate_core, CandidateCore):
+        raise TypeError("candidate_core must be a CandidateCore")
+    if candidate_core.topic_id != topic.topic_id:
+        raise ValueError("candidate-core topic identity differs")
+    lane_score_digest = topic.source_sha256s.get("scoring/lane_scores.jsonl")
+    if lane_score_digest != candidate_core.lane_scores_sha256:
+        raise ValueError("candidate-core lane-score source hash differs")
+    expected_lanes = ("original",) + tuple(
+        f"facet:{row.subnarrative_id}:text" for row in topic.subnarratives
+    )
+    if tuple(row.lane_name for row in candidate_core.lanes) != expected_lanes:
+        raise ValueError("candidate-core lanes differ from topic semantic units")
+    by_docid = {row.docid: row for row in topic.documents}
+    if len(by_docid) != len(topic.documents) or not set(
+        candidate_core.candidate_docids
+    ).issubset(by_docid):
+        raise ValueError("candidate docids differ from the authenticated topic union")
+    selected = tuple(by_docid[docid] for docid in candidate_core.candidate_docids)
+    if not selected:
+        raise ValueError("candidate core must select at least one document")
+    return selected
+
+
 def score_topic(
     topic: TopicInput,
     *,
+    candidate_core: CandidateCore,
     scorer: PassageScorer,
     chunker: SemanticTextChunker,
 ) -> TopicMatrix:
-    """Score the full union against the narrative and each pooled subnarrative."""
+    """Score the authenticated candidate core against every semantic unit."""
 
     if not isinstance(topic, TopicInput):
         raise TypeError("topic must be a TopicInput")
     if not topic.documents or not topic.subnarratives:
         raise ValueError("topic must contain documents and subnarratives")
+    selected_documents = _validate_candidate_core_for_topic(topic, candidate_core)
     if not isinstance(chunker, SemanticTextChunker):
         raise TypeError("chunker must be a SemanticTextChunker")
     identity = scorer.identity
@@ -747,7 +788,7 @@ def score_topic(
     )
 
     all_chunks: list[TextChunk] = []
-    for document in topic.documents:
+    for document in selected_documents:
         chunks = tuple(chunker.split_text(document.text, document_id=document.docid))
         if not chunks:
             raise ValueError("every source document must yield at least one passage")
@@ -805,6 +846,7 @@ def score_topic(
     config = chunker.config
     matrix = TopicMatrix(
         topic_id=topic.topic_id,
+        candidate_core=candidate_core,
         documents=tuple(
             MatrixDocument(
                 docid=row.docid,
@@ -812,7 +854,7 @@ def score_topic(
                 best_retrieval_rank=row.best_retrieval_rank,
                 subnarrative_source_ranks=dict(row.subnarrative_source_ranks),
             )
-            for row in topic.documents
+            for row in selected_documents
         ),
         units=tuple(
             MatrixUnit(
@@ -863,11 +905,47 @@ def score_topic(
     return matrix
 
 
+def score_topics(
+    jobs: tuple[tuple[TopicInput, CandidateCore], ...],
+    *,
+    scorer: PassageScorer,
+    chunker: SemanticTextChunker,
+) -> tuple[TopicMatrix, ...]:
+    """Score ordered topic/core jobs while retaining one scorer/model instance."""
+
+    if not isinstance(jobs, tuple) or not jobs:
+        raise ValueError("at least one topic scoring job is required")
+    topic_ids: list[str] = []
+    matrices: list[TopicMatrix] = []
+    for job in jobs:
+        if not isinstance(job, tuple) or len(job) != 2:
+            raise TypeError("each topic scoring job must be a topic/core pair")
+        topic, candidate_core = job
+        if not isinstance(topic, TopicInput):
+            raise TypeError("topic scoring jobs must contain TopicInput values")
+        if topic.topic_id in topic_ids:
+            raise ValueError("topic scoring jobs must have unique topic IDs")
+        topic_ids.append(topic.topic_id)
+        matrices.append(
+            score_topic(
+                topic,
+                candidate_core=candidate_core,
+                scorer=scorer,
+                chunker=chunker,
+            )
+        )
+    return tuple(matrices)
+
+
 def _validate_topic_matrix(matrix: TopicMatrix) -> None:
     if not isinstance(matrix, TopicMatrix):
         raise TypeError("matrix must be a TopicMatrix")
     if _TOPIC_ID.fullmatch(matrix.topic_id) is None:
         raise ValueError("matrix topic ID is invalid")
+    if not isinstance(matrix.candidate_core, CandidateCore):
+        raise TypeError("matrix candidate core is invalid")
+    if matrix.candidate_core.topic_id != matrix.topic_id:
+        raise ValueError("matrix and candidate-core topic identities differ")
     if dict(matrix.scorer_identity) != _PINNED_SCORER_IDENTITY:
         raise ValueError("matrix scorer identity is not the pinned scoring contract")
     if dict(matrix.chunker_identity) != _PINNED_CHUNKER_IDENTITY:
@@ -887,6 +965,12 @@ def _validate_topic_matrix(matrix: TopicMatrix) -> None:
         sorted(documents, key=lambda value: value.encode("utf-8"))
     ):
         raise ValueError("matrix documents are not in canonical order")
+    if tuple(documents) != matrix.candidate_core.candidate_docids:
+        raise ValueError("matrix documents differ from candidate docids")
+    if matrix.source_sha256s.get("scoring/lane_scores.jsonl") != (
+        matrix.candidate_core.lane_scores_sha256
+    ):
+        raise ValueError("candidate-core lane-score source hash differs")
     for row in matrix.documents:
         if not row.docid or any(character.isspace() for character in row.docid):
             raise ValueError("matrix document ID is invalid")
@@ -910,6 +994,13 @@ def _validate_topic_matrix(matrix: TopicMatrix) -> None:
     for row in matrix.units:
         _require_digest(row.text_sha256, label="matrix semantic text digest")
     subnarrative_ids = {row.unit_id for row in matrix.units[1:]}
+    expected_candidate_lanes = ("original",) + tuple(
+        f"facet:{row.unit_id}:text" for row in matrix.units[1:]
+    )
+    if tuple(row.lane_name for row in matrix.candidate_core.lanes) != (
+        expected_candidate_lanes
+    ):
+        raise ValueError("matrix semantic units differ from candidate-core lanes")
     for row in matrix.documents:
         if not set(row.subnarrative_source_ranks).issubset(subnarrative_ids) or any(
             isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0
@@ -1000,8 +1091,9 @@ def _matrix_bytes(matrix: TopicMatrix) -> bytes:
     rows: list[dict[str, object]] = [
         {
             "record_type": "header",
-            "schema_version": "retrieval-baseline-topic-matrix-v2",
+            "schema_version": "retrieval-baseline-topic-matrix-v3",
             "topic_id": matrix.topic_id,
+            "candidate_core": candidate_core_to_dict(matrix.candidate_core),
             "source_sha256s": dict(matrix.source_sha256s),
             "scorer_identity": dict(matrix.scorer_identity),
             "chunker_identity": dict(matrix.chunker_identity),
@@ -1097,8 +1189,11 @@ def write_topic_matrix(matrix: TopicMatrix, output_dir: Path) -> Path:
     body = _matrix_bytes(matrix)
     _create_or_verify(matrix_path, body)
     manifest = {
-        "schema_version": "retrieval-baseline-topic-matrix-manifest-v2",
+        "schema_version": "retrieval-baseline-topic-matrix-manifest-v3",
         "topic_id": matrix.topic_id,
+        "candidate_core_sha256": sha256(
+            _canonical_json_line(candidate_core_to_dict(matrix.candidate_core))
+        ).hexdigest(),
         "matrix_sha256": sha256(body).hexdigest(),
         "matrix_byte_count": len(body),
         "document_count": len(matrix.documents),
@@ -1143,7 +1238,7 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
         ),
         label="topic matrix manifest",
     )
-    if manifest.get("schema_version") != "retrieval-baseline-topic-matrix-manifest-v2":
+    if manifest.get("schema_version") != "retrieval-baseline-topic-matrix-manifest-v3":
         raise ValueError("topic matrix manifest schema is invalid")
     if manifest.get("matrix_sha256") != sha256(body).hexdigest():
         raise ValueError("topic matrix digest does not match its manifest")
@@ -1158,7 +1253,7 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
     if not parsed or parsed[0].get("record_type") != "header":
         raise ValueError("topic matrix header is missing")
     header = parsed[0]
-    if header.get("schema_version") != "retrieval-baseline-topic-matrix-v2":
+    if header.get("schema_version") != "retrieval-baseline-topic-matrix-v3":
         raise ValueError("topic matrix schema is invalid")
     documents: list[MatrixDocument] = []
     units: list[MatrixUnit] = []
@@ -1212,6 +1307,9 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
             raise ValueError("topic matrix contains an unknown record type")
     matrix = TopicMatrix(
         topic_id=str(header["topic_id"]),
+        candidate_core=candidate_core_from_dict(
+            _require_mapping(header.get("candidate_core"), label="candidate core")
+        ),
         documents=tuple(documents),
         units=tuple(units),
         chunks=tuple(chunks),
@@ -1238,6 +1336,11 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
         raise ValueError("topic matrix manifest counts do not match")
     if manifest.get("topic_id") != matrix.topic_id:
         raise ValueError("topic matrix topic identity does not match manifest")
+    expected_candidate_digest = sha256(
+        _canonical_json_line(candidate_core_to_dict(matrix.candidate_core))
+    ).hexdigest()
+    if manifest.get("candidate_core_sha256") != expected_candidate_digest:
+        raise ValueError("topic matrix candidate-core digest does not match")
     _validate_topic_matrix(matrix)
     if _matrix_bytes(matrix) != body:
         raise ValueError("topic matrix rows are not in canonical order")
@@ -1417,7 +1520,7 @@ def breadth_counts(
     documents: tuple[DocumentScore, ...],
     hits: tuple[BreadthPassage, ...],
 ) -> dict[str, tuple[int, int]]:
-    """Count top passage evidence after per-document then per-subnarrative limits."""
+    """Count robust strong passage evidence across every candidate document."""
 
     by_docid = _document_index(documents)
     subnarratives = set(next(iter(by_docid.values())).subnarrative_percentiles)
@@ -1427,8 +1530,6 @@ def breadth_counts(
             raise ValueError("breadth hit refers to a document outside the topic union")
         if hit.subnarrative_id not in subnarratives:
             raise ValueError("breadth hit refers to an unknown subnarrative")
-        if hit.subnarrative_id not in by_docid[hit.docid].subnarrative_source_ranks:
-            raise ValueError("breadth hit refers to a document outside the pooled source")
         grouped.setdefault((hit.subnarrative_id, hit.docid), []).append(hit.passage)
 
     per_subnarrative: dict[str, list[tuple[str, PassageScore]]] = {
@@ -1440,17 +1541,21 @@ def breadth_counts(
 
     admitted: dict[str, list[str]] = {docid: [] for docid in by_docid}
     for subnarrative_id, candidates in per_subnarrative.items():
-        candidates.sort(
-            key=lambda row: (
-                -row[1].raw_score,
-                by_docid[row[0]].subnarrative_source_ranks[subnarrative_id],
-                row[0].encode("utf-8"),
-                row[1].start_char,
-                row[1].end_char,
-            )
+        if not candidates:
+            continue
+        center = median(passage.raw_score for _docid, passage in candidates)
+        deviation = median(
+            abs(passage.raw_score - center) for _docid, passage in candidates
         )
-        for docid, _passage in candidates[:100]:
-            admitted[docid].append(subnarrative_id)
+        threshold = center + 2.5 * 1.4826 * deviation
+        for docid, passage in candidates:
+            is_strong = (
+                passage.raw_score >= threshold
+                if deviation > 0.0
+                else passage.raw_score > center
+            )
+            if is_strong:
+                admitted[docid].append(subnarrative_id)
     return {
         docid: (len(set(subnarrative_ids)), len(subnarrative_ids))
         for docid, subnarrative_ids in admitted.items()
@@ -1526,17 +1631,17 @@ def rank_topic_matrix(matrix: TopicMatrix) -> RankedTopic:
         )
         for row in matrix.passages
         if row.unit_id in subnarrative_ids
-        and row.unit_id in documents[row.docid].subnarrative_source_ranks
     )
-    cutoff = cutoff_decision(document_scores)
-    rankings = build_rankings(document_scores, breadth_passages)
-    if rankings.eligible_docids != cutoff.eligible_docids:
-        raise ValueError("ranking eligible set differs from cutoff decision")
+    rankings = build_rankings(
+        document_scores,
+        breadth_passages,
+        eligible_docids=matrix.candidate_core.candidate_docids,
+    )
     return RankedTopic(
         topic_id=matrix.topic_id,
         document_scores=document_scores,
         breadth_passages=breadth_passages,
-        cutoff=cutoff,
+        candidate_core=matrix.candidate_core,
         rankings=rankings,
     )
 
@@ -1544,11 +1649,22 @@ def rank_topic_matrix(matrix: TopicMatrix) -> RankedTopic:
 def build_rankings(
     documents: tuple[DocumentScore, ...],
     hits: tuple[BreadthPassage, ...],
+    *,
+    eligible_docids: tuple[str, ...],
 ) -> RunRankings:
-    """Build three orderings over one shared eligible document set."""
+    """Build three orderings over one authoritative candidate set."""
 
     by_docid = _document_index(documents)
-    eligible = select_eligible_documents(documents)
+    if (
+        not isinstance(eligible_docids, tuple)
+        or not eligible_docids
+        or len(set(eligible_docids)) != len(eligible_docids)
+        or any(docid not in by_docid for docid in eligible_docids)
+        or eligible_docids
+        != tuple(sorted(eligible_docids, key=lambda value: value.encode("utf-8")))
+    ):
+        raise ValueError("eligible docids must be a nonempty canonical document subset")
+    eligible = eligible_docids
     counts = breadth_counts(documents, hits)
 
     narrative = tuple(
@@ -1673,7 +1789,7 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
         topics.append(
             {
                 "topic_id": matrix.topic_id,
-                "document_union_count": len(matrix.documents),
+                "candidate_count": len(matrix.documents),
                 "semantic_unit_count": len(matrix.units),
                 "document_semantic_pair_count": len(matrix.documents)
                 * len(matrix.units),
@@ -1681,12 +1797,19 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
                 "matrix_sha256": sha256(_matrix_bytes(matrix)).hexdigest(),
                 "source_sha256s": dict(matrix.source_sha256s),
                 "k": len(ranked.rankings.eligible_docids),
-                "pre_fallback_count": ranked.cutoff.pre_fallback_count,
-                "fallback_used": ranked.cutoff.fallback_used,
+                "candidate_core_sha256": sha256(
+                    _canonical_json_line(
+                        candidate_core_to_dict(ranked.candidate_core)
+                    )
+                ).hexdigest(),
+                "pre_fallback_count": ranked.candidate_core.pre_fallback_count,
+                "fallback_used": ranked.candidate_core.fallback_used,
                 "admission_multiplicity_histogram": dict(
-                    ranked.cutoff.admission_multiplicity_histogram
+                    ranked.candidate_core.admission_multiplicity_histogram
                 ),
-                "cutoff_units": [asdict(row) for row in ranked.cutoff.units],
+                "candidate_lanes": candidate_core_to_dict(
+                    ranked.candidate_core
+                )["lanes"],
                 "subnarrative_source_pools": source_pools,
                 "narrative_docids_sha256": eligible_hash,
                 "combo_docids_sha256": eligible_hash,
@@ -1697,7 +1820,7 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
     if source_revision is not None and re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
         raise ValueError("TREC_RAG_SOURCE_REVISION must be a lowercase Git commit")
     manifest = {
-        "schema_version": "retrieval-baseline-runs-manifest-v2",
+        "schema_version": "retrieval-baseline-runs-manifest-v3",
         "run_files": run_files,
         "run_file_receipts": run_file_receipts,
         "run_ids": _RUN_IDS,
@@ -1754,6 +1877,7 @@ def _parser() -> argparse.ArgumentParser:
     score.add_argument("--score-cache", type=Path, required=True)
     score.add_argument("--output-dir", type=Path, required=True)
     score.add_argument("--topic", required=True)
+    score.add_argument("--candidate-core", type=Path, required=True)
     score.add_argument("--device", default="cuda")
     score.add_argument("--batch-size", type=int, default=32)
     score.add_argument("--cache-only", action="store_true")
@@ -1768,6 +1892,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def _score_topic_command(args: argparse.Namespace) -> dict[str, object]:
     topic = load_topic_input(args.source_dir, args.topic, args.document_store)
+    candidate_core_value, _candidate_core_body = _read_json_object(
+        args.candidate_core
+    )
+    candidate_core = candidate_core_from_dict(candidate_core_value)
     scorer = MixedbreadPassageScorer(
         score_cache_root=args.score_cache,
         device=args.device,
@@ -1777,6 +1905,7 @@ def _score_topic_command(args: argparse.Namespace) -> dict[str, object]:
     try:
         matrix = score_topic(
             topic,
+            candidate_core=candidate_core,
             scorer=scorer,
             chunker=SemanticTextChunker(
                 config=ChunkingConfig(
@@ -1872,6 +2001,7 @@ __all__ = [
     "read_topic_matrix",
     "rank_topic_matrix",
     "score_topic",
+    "score_topics",
     "select_eligible_documents",
     "suppress_overlaps",
     "topic_sort_key",

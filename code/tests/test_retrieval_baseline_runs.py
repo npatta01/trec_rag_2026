@@ -10,6 +10,7 @@ import pytest
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk
 from trec_rag.document_store import DocumentStore
 from trec_rag.mixedbread_passage_scorer import ScoredPassage
+from trec_rag.retrieval_candidate_core import CandidateCore, CandidateLaneStat
 from trec_rag.retrieval_baseline_runs import (
     BreadthPassage,
     DocumentScore,
@@ -24,6 +25,7 @@ from trec_rag.retrieval_baseline_runs import (
     read_topic_matrix,
     rank_topic_matrix,
     score_topic,
+    score_topics,
     select_eligible_documents,
     suppress_overlaps,
     topic_sort_key,
@@ -174,10 +176,33 @@ def test_one_subnarrative_facet_score_uses_its_full_weight() -> None:
     assert document.combo_score == pytest.approx(0.5)
 
 
-def test_breadth_takes_three_per_document_before_global_top_one_hundred() -> None:
-    documents = (_document("target", 1, 1.0, s=1.0),) + tuple(
-        _document(f"other-{index:03d}", index + 2, 0.0, s=0.0)
-        for index in range(97)
+def test_breadth_uses_robust_per_subnarrative_passage_threshold() -> None:
+    documents = tuple(
+        _document(docid, rank, 0.0, source_ranks={}, s=0.0)
+        for rank, docid in enumerate(("weak-0", "weak-1", "weak-2", "weak-3", "strong"), start=1)
+    )
+    hits = tuple(
+        BreadthPassage(
+            subnarrative_id="s",
+            docid=docid,
+            passage=PassageScore(start_char=0, end_char=10, raw_score=score),
+        )
+        for docid, score in zip(
+            ("weak-0", "weak-1", "weak-2", "weak-3", "strong"),
+            (0.0, 1.0, 2.0, 3.0, 20.0),
+        )
+    )
+
+    counts = breadth_counts(documents, hits)
+
+    assert counts["strong"] == (1, 1)
+    assert all(counts[f"weak-{index}"] == (0, 0) for index in range(4))
+
+
+def test_breadth_retains_at_most_three_overlap_suppressed_passages_per_document() -> None:
+    documents = (_document("target", 1, 1.0, source_ranks={}, s=1.0),) + tuple(
+        _document(f"weak-{index}", index + 2, 0.0, source_ranks={}, s=0.0)
+        for index in range(4)
     )
     hits = tuple(
         BreadthPassage(
@@ -186,27 +211,19 @@ def test_breadth_takes_three_per_document_before_global_top_one_hundred() -> Non
             passage=PassageScore(
                 start_char=index * 20,
                 end_char=index * 20 + 10,
-                raw_score=200.0 - index,
+                raw_score=100.0 - index,
             ),
         )
         for index in range(4)
     ) + tuple(
-        BreadthPassage(
-            subnarrative_id="s",
-            docid=f"other-{index:03d}",
-            passage=PassageScore(
-                start_char=0,
-                end_char=10,
-                raw_score=100.0 - index,
-            ),
-        )
-        for index in range(97)
+        BreadthPassage("s", f"weak-{index}", PassageScore(0, 10, 0.0))
+        for index in range(4)
     )
 
     counts = breadth_counts(documents, hits)
 
     assert counts["target"] == (1, 3)
-    assert counts["other-096"] == (1, 1)
+    assert all(counts[f"weak-{index}"] == (0, 0) for index in range(4))
 
 
 def test_all_rankings_share_the_cutoff_set_without_padding() -> None:
@@ -223,7 +240,11 @@ def test_all_rankings_share_the_cutoff_set_without_padding() -> None:
         BreadthPassage("s1", "narrative", PassageScore(0, 10, 7.0)),
     )
 
-    rankings = build_rankings(documents, hits)
+    rankings = build_rankings(
+        documents,
+        hits,
+        eligible_docids=("facet", "narrative"),
+    )
 
     assert rankings.eligible_docids == ("facet", "narrative")
     assert set(rankings.narrative) == set(rankings.eligible_docids)
@@ -360,8 +381,35 @@ def _source_fixture(tmp_path: Path) -> tuple[Path, Path]:
             ],
         },
     )
+    lane_score_path = topic_dir / "scoring/lane_scores.jsonl"
+    lane_score_path.parent.mkdir(parents=True, exist_ok=True)
+    lane_score_path.write_text(
+        "".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+            for row in (
+                {
+                    "topic_id": "rag2026-2",
+                    "lane_name": "original",
+                    "docid": "d1",
+                    "aggregate_score": 5.0,
+                },
+                {
+                    "topic_id": "rag2026-2",
+                    "lane_name": "original",
+                    "docid": "d2",
+                    "aggregate_score": 4.0,
+                },
+                {
+                    "topic_id": "rag2026-2",
+                    "lane_name": "facet:s1:text",
+                    "docid": "d1",
+                    "aggregate_score": 6.0,
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
     for relative_path in (
-        "scoring/lane_scores.jsonl",
         "scoring/selected_documents.jsonl",
         "scoring/selected_subnarrative_scores.jsonl",
     ):
@@ -461,6 +509,9 @@ def test_load_topic_input_pools_query_variants_and_uses_best_source_rank(
     ]
     assert topic.documents[0].subnarrative_source_ranks == {"s1": 2}
     assert topic.documents[1].subnarrative_source_ranks == {}
+    assert topic.source_sha256s["scoring/lane_scores.jsonl"] == sha256(
+        (source / "rag2026-2/scoring/lane_scores.jsonl").read_bytes()
+    ).hexdigest()
 
 
 def test_load_topic_input_rejects_union_not_bound_in_retrieval_audit(
@@ -568,7 +619,55 @@ class _FakePassageScorer:
         )
 
 
-def test_score_topic_builds_complete_narrative_and_subnarrative_matrix(
+def _candidate_core(
+    topic: object,
+    candidate_docids: tuple[str, ...] | None = None,
+) -> CandidateCore:
+    documents = tuple(topic.documents)  # type: ignore[attr-defined]
+    selected = candidate_docids or tuple(row.docid for row in documents)
+    selected = tuple(sorted(selected, key=lambda value: value.encode("utf-8")))
+    admitted_digest = sha256(
+        b"".join(docid.encode("utf-8") + b"\n" for docid in selected)
+    ).hexdigest()
+    empty_digest = sha256(b"").hexdigest()
+    lanes = (
+        CandidateLaneStat(
+            lane_name="original",
+            median=0.0,
+            mad=0.0,
+            threshold=0.0,
+            comparison="strictly_greater_than",
+            observed_count=len(documents),
+            admitted_count=len(selected),
+            admitted_docids_sha256=admitted_digest,
+        ),
+    ) + tuple(
+        CandidateLaneStat(
+            lane_name=f"facet:{row.subnarrative_id}:text",
+            median=0.0,
+            mad=0.0,
+            threshold=0.0,
+            comparison="strictly_greater_than",
+            observed_count=max(1, len(documents)),
+            admitted_count=0,
+            admitted_docids_sha256=empty_digest,
+        )
+        for row in topic.subnarratives  # type: ignore[attr-defined]
+    )
+    return CandidateCore(
+        topic_id=topic.topic_id,  # type: ignore[attr-defined]
+        lane_scores_sha256=topic.source_sha256s[  # type: ignore[attr-defined]
+            "scoring/lane_scores.jsonl"
+        ],
+        candidate_docids=selected,
+        pre_fallback_count=len(selected),
+        fallback_used=False,
+        admission_multiplicity_histogram={"1": len(selected)},
+        lanes=lanes,
+    )
+
+
+def test_score_topic_builds_candidate_only_narrative_and_subnarrative_matrix(
     tmp_path: Path,
 ) -> None:
     source, document_root = _source_fixture(tmp_path)
@@ -576,22 +675,23 @@ def test_score_topic_builds_complete_narrative_and_subnarrative_matrix(
     chunker = SemanticTextChunker(
         ChunkingConfig(max_characters=3_500, overlap_characters=350)
     )
-    expected_chunks = sum(
-        len(chunker.split_text(document.text, document_id=document.docid))
-        for document in topic.documents
+    core = _candidate_core(topic, ("d1",))
+    expected_chunks = len(
+        chunker.split_text(topic.documents[0].text, document_id="d1")
     )
     scorer = _FakePassageScorer(cached=False)
 
-    matrix = score_topic(topic, scorer=scorer, chunker=chunker)
+    matrix = score_topic(topic, candidate_core=core, scorer=scorer, chunker=chunker)
 
     assert [row.unit_id for row in matrix.units] == ["__narrative__", "s1"]
+    assert matrix.candidate_core == core
     assert len(matrix.passages) == expected_chunks * 2
     assert matrix.cache_stats == {
         "cache_hits": 0,
         "cache_misses": expected_chunks * 2,
         "model_batches": ((expected_chunks + 31) // 32) * 2,
     }
-    assert {row.docid for row in matrix.passages} == {"d1", "d2"}
+    assert {row.docid for row in matrix.passages} == {"d1"}
 
 
 def test_topic_matrix_round_trip_is_hashed_and_contains_no_document_text(
@@ -602,7 +702,12 @@ def test_topic_matrix_round_trip_is_hashed_and_contains_no_document_text(
     chunker = SemanticTextChunker(
         ChunkingConfig(max_characters=3_500, overlap_characters=350)
     )
-    matrix = score_topic(topic, scorer=_FakePassageScorer(cached=False), chunker=chunker)
+    matrix = score_topic(
+        topic,
+        candidate_core=_candidate_core(topic),
+        scorer=_FakePassageScorer(cached=False),
+        chunker=chunker,
+    )
     output_dir = tmp_path / "matrix"
 
     manifest_path = write_topic_matrix(matrix, output_dir)
@@ -611,6 +716,15 @@ def test_topic_matrix_round_trip_is_hashed_and_contains_no_document_text(
     assert restored == matrix
     assert manifest_path.name == "topic-matrix-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    header = json.loads(
+        (output_dir / "topic-matrix.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[0]
+    )
+    assert header["schema_version"] == "retrieval-baseline-topic-matrix-v3"
+    assert header["candidate_core"]["candidate_docids"] == ["d1", "d2"]
+    assert manifest["schema_version"] == "retrieval-baseline-topic-matrix-manifest-v3"
+    assert len(manifest["candidate_core_sha256"]) == 64
     assert manifest["topic_id"] == "rag2026-2"
     assert manifest["passage_pair_count"] == len(matrix.passages)
     assert manifest["document_semantic_pair_count"] == (
@@ -621,6 +735,53 @@ def test_topic_matrix_round_trip_is_hashed_and_contains_no_document_text(
     assert "second document text" not in artifact_text
 
 
+def test_score_topics_reuses_one_scorer_and_preserves_requested_topic_order(
+    tmp_path: Path,
+) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    first = load_topic_input(source, "rag2026-2", document_root)
+    second = replace(first, topic_id="rag2026-10")
+    first_core = _candidate_core(first, ("d1",))
+    second_core = replace(first_core, topic_id="rag2026-10")
+    scorer = _FakePassageScorer(cached=False)
+
+    matrices = score_topics(
+        ((second, second_core), (first, first_core)),
+        scorer=scorer,
+        chunker=SemanticTextChunker(
+            ChunkingConfig(max_characters=3_500, overlap_characters=350)
+        ),
+    )
+
+    assert tuple(matrix.topic_id for matrix in matrices) == (
+        "rag2026-10",
+        "rag2026-2",
+    )
+    assert all(tuple(row.docid for row in matrix.documents) == ("d1",) for matrix in matrices)
+    assert matrices[0].cache_stats == matrices[1].cache_stats
+    assert scorer.stats["model_batches"] == sum(
+        matrix.cache_stats["model_batches"] for matrix in matrices
+    )
+
+
+def test_score_topic_rejects_candidate_identity_before_scoring(tmp_path: Path) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    topic = load_topic_input(source, "rag2026-2", document_root)
+    scorer = _FakePassageScorer(cached=False)
+
+    with pytest.raises(ValueError, match="topic identity"):
+        score_topic(
+            topic,
+            candidate_core=replace(_candidate_core(topic), topic_id="rag2026-3"),
+            scorer=scorer,
+            chunker=SemanticTextChunker(
+                ChunkingConfig(max_characters=3_500, overlap_characters=350)
+            ),
+        )
+
+    assert scorer.stats == {"cache_hits": 0, "cache_misses": 0, "model_batches": 0}
+
+
 def test_cache_only_replay_records_zero_model_batches_and_identical_scores(
     tmp_path: Path,
 ) -> None:
@@ -629,9 +790,20 @@ def test_cache_only_replay_records_zero_model_batches_and_identical_scores(
     chunker = SemanticTextChunker(
         ChunkingConfig(max_characters=3_500, overlap_characters=350)
     )
-    first = score_topic(topic, scorer=_FakePassageScorer(cached=False), chunker=chunker)
+    core = _candidate_core(topic)
+    first = score_topic(
+        topic,
+        candidate_core=core,
+        scorer=_FakePassageScorer(cached=False),
+        chunker=chunker,
+    )
 
-    replay = score_topic(topic, scorer=_FakePassageScorer(cached=True), chunker=chunker)
+    replay = score_topic(
+        topic,
+        candidate_core=core,
+        scorer=_FakePassageScorer(cached=True),
+        chunker=chunker,
+    )
 
     first_root = tmp_path / "first"
     replay_root = tmp_path / "replay"
@@ -650,13 +822,14 @@ def test_cache_only_replay_records_zero_model_batches_and_identical_scores(
     assert replay.cache_stats["cache_hits"] == len(replay.passages)
 
 
-def test_rank_topic_matrix_uses_complete_scores_but_pooled_sources_for_breadth(
+def test_rank_topic_matrix_keeps_every_candidate_and_uses_cross_scored_breadth(
     tmp_path: Path,
 ) -> None:
     source, document_root = _source_fixture(tmp_path)
     topic = load_topic_input(source, "rag2026-2", document_root)
     matrix = score_topic(
         topic,
+        candidate_core=_candidate_core(topic),
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
             ChunkingConfig(max_characters=3_500, overlap_characters=350)
@@ -666,8 +839,9 @@ def test_rank_topic_matrix_uses_complete_scores_but_pooled_sources_for_breadth(
     ranked = rank_topic_matrix(matrix)
 
     assert len(ranked.document_scores) == 2
-    assert ranked.rankings.eligible_docids
-    assert {hit.docid for hit in ranked.breadth_passages} == {"d1"}
+    assert ranked.rankings.eligible_docids == ("d1", "d2")
+    assert ranked.candidate_core == matrix.candidate_core
+    assert {hit.docid for hit in ranked.breadth_passages} == {"d1", "d2"}
     assert set(ranked.rankings.narrative) == set(ranked.rankings.eligible_docids)
     assert set(ranked.rankings.combo) == set(ranked.rankings.eligible_docids)
     assert set(ranked.rankings.breadth) == set(ranked.rankings.eligible_docids)
@@ -680,12 +854,20 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
     topic = load_topic_input(source, "rag2026-2", document_root)
     base = score_topic(
         topic,
+        candidate_core=_candidate_core(topic),
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
             ChunkingConfig(max_characters=3_500, overlap_characters=350)
         ),
     )
-    matrices = (replace(base, topic_id="rag2026-10"), base)
+    matrices = (
+        replace(
+            base,
+            topic_id="rag2026-10",
+            candidate_core=replace(base.candidate_core, topic_id="rag2026-10"),
+        ),
+        base,
+    )
 
     first_manifest = export_runs(matrices, tmp_path / "first")
     second_manifest = export_runs(matrices, tmp_path / "second")
@@ -713,11 +895,14 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
     )
     for row in first["topics"]:
         assert row["document_semantic_pair_count"] == 4
+        assert row["candidate_count"] == 2
+        assert row["k"] == row["candidate_count"]
         assert row["subnarrative_source_pools"]["s1"]["count"] == 1
         assert len(row["subnarrative_source_pools"]["s1"]["docids_sha256"]) == 64
         assert sum(
             row["admission_multiplicity_histogram"].values()
         ) == row["pre_fallback_count"]
+        assert row["candidate_lanes"][0]["lane_name"] == "original"
         assert row["source_sha256s"] == base.source_sha256s
     for name, receipt in first["run_file_receipts"].items():
         body = (tmp_path / "first" / first["run_files"][name]).read_bytes()
@@ -732,6 +917,7 @@ def test_matrix_rejects_unpinned_identity_and_incomplete_chunk_coverage(
     topic = load_topic_input(source, "rag2026-2", document_root)
     matrix = score_topic(
         topic,
+        candidate_core=_candidate_core(topic),
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
             ChunkingConfig(max_characters=3_500, overlap_characters=350)
@@ -748,6 +934,25 @@ def test_matrix_rejects_unpinned_identity_and_incomplete_chunk_coverage(
             replace(matrix, passages=matrix.passages[:-1]),
             tmp_path / "missing-passage",
         )
+    with pytest.raises(ValueError, match="candidate docids|candidate-core"):
+        write_topic_matrix(
+            replace(
+                matrix,
+                candidate_core=_candidate_core(topic, ("d1",)),
+            ),
+            tmp_path / "wrong-candidate-set",
+        )
+    with pytest.raises(ValueError, match="lane-score source hash"):
+        write_topic_matrix(
+            replace(
+                matrix,
+                candidate_core=replace(
+                    matrix.candidate_core,
+                    lane_scores_sha256="f" * 64,
+                ),
+            ),
+            tmp_path / "wrong-candidate-source",
+        )
 
 
 def test_matrix_publication_is_create_only(tmp_path: Path) -> None:
@@ -755,6 +960,7 @@ def test_matrix_publication_is_create_only(tmp_path: Path) -> None:
     topic = load_topic_input(source, "rag2026-2", document_root)
     matrix = score_topic(
         topic,
+        candidate_core=_candidate_core(topic),
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
             ChunkingConfig(max_characters=3_500, overlap_characters=350)
@@ -781,6 +987,7 @@ def test_rank_and_verify_cli_use_existing_topic_matrices(
     topic = load_topic_input(source, "rag2026-2", document_root)
     matrix = score_topic(
         topic,
+        candidate_core=_candidate_core(topic),
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
             ChunkingConfig(max_characters=3_500, overlap_characters=350)
