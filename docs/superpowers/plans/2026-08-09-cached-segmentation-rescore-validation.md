@@ -26,21 +26,27 @@
   final review finding now also preserves any failed gate or interrupted run in
   a distinct marker-last, non-promotable diagnostic bundle.
 - Local verification passes: lock check, shell syntax, compile checks, diff
-  check, real wrapper/dstack-HF preflights, and 579 targeted tests. Two exact
+  check, real wrapper/dstack-HF preflights, and 580 targeted tests. Two exact
   H100 attempts stopped before scoring: the first exposed remote environment
   ordering and the second exposed v3 source-receipt compatibility. The latter
   published a verified non-promotable diagnostic bundle. Both root causes have
   test-first fixes; the real Topic 14 frozen archive now passes the current
   semantic verifier (archive SHA-256
   `6331cf4be787eed11b51849ee18cdb9c9c32d4d18017ccf059d88f380c79ad01`).
-  Retry 3 uses fresh result and diagnostic prefixes.
+  Retry 3 then exposed a throughput bottleneck before any scoring: the wrapper
+  authenticated the 22 independent source bundles serially, while one strict
+  Topic 14 replay used one CPU, about 7 GiB, and more than 18 cloud minutes.
+  That attempt was stopped at about $1.40. The next retry keeps merge
+  fail-closed until all inputs pass but downloads and verifies eight isolated
+  bundles at a time on a machine with at least 96 GiB RAM. Retry 4 uses fresh
+  result and diagnostic prefixes.
 
 ## Global Constraints
 
 - Work only in `/home/npatta01/data/competitions/trec_rag_2026/.worktrees/fix-sentence-segmentation` on `codex/fix-sentence-segmentation`.
 - Topics: `14,31,37,58,72,84,144,161,200,213,219,224,225,233,273,300,407,477,499,515,707,897`.
 - Source: private immutable `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806`.
-- Destination run ID: `nonagentic-rag25-segmentation-fixed-20260809-r3`; never overwrite a remote prefix.
+- Destination run ID: `nonagentic-rag25-segmentation-fixed-20260809-r4`; never overwrite a remote prefix.
 - Planning, retrieval, document materialization, and passage scoring are fail-closed cache-only/read-only.
 - Sentence scoring and similarity may use local GPU work. Canonicalization may make bounded hosted calls.
 - Reuse existing baseline `plan.json` bytes and make at most 22 candidate-arm judge calls; make no planner calls.
@@ -424,7 +430,7 @@ git commit -m "Bundle cached segmentation validation results"
 
 ```text
 run_cached_segmentation_validation.sh [--preflight]
-  --run-id nonagentic-rag25-segmentation-fixed-20260809-r3
+  --run-id nonagentic-rag25-segmentation-fixed-20260809-r4
   --source-run-id nonagentic-rag25-dev-20260806
   --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807
   --config configs/rag25_competition_retrieval_v1.yaml
@@ -483,7 +489,7 @@ price cap, RunPod/Vast.ai, and bounded `no-capacity` retry.
 ```bash
 .venv/bin/python -m pytest code/tests/test_cached_segmentation_validation_workflow.py -q
 bash code/tools/run_cached_segmentation_validation.sh --preflight \
-  --run-id nonagentic-rag25-segmentation-fixed-20260809-r3 \
+  --run-id nonagentic-rag25-segmentation-fixed-20260809-r4 \
   --source-run-id nonagentic-rag25-dev-20260806 \
   --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
   --config configs/rag25_competition_retrieval_v1.yaml
@@ -503,7 +509,7 @@ git commit -m "Run cached segmentation validation on dstack"
 - Update: this plan with verification/live evidence
 - Private baseline source: `outputs/nonagentic-rag25-dev-all22-replay-p4-20260807`
 - Private baseline prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807`
-- Private result prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-segmentation-fixed-20260809-r3`
+- Private result prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-segmentation-fixed-20260809-r4`
 
 **Interfaces:**
 
@@ -549,7 +555,7 @@ Retain the HF mode and verify the real wrapper's `--preflight` path.
 ```bash
 bash code/tools/apply_cached_segmentation_validation.sh \
   --preview --name rag25-segfix-all22-20260809 -- \
-  --run-id nonagentic-rag25-segmentation-fixed-20260809-r3 \
+  --run-id nonagentic-rag25-segmentation-fixed-20260809-r4 \
   --source-run-id nonagentic-rag25-dev-20260806 \
   --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
   --config configs/rag25_competition_retrieval_v1.yaml

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import shlex
 import subprocess
 
 import yaml
@@ -63,6 +64,7 @@ def test_wrapper_preflight_freezes_all22_and_zero_upstream_expectations() -> Non
     assert f"topic_ids={','.join(TOPICS)}" in result.stdout
     assert "topic_count=22" in result.stdout
     assert "topic_workers=4" in result.stdout
+    assert "source_verify_workers=8" in result.stdout
     assert "planning_calls_expected=0" in result.stdout
     assert "retrieval_network_calls_expected=0" in result.stdout
     assert "passage_model_batches_expected=0" in result.stdout
@@ -89,7 +91,7 @@ def test_task_uses_one_fast_bounded_on_demand_gpu_and_only_named_secrets() -> No
     assert value["resources"]["gpu"]["count"] == 1
     assert value["resources"]["gpu"]["memory"] == "80GB.."
     assert value["resources"]["gpu"]["name"] == ["H200", "H100"]
-    assert value["resources"]["memory"] == "64GB.."
+    assert value["resources"]["memory"] == "96GB.."
     assert value["resources"]["disk"] == "100GB"
     assert value["backends"] == ["runpod", "vastai"]
     assert value["spot_policy"] == "on-demand"
@@ -127,6 +129,37 @@ def test_probe_failure_preserves_the_underlying_exit_status() -> None:
 
     assert result.returncode == 137
     assert "probe failed with status 137" in result.stderr
+
+
+def test_source_verification_batch_waits_all_and_preserves_failure(
+    tmp_path: Path,
+) -> None:
+    wrapper = WRAPPER.read_text()
+    match = re.search(
+        r"(?ms)^wait_source_bundle_batch\(\) \{\n.*?^\}\n",
+        wrapper,
+    )
+    assert match is not None
+    completed = tmp_path / "completed"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                f"set -u\n{match.group(0)}\n"
+                "(exit 7) & failed=$!\n"
+                f"(sleep 0.05; touch {shlex.quote(str(completed))}) & completed=$!\n"
+                'wait_source_bundle_batch "$failed" "$completed"\n'
+            ),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 7
+    assert completed.is_file()
 
 
 def test_launcher_preview_accepts_five_empty_approval_fields() -> None:
@@ -194,6 +227,14 @@ def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> N
 
     assert "competition_cache_bundle verify" in wrapper
     assert "competition_cache_bundle merge" in wrapper
+    assert "SOURCE_VERIFY_WORKERS=8" in wrapper
+    assert 'download_and_verify_source_bundle "$topic_id" &' in wrapper
+    assert 'wait_source_bundle_batch "${source_verify_pids[@]}"' in wrapper
+    authentication = wrapper.index(
+        'wait_source_bundle_batch "${source_verify_pids[@]}"'
+    )
+    merge = wrapper.index("competition_cache_bundle merge")
+    assert authentication < merge
     assert "--cached-upstream-rescore" in wrapper
     assert '"407"' in wrapper
     assert '"14" "31"' in wrapper

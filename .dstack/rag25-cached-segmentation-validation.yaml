@@ -26,7 +26,7 @@ resources:
     name: [H200, H100]
     count: 1
     memory: 80GB..
-  memory: 64GB..
+  memory: 96GB..
   disk: 100GB
 
 backends: [runpod, vastai]

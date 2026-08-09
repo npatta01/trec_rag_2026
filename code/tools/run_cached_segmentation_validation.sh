@@ -8,6 +8,7 @@ BUCKET_PREFIX="trec_rag_2026"
 TOPICS=("14" "31" "37" "58" "72" "84" "144" "161" "200" "213" "219" "224" "225" "233" "273" "300" "407" "477" "499" "515" "707" "897")
 MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 MINILM_REVISION="1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+SOURCE_VERIFY_WORKERS=8
 
 preflight=false
 run_id=""
@@ -93,6 +94,7 @@ if $preflight; then
     "topic_ids=$topics_csv" \
     "topic_count=22" \
     "topic_workers=4" \
+    "source_verify_workers=$SOURCE_VERIFY_WORKERS" \
     "canary_topic=407" \
     "warm_probe_topics=14,31" \
     "source_bundle_download_gib=1.30" \
@@ -263,14 +265,50 @@ diagnostic_enabled=true
 trap preserve_failure EXIT
 
 bundle_dirs=()
+source_verify_pids=()
+download_and_verify_source_bundle() {
+  local topic_id=$1
+  local topic_bundle="$bundle_root/$topic_id"
+  mkdir -m 700 "$topic_bundle"
+  hf_cli buckets cp \
+    "$source_prefix/$topic_id/bundle.tar.zst" \
+    "$topic_bundle/bundle.tar.zst"
+  hf_cli buckets cp \
+    "$source_prefix/$topic_id/bundle-complete.json" \
+    "$topic_bundle/bundle-complete.json"
+  "$venv_python" -m trec_rag.competition_cache_bundle verify "$topic_bundle"
+}
+wait_source_bundle_batch() {
+  local first_status=0
+  local status
+  local pid
+  for pid in "$@"; do
+    if wait "$pid"; then
+      continue
+    else
+      status=$?
+    fi
+    if ((first_status == 0)); then
+      first_status=$status
+    fi
+  done
+  if ((first_status != 0)); then
+    return "$first_status"
+  fi
+}
 for topic_id in "${TOPICS[@]}"; do
   topic_bundle="$bundle_root/$topic_id"
-  mkdir -m 700 "$topic_bundle"
-  hf_cli buckets cp "$source_prefix/$topic_id/bundle.tar.zst" "$topic_bundle/bundle.tar.zst"
-  hf_cli buckets cp "$source_prefix/$topic_id/bundle-complete.json" "$topic_bundle/bundle-complete.json"
-  "$venv_python" -m trec_rag.competition_cache_bundle verify "$topic_bundle"
   bundle_dirs+=("$topic_bundle")
+  download_and_verify_source_bundle "$topic_id" &
+  source_verify_pids+=("$!")
+  if ((${#source_verify_pids[@]} == SOURCE_VERIFY_WORKERS)); then
+    wait_source_bundle_batch "${source_verify_pids[@]}"
+    source_verify_pids=()
+  fi
 done
+if ((${#source_verify_pids[@]})); then
+  wait_source_bundle_batch "${source_verify_pids[@]}"
+fi
 # All 22 are authenticated before a single destination mutation.
 "$venv_python" -m trec_rag.competition_cache_bundle merge \
   --cache-root "$cache_root" --outputs-root "$source_outputs" \
