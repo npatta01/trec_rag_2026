@@ -479,6 +479,179 @@ def test_bundle_rename_seam_refuses_a_replaced_payload_entry(
     assert foreign_payloads and (foreign_payloads[0] / "foreign.txt").read_text(encoding="utf-8") == "must survive"
 
 
+def test_bundle_rename_primitive_rechecks_page_after_outer_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "rename-page-substitution"
+    foreign = fixture.retrieval_output / "foreign-page.html"
+    foreign.write_text("foreign page bytes", encoding="utf-8")
+    real_rename = bundle_module._rename_noreplace_fds
+    swapped = False
+
+    def substitute_page(
+        old_dir_fd: int,
+        old_name: str,
+        new_dir_fd: int,
+        new_name: str,
+        **kwargs: object,
+    ) -> None:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            payload = Path(os.readlink(f"/proc/self/fd/{old_dir_fd}")) / old_name
+            page = payload / "topics" / "alpha-topic.html"
+            page.unlink()
+            page.symlink_to(foreign)
+        real_rename(old_dir_fd, old_name, new_dir_fd, new_name, **kwargs)
+
+    monkeypatch.setattr(bundle_module, "_rename_noreplace_fds", substitute_page)
+    with pytest.raises(ValueError, match="(?:identity|hash|reconciliation)"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    assert foreign.read_text(encoding="utf-8") == "foreign page bytes"
+
+
+def test_bundle_rename_refuses_a_recreated_target_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    parent = fixture.retrieval_output / "nested-publish-parent"
+    parent.mkdir()
+    target = parent / "debug-bundle"
+    outside = tmp_path / "moved-publish-parent"
+    real_rename = bundle_module._rename_noreplace_fds
+    moved = False
+
+    def move_parent_before_publication(
+        old_dir_fd: int,
+        old_name: str,
+        new_dir_fd: int,
+        new_name: str,
+        **kwargs: object,
+    ) -> None:
+        nonlocal moved
+        if not moved:
+            moved = True
+            parent.rename(outside)
+            parent.mkdir()
+        real_rename(old_dir_fd, old_name, new_dir_fd, new_name, **kwargs)
+
+    monkeypatch.setattr(
+        bundle_module, "_rename_noreplace_fds", move_parent_before_publication
+    )
+    with pytest.raises(ValueError, match="target parent"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    assert outside.is_dir()
+    assert list(parent.iterdir()) == []
+
+
+def test_bundle_cleanup_quarantine_rejects_foreign_file_at_delete_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "cleanup-file-delete-seam"
+    real_write = bundle_module._write_bundle_file
+    real_delete = bundle_module._unlink_quarantined_entry
+    foreign_paths: list[Path] = []
+    substituted = False
+
+    def fail_manifest(path: Path, payload: bytes) -> None:
+        if path.name == "bundle-manifest.json":
+            raise OSError("forced cleanup file seam")
+        real_write(path, payload)
+
+    def substitute_file(quarantine_fd: int, name: str, identity: object) -> None:
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            quarantine = Path(os.readlink(f"/proc/self/fd/{quarantine_fd}"))
+            owned = quarantine / name
+            owned.unlink()
+            owned.write_text("foreign cleanup file", encoding="utf-8")
+            foreign_paths.append(owned)
+        real_delete(quarantine_fd, name, identity)
+
+    monkeypatch.setattr(bundle_module, "_write_bundle_file", fail_manifest)
+    monkeypatch.setattr(bundle_module, "_unlink_quarantined_entry", substitute_file)
+    with pytest.raises(OSError, match="forced cleanup file seam"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert foreign_paths
+    restored = foreign_paths[0].parent.parent / "index.html"
+    assert (
+        (foreign_paths[0].is_file()
+        and foreign_paths[0].read_text(encoding="utf-8") == "foreign cleanup file")
+        or (restored.is_file() and restored.read_text(encoding="utf-8") == "foreign cleanup file")
+    )
+    assert not target.exists()
+
+
+def test_bundle_cleanup_quarantine_rejects_foreign_directory_at_delete_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "cleanup-directory-delete-seam"
+    real_write = bundle_module._write_bundle_file
+    real_rmdir = bundle_module._rmdir_quarantined_entry
+    foreign_paths: list[Path] = []
+    substituted = False
+
+    def fail_manifest(path: Path, payload: bytes) -> None:
+        if path.name == "bundle-manifest.json":
+            raise OSError("forced cleanup directory seam")
+        real_write(path, payload)
+
+    def substitute_directory(quarantine_fd: int, name: str, identity: object) -> None:
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            quarantine = Path(os.readlink(f"/proc/self/fd/{quarantine_fd}"))
+            owned = quarantine / name
+            moved = quarantine / f"{name}.owned"
+            owned.rename(moved)
+            owned.mkdir()
+            foreign_paths.append(owned)
+        real_rmdir(quarantine_fd, name, identity)
+
+    monkeypatch.setattr(bundle_module, "_write_bundle_file", fail_manifest)
+    monkeypatch.setattr(
+        bundle_module, "_rmdir_quarantined_entry", substitute_directory
+    )
+    with pytest.raises(OSError, match="forced cleanup directory seam"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert foreign_paths and foreign_paths[0].is_dir()
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "failed_path",
+    ("index.html", "topics/alpha-topic.html", "bundle-manifest.json"),
+)
+def test_bundle_receipt_failure_still_cleans_registered_owned_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_path: str
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / f"receipt-failure-{failed_path.replace('/', '-') }"
+    real_receipt = bundle_module._file_receipt
+
+    def fail_receipt(path: Path, relative_path: str, **kwargs: object):  # type: ignore[no-untyped-def]
+        if relative_path == failed_path:
+            raise OSError(f"forced receipt read {failed_path}")
+        return real_receipt(path, relative_path, **kwargs)
+
+    monkeypatch.setattr(bundle_module, "_file_receipt", fail_receipt)
+    with pytest.raises(OSError, match="forced receipt read"):
+        debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
+
+    assert not target.exists()
+    assert list(fixture.retrieval_output.glob(f".{target.name}.*.tmp")) == []
+
+
 def test_bundle_rejects_broken_relative_cross_page_fragment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

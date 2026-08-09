@@ -20,6 +20,7 @@ import stat
 import statistics
 import sys
 import tempfile
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
@@ -1079,8 +1080,148 @@ def _open_directory_fd(path: Path) -> int:
     )
 
 
+def _open_directory_fd_at(parent_fd: int, name: str) -> int:
+    return os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=parent_fd,
+    )
+
+
 def _fsync_directory_fd(descriptor: int) -> None:
     os.fsync(descriptor)
+
+
+def _read_receipt_from_fd(
+    descriptor: int,
+    relative_path: str,
+    *,
+    topic_id: str | None = None,
+) -> _PageReceipt:
+    digest = sha256()
+    size = 0
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        digest.update(chunk)
+    return _PageReceipt(
+        path=relative_path,
+        bytes=size,
+        sha256=digest.hexdigest(),
+        topic_id=topic_id,
+    )
+
+
+def _validate_pinned_payload(
+    guardian_fd: int,
+    payload_name: str,
+    expected_payload_identity: _FileIdentity,
+    expected_file_identities: Mapping[str, _FileIdentity],
+    expected_receipts: Sequence[_PageReceipt],
+    expected_topic_ids: Sequence[str],
+) -> None:
+    """Validate the complete payload through descriptor-relative operations.
+
+    This is deliberately the last authoritative filesystem check in the
+    publication primitive.  Callers may perform an earlier reconciliation for
+    link validation, but a wrapper that mutates a page after that check still
+    reaches this descriptor-pinned identity/hash/coverage check before the
+    no-replace syscall.
+    """
+    payload_fd = _open_directory_fd_at(guardian_fd, payload_name)
+    topics_fd: int | None = None
+    try:
+        payload_record = os.fstat(payload_fd)
+        payload_identity = (payload_record.st_dev, payload_record.st_ino)
+        if payload_identity != expected_payload_identity or not stat.S_ISDIR(
+            payload_record.st_mode
+        ):
+            raise ValueError("bundle staging payload identity changed before publication")
+
+        receipt_by_path = {receipt.path: receipt for receipt in expected_receipts}
+        if len(receipt_by_path) != len(expected_receipts):
+            raise ValueError("bundle publication receipts contain duplicate paths")
+        expected_paths = set(expected_file_identities)
+        if expected_paths != set(receipt_by_path):
+            raise ValueError("bundle publication file coverage does not reconcile")
+        topic_receipts = tuple(
+            receipt
+            for receipt in expected_receipts
+            if receipt.path.startswith("topics/")
+        )
+        if tuple(receipt.topic_id for receipt in topic_receipts) != tuple(expected_topic_ids):
+            raise ValueError("bundle publication topic coverage does not reconcile")
+        if any(receipt.topic_id is not None for receipt in expected_receipts if not receipt.path.startswith("topics/")):
+            raise ValueError("bundle publication receipt coverage is invalid")
+
+        expected_direct = {
+            path for path in expected_paths if len(Path(path).parts) == 1
+        }
+        expected_topics = {
+            Path(path).name
+            for path in expected_paths
+            if Path(path).parts[:1] == ("topics",)
+        }
+        if set(os.listdir(payload_fd)) != {"topics", *expected_direct}:
+            raise ValueError(
+                "bundle publication payload identity/coverage does not reconcile"
+            )
+        topics_fd = _open_directory_fd_at(payload_fd, "topics")
+        if set(os.listdir(topics_fd)) != expected_topics:
+            raise ValueError("bundle publication topic-file coverage does not reconcile")
+
+        for relative_path, expected_identity in sorted(expected_file_identities.items()):
+            parts = Path(relative_path).parts
+            if len(parts) == 1:
+                directory_fd = payload_fd
+                name = parts[0]
+            elif len(parts) == 2 and parts[0] == "topics":
+                if topics_fd is None:
+                    raise ValueError("bundle publication topics directory is unavailable")
+                directory_fd = topics_fd
+                name = parts[1]
+            else:
+                raise ValueError("bundle publication contains an unsafe file path")
+            try:
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+            except OSError as error:
+                raise ValueError(
+                    f"bundle file identity changed for {relative_path} before publication"
+                ) from error
+            try:
+                before = os.fstat(descriptor)
+                actual_identity = (before.st_dev, before.st_ino)
+                if not stat.S_ISREG(before.st_mode) or actual_identity != expected_identity:
+                    raise ValueError(
+                        f"bundle file identity changed for {relative_path} before publication"
+                    )
+                actual = _read_receipt_from_fd(
+                    descriptor,
+                    relative_path,
+                    topic_id=receipt_by_path[relative_path].topic_id,
+                )
+                after = os.fstat(descriptor)
+                if (
+                    (after.st_dev, after.st_ino) != expected_identity
+                    or not stat.S_ISREG(after.st_mode)
+                    or actual.bytes != receipt_by_path[relative_path].bytes
+                    or actual.sha256 != receipt_by_path[relative_path].sha256
+                ):
+                    raise ValueError(
+                        f"bundle hash or identity reconciliation failed for {relative_path}"
+                    )
+            finally:
+                os.close(descriptor)
+    finally:
+        if topics_fd is not None:
+            os.close(topics_fd)
+        os.close(payload_fd)
 
 
 def _rename_noreplace_fds(
@@ -1090,21 +1231,89 @@ def _rename_noreplace_fds(
     new_name: str,
     *,
     expected_old_identity: _FileIdentity | None = None,
-) -> None:
-    """Atomically rename one descriptor-relative entry without replacing a target."""
+    expected_file_identities: Mapping[str, _FileIdentity] | None = None,
+    expected_receipts: Sequence[_PageReceipt] | None = None,
+    expected_topic_ids: Sequence[str] | None = None,
+    target_parent_path: Path | None = None,
+    expected_target_parent_identity: _FileIdentity | None = None,
+    approved_roots: Sequence[Path] = (),
+) -> int | None:
+    """Atomically rename one descriptor-relative entry without replacing a target.
+
+    For publication, ``target_parent_path`` causes the destination descriptor to
+    be opened afresh here.  The caller's setup descriptor is never used as the
+    publication destination, so a moved-and-recreated pathname cannot redirect
+    the rename.  The returned fresh descriptor remains open for the caller's
+    post-rename parent fsync.
+    """
+    publication_parent_fd: int | None = None
+    destination_fd = new_dir_fd
+    if target_parent_path is not None:
+        target_parent = Path(target_parent_path)
+        try:
+            resolved_parent = target_parent.resolve(strict=True)
+        except FileNotFoundError as error:
+            raise ValueError("bundle target parent disappeared before publication") from error
+        if resolved_parent != target_parent:
+            raise ValueError("bundle target parent path changed before publication")
+        if approved_roots and not any(
+            resolved_parent.is_relative_to(Path(root).resolve())
+            for root in approved_roots
+        ):
+            raise ValueError("bundle target parent is outside approved roots")
+        publication_parent_fd = _open_directory_fd(resolved_parent)
+        destination_fd = publication_parent_fd
+        parent_record = os.fstat(publication_parent_fd)
+        parent_identity = (parent_record.st_dev, parent_record.st_ino)
+        if (
+            expected_target_parent_identity is not None
+            and parent_identity != expected_target_parent_identity
+        ):
+            os.close(publication_parent_fd)
+            publication_parent_fd = None
+            raise ValueError("bundle target parent identity changed before publication")
     if expected_old_identity is not None:
         try:
             source_record = os.stat(
                 old_name, dir_fd=old_dir_fd, follow_symlinks=False
             )
         except FileNotFoundError as error:
+            if publication_parent_fd is not None:
+                os.close(publication_parent_fd)
             raise ValueError("bundle staging payload disappeared before publication") from error
         if stat.S_ISLNK(source_record.st_mode) or (
             source_record.st_dev,
             source_record.st_ino,
         ) != expected_old_identity:
+            if publication_parent_fd is not None:
+                os.close(publication_parent_fd)
             raise ValueError("bundle staging payload identity changed before publication")
+    if expected_file_identities is not None:
+        if (
+            expected_old_identity is None
+            or expected_receipts is None
+            or expected_topic_ids is None
+        ):
+            if publication_parent_fd is not None:
+                os.close(publication_parent_fd)
+            raise ValueError("bundle publication reconciliation inputs are incomplete")
+        try:
+            _validate_pinned_payload(
+                old_dir_fd,
+                old_name,
+                expected_old_identity,
+                expected_file_identities,
+                expected_receipts,
+                expected_topic_ids,
+            )
+        except Exception:
+            if publication_parent_fd is not None:
+                os.close(publication_parent_fd)
+                publication_parent_fd = None
+            raise
     if sys.platform != "linux":
+        if publication_parent_fd is not None:
+            os.close(publication_parent_fd)
         raise OSError(
             errno.ENOTSUP,
             "atomic no-replace directory rename is unavailable on this platform",
@@ -1112,6 +1321,8 @@ def _rename_noreplace_fds(
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
+        if publication_parent_fd is not None:
+            os.close(publication_parent_fd)
         raise OSError(errno.ENOTSUP, "atomic no-replace directory rename is unavailable")
     renameat2.argtypes = [
         ctypes.c_int,
@@ -1124,13 +1335,16 @@ def _rename_noreplace_fds(
     result = renameat2(
         old_dir_fd,
         os.fsencode(old_name),
-        new_dir_fd,
+        destination_fd,
         os.fsencode(new_name),
         1,
     )
     if result != 0:
         error_number = ctypes.get_errno()
+        if publication_parent_fd is not None:
+            os.close(publication_parent_fd)
         raise OSError(error_number, os.strerror(error_number), new_name)
+    return publication_parent_fd
 
 
 def _rename_noreplace(source: Path, destination: Path) -> None:
@@ -1138,15 +1352,61 @@ def _rename_noreplace(source: Path, destination: Path) -> None:
     old_dir_fd = _open_directory_fd(source.parent)
     new_dir_fd = _open_directory_fd(destination.parent)
     try:
-        _rename_noreplace_fds(
+        publication_parent_fd = _rename_noreplace_fds(
             old_dir_fd,
             source.name,
             new_dir_fd,
             destination.name,
         )
+        if publication_parent_fd is not None:
+            os.close(publication_parent_fd)
     finally:
         os.close(old_dir_fd)
         os.close(new_dir_fd)
+
+
+def _rename_cleanup_noreplace(
+    old_dir_fd: int,
+    old_name: str,
+    new_dir_fd: int,
+    new_name: str,
+    *,
+    expected_old_identity: _FileIdentity,
+) -> None:
+    """Move one cleanup candidate without depending on the publication seam."""
+    try:
+        source_record = os.stat(old_name, dir_fd=old_dir_fd, follow_symlinks=False)
+    except OSError as error:
+        raise ValueError("bundle cleanup candidate disappeared") from error
+    source_identity = (source_record.st_dev, source_record.st_ino)
+    if stat.S_ISLNK(source_record.st_mode) or source_identity != expected_old_identity:
+        raise ValueError("bundle cleanup candidate identity changed")
+    if sys.platform != "linux":
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-replace cleanup rename is unavailable on this platform",
+        )
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOTSUP, "atomic no-replace cleanup rename is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+        old_dir_fd,
+        os.fsencode(old_name),
+        new_dir_fd,
+        os.fsencode(new_name),
+        1,
+    ) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), new_name)
 
 
 def _safe_topic_filename(topic_id: str) -> str:
@@ -1357,15 +1617,124 @@ class _StagingState:
     payload_published: bool = False
 
 
-def _remove_guardian_path(path: Path, identity: _FileIdentity) -> bool:
-    """Remove only an unchanged empty guardian pathname."""
-    if not _identity_matches(path, identity, directory=True):
-        return False
+def _unique_entry_name(parent_fd: int, prefix: str) -> str:
+    for _attempt in range(100):
+        name = f"{prefix}{uuid.uuid4().hex}"
+        try:
+            os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return name
+    raise OSError("could not allocate a unique bundle quarantine name")
+
+
+def _make_quarantine_directory(parent_fd: int) -> tuple[str, int, _FileIdentity]:
+    for _attempt in range(100):
+        name = _unique_entry_name(parent_fd, ".bundle-quarantine-")
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        descriptor = _open_directory_fd_at(parent_fd, name)
+        record = os.fstat(descriptor)
+        return name, descriptor, (record.st_dev, record.st_ino)
+    raise OSError("could not create a bundle quarantine directory")
+
+
+def _entry_identity_at(parent_fd: int, name: str) -> _FileIdentity:
+    record = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    return (record.st_dev, record.st_ino)
+
+
+def _unlink_quarantined_entry(
+    quarantine_fd: int, name: str, expected_identity: _FileIdentity
+) -> None:
+    """Delete a quarantined regular file only if its inode is still owned."""
+    record = os.stat(name, dir_fd=quarantine_fd, follow_symlinks=False)
+    actual = (record.st_dev, record.st_ino)
+    if stat.S_ISLNK(record.st_mode) or not stat.S_ISREG(record.st_mode):
+        raise ValueError("bundle quarantine entry is no longer a regular file")
+    if actual != expected_identity:
+        raise ValueError("bundle quarantine file identity changed before deletion")
+    os.unlink(name, dir_fd=quarantine_fd)
+
+
+def _rmdir_quarantined_entry(
+    quarantine_fd: int, name: str, expected_identity: _FileIdentity
+) -> None:
+    """Delete a quarantined empty directory only if its inode is still owned."""
+    record = os.stat(name, dir_fd=quarantine_fd, follow_symlinks=False)
+    actual = (record.st_dev, record.st_ino)
+    if stat.S_ISLNK(record.st_mode) or not stat.S_ISDIR(record.st_mode):
+        raise ValueError("bundle quarantine entry is no longer a directory")
+    if actual != expected_identity:
+        raise ValueError("bundle quarantine directory identity changed before deletion")
+    os.rmdir(name, dir_fd=quarantine_fd)
+
+
+def _restore_quarantined_entry(
+    quarantine_fd: int,
+    quarantine_name: str,
+    original_fd: int,
+    original_name: str,
+) -> bool:
+    """Restore a foreign quarantined entry without replacing an occupant."""
     try:
-        path.rmdir()
+        identity = _entry_identity_at(quarantine_fd, quarantine_name)
     except OSError:
         return False
+    try:
+        _rename_cleanup_noreplace(
+            quarantine_fd,
+            quarantine_name,
+            original_fd,
+            original_name,
+            expected_old_identity=identity,
+        )
+    except (OSError, ValueError):
+        return False
     return True
+
+
+def _remove_guardian_path(path: Path, identity: _FileIdentity) -> bool:
+    """Quarantine and remove only an unchanged empty guardian pathname."""
+    try:
+        parent_fd = _open_directory_fd(path.parent)
+    except OSError:
+        return False
+    quarantine_name: str | None = None
+    try:
+        if _entry_identity_at(parent_fd, path.name) != identity:
+            return False
+        quarantine_name = _unique_entry_name(parent_fd, ".bundle-guardian-")
+        _rename_cleanup_noreplace(
+            parent_fd,
+            path.name,
+            parent_fd,
+            quarantine_name,
+            expected_old_identity=identity,
+        )
+        try:
+            _rmdir_quarantined_entry(parent_fd, quarantine_name, identity)
+        except (OSError, ValueError):
+            _restore_quarantined_entry(
+                parent_fd,
+                quarantine_name,
+                parent_fd,
+                path.name,
+            )
+            return False
+        return True
+    except (OSError, ValueError):
+        if quarantine_name is not None:
+            _restore_quarantined_entry(
+                parent_fd,
+                quarantine_name,
+                parent_fd,
+                path.name,
+            )
+        return False
+    finally:
+        os.close(parent_fd)
 
 
 def _cleanup_staging(state: _StagingState | None, target: Path) -> None:
@@ -1387,19 +1756,82 @@ def _cleanup_staging(state: _StagingState | None, target: Path) -> None:
         return
     if not _identity_matches(state.topics_path, state.topics_identity, directory=True):
         return
-    for relative_path, identity in tuple(state.file_identities.items()):
-        file_path = state.payload_path / Path(relative_path)
-        if not _identity_matches(file_path, identity):
-            continue
-        try:
-            os.unlink(relative_path, dir_fd=state.payload_fd)
-        except FileNotFoundError:
-            pass
+    quarantine_name: str | None = None
+    quarantine_identity: _FileIdentity | None = None
+    quarantine_fd: int | None = None
+    payload_quarantine_name: str | None = None
+    payload_quarantine_fd: int | None = None
     try:
-        os.rmdir("topics", dir_fd=state.payload_fd)
-        os.rmdir("payload", dir_fd=state.guardian_fd)
-    except OSError:
+        payload_quarantine_name = _unique_entry_name(state.guardian_fd, ".bundle-payload-")
+        _rename_cleanup_noreplace(
+            state.guardian_fd,
+            "payload",
+            state.guardian_fd,
+            payload_quarantine_name,
+            expected_old_identity=state.payload_identity,
+        )
+        payload_quarantine_fd = _open_directory_fd_at(
+            state.guardian_fd, payload_quarantine_name
+        )
+        quarantine_name, quarantine_fd, quarantine_identity = _make_quarantine_directory(
+            payload_quarantine_fd
+        )
+        topics_fd = _open_directory_fd_at(payload_quarantine_fd, "topics")
+        try:
+            for index, (relative_path, identity) in enumerate(
+                sorted(state.file_identities.items())
+            ):
+                parts = Path(relative_path).parts
+                if len(parts) == 1:
+                    source_fd = payload_quarantine_fd
+                elif len(parts) == 2 and parts[0] == "topics":
+                    source_fd = topics_fd
+                else:
+                    return
+                quarantine_file_name = f"{index:08d}-{parts[-1]}"
+                _rename_cleanup_noreplace(
+                    source_fd,
+                    parts[-1],
+                    quarantine_fd,
+                    quarantine_file_name,
+                    expected_old_identity=identity,
+                )
+            _rmdir_quarantined_entry(
+                payload_quarantine_fd, "topics", state.topics_identity
+            )
+        finally:
+            os.close(topics_fd)
+        for index, (_relative_path, identity) in enumerate(
+            sorted(state.file_identities.items())
+        ):
+            quarantine_file_name = f"{index:08d}-{Path(_relative_path).name}"
+            try:
+                _unlink_quarantined_entry(quarantine_fd, quarantine_file_name, identity)
+            except (OSError, ValueError):
+                _restore_quarantined_entry(
+                    quarantine_fd,
+                    quarantine_file_name,
+                    payload_quarantine_fd,
+                    Path(_relative_path).name,
+                )
+                return
+        _rmdir_quarantined_entry(
+            payload_quarantine_fd,
+            quarantine_name,
+            quarantine_identity,
+        )
+        _rmdir_quarantined_entry(
+            state.guardian_fd,
+            payload_quarantine_name,
+            state.payload_identity,
+        )
+    except (OSError, ValueError):
         return
+    finally:
+        if quarantine_fd is not None:
+            os.close(quarantine_fd)
+        if payload_quarantine_fd is not None:
+            os.close(payload_quarantine_fd)
     _remove_guardian_path(guardian, state.guardian_identity)
 
 
@@ -1409,6 +1841,7 @@ def _render_and_write_topic(
     navigation: TopicPageNavigation,
     path: Path,
     relative_path: str,
+    file_identities: dict[str, _FileIdentity],
 ) -> tuple[_PageReceipt, _FileIdentity]:
     rendered = render_debug_topic_page(topic, navigation=navigation)
     payload = rendered.encode("utf-8")
@@ -1417,6 +1850,7 @@ def _render_and_write_topic(
     del payload
     if written_identity is None:
         written_identity = _lstat_identity(path)
+    file_identities[relative_path] = written_identity
     return (
         _file_receipt(path, relative_path, topic_id=topic.topic_id),
         written_identity,
@@ -1438,6 +1872,23 @@ def _validate_manifest_file(
         raise ValueError("bundle manifest file identity changed")
 
 
+def _validate_published_receipts(
+    target: Path,
+    payload_identity: _FileIdentity,
+    receipts: Sequence[_PageReceipt],
+    file_identities: Mapping[str, _FileIdentity],
+) -> None:
+    if not _identity_matches(target, payload_identity, directory=True):
+        raise ValueError("published bundle target identity changed before receipt")
+    for receipt in receipts:
+        path = target / Path(receipt.path)
+        identity = file_identities.get(receipt.path)
+        if identity is None or not _identity_matches(path, identity):
+            raise ValueError(f"published bundle receipt path changed for {receipt.path}")
+        if not _hash_matches(path, receipt.sha256, receipt.bytes):
+            raise ValueError(f"published bundle receipt hash changed for {receipt.path}")
+
+
 def build_bundle_from_data(
     data: DebugReportData,
     *,
@@ -1446,6 +1897,10 @@ def build_bundle_from_data(
 ) -> DebugReportBundleReceipt:
     """Publish one validated run as a deterministic create-only HTML bundle."""
     target = _resolve_bundle_output(data, Path(output_dir))
+    approved_roots = (
+        find_repo_root(data.retrieval_config_path.parent).resolve(),
+        data.output_dir.resolve(),
+    )
     if not data.topics:
         raise ValueError("bundle requires at least one topic")
     topic_filenames = tuple(_safe_topic_filename(topic.topic_id) for topic in data.topics)
@@ -1458,6 +1913,8 @@ def build_bundle_from_data(
     )
     summary = build_run_summary(data, evaluation)
     parent_fd: int | None = None
+    publication_parent_fd: int | None = None
+    target_parent_identity: _FileIdentity | None = None
     state: _StagingState | None = None
     guardian: Path | None = None
     guardian_identity: _FileIdentity | None = None
@@ -1467,6 +1924,8 @@ def build_bundle_from_data(
     payload_fd: int | None = None
     try:
         parent_fd = _open_directory_fd(target.parent)
+        parent_record = os.fstat(parent_fd)
+        target_parent_identity = (parent_record.st_dev, parent_record.st_ino)
         guardian = Path(
             tempfile.mkdtemp(
                 dir=target.parent,
@@ -1502,8 +1961,8 @@ def build_bundle_from_data(
         del index_body
         if index_written_identity is None:
             index_written_identity = _lstat_identity(index_path)
-        index_receipt = _file_receipt(index_path, "index.html")
         state.file_identities["index.html"] = index_written_identity
+        index_receipt = _file_receipt(index_path, "index.html")
 
         topic_receipts: list[_PageReceipt] = []
         total_topics = len(data.topics)
@@ -1516,14 +1975,14 @@ def build_bundle_from_data(
                 next_href=None if position + 1 == total_topics else f"{topic_filenames[position + 1]}",
             )
             topic_path = topics_dir / filename
-            topic_receipt, topic_identity = _render_and_write_topic(
+            topic_receipt, _topic_identity = _render_and_write_topic(
                 topic,
                 navigation=navigation,
                 path=topic_path,
                 relative_path=f"topics/{filename}",
+                file_identities=state.file_identities,
             )
             topic_receipts.append(topic_receipt)
-            state.file_identities[topic_receipt.path] = topic_identity
 
         _validate_staging(
             payload,
@@ -1567,9 +2026,9 @@ def build_bundle_from_data(
         manifest_written_identity = _write_bundle_file(manifest_path, body)
         if manifest_written_identity is None:
             manifest_written_identity = _lstat_identity(manifest_path)
+        state.file_identities["bundle-manifest.json"] = manifest_written_identity
         manifest_receipt = _file_receipt(manifest_path, "bundle-manifest.json")
         del body
-        state.file_identities[manifest_receipt.path] = manifest_written_identity
         if (
             manifest_receipt.bytes != manifest_bytes
             or manifest_receipt.sha256 != manifest_sha256
@@ -1595,21 +2054,49 @@ def build_bundle_from_data(
             raise ValueError("bundle output must remain absent before publication")
         if not _identity_matches(payload, payload_identity, directory=True):
             raise ValueError("bundle staging payload identity changed")
-        _rename_noreplace_fds(
+        publication_parent_fd = _rename_noreplace_fds(
             guardian_fd,
             "payload",
             parent_fd,
             target.name,
             expected_old_identity=payload_identity,
+            expected_file_identities=state.file_identities,
+            expected_receipts=(*pages, manifest_receipt),
+            expected_topic_ids=tuple(topic.topic_id for topic in data.topics),
+            target_parent_path=target.parent,
+            expected_target_parent_identity=target_parent_identity,
+            approved_roots=approved_roots,
         )
         state.payload_published = True
+        if parent_fd is not None:
+            os.close(parent_fd)
+            parent_fd = None
         _remove_guardian_path(guardian, guardian_identity)
+        if publication_parent_fd is None:
+            publication_parent_fd = _open_directory_fd(target.parent)
+            parent_record = os.fstat(publication_parent_fd)
+            if (
+                (parent_record.st_dev, parent_record.st_ino)
+                != target_parent_identity
+            ):
+                os.close(publication_parent_fd)
+                publication_parent_fd = None
+                raise ValueError("bundle target parent identity changed after publication")
         try:
-            _fsync_directory_fd(parent_fd)
+            _fsync_directory_fd(publication_parent_fd)
         except Exception as error:
             raise OSError(
                 "bundle published but target parent durability fsync failed"
             ) from error
+        finally:
+            os.close(publication_parent_fd)
+            publication_parent_fd = None
+        _validate_published_receipts(
+            target,
+            payload_identity,
+            (*pages, manifest_receipt),
+            state.file_identities,
+        )
         all_bytes = sum(page.bytes for page in pages) + manifest_receipt.bytes
         return DebugReportBundleReceipt(
             schema_version=_BUNDLE_SCHEMA_VERSION,
@@ -1651,6 +2138,8 @@ def build_bundle_from_data(
                     _remove_guardian_path(guardian, guardian_identity)
             if parent_fd is not None:
                 os.close(parent_fd)
+            if publication_parent_fd is not None:
+                os.close(publication_parent_fd)
 
 
 __all__ = [
