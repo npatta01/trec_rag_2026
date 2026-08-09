@@ -796,6 +796,29 @@ def verify_baseline_bundle(bundle_dir: str | Path) -> VerifiedResultBundle:
     return _verify(Path(bundle_dir), expected_kind="baseline")
 
 
+def restore_baseline_bundle(
+    bundle_dir: str | Path,
+    destination: str | Path,
+) -> VerifiedResultBundle:
+    """Verify and extract a baseline bundle into one fresh private directory."""
+
+    verified = verify_baseline_bundle(bundle_dir)
+    target = Path(destination)
+    if not target.is_absolute():
+        raise ValueError("baseline restore destination must be absolute")
+    if target.exists():
+        if target.is_symlink() or not target.is_dir() or any(target.iterdir()):
+            raise ResultBundleIntegrityError(
+                "baseline restore destination must be an empty safe directory"
+            )
+    else:
+        target.mkdir(parents=True, mode=0o700)
+    complete = (Path(bundle_dir) / COMPLETE_NAME).read_bytes()
+    _extract_verified(Path(bundle_dir) / ARCHIVE_NAME, complete, target)
+    _verify_baseline_semantics(verified, target)
+    return verified
+
+
 def _strict_file(path: Path, label: str) -> tuple[bytes, dict[str, Any]]:
     if path.is_symlink() or not path.is_file():
         raise ResultBundleIntegrityError(f"{label} is missing or unsafe")
@@ -1257,6 +1280,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     pack_baseline.add_argument("--destination", type=Path, required=True)
     verify_baseline = commands.add_parser("verify-baseline")
     verify_baseline.add_argument("bundle", type=Path)
+    restore_baseline = commands.add_parser("restore-baseline")
+    restore_baseline.add_argument("bundle", type=Path)
+    restore_baseline.add_argument("--destination", type=Path, required=True)
     pack = commands.add_parser("pack")
     pack.add_argument("--run-root", type=Path, required=True)
     pack.add_argument("--validation-root", type=Path, required=True)
@@ -1268,6 +1294,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         pack_baseline_bundle(args.handoff, args.coverage_root, args.destination)
     elif args.command == "verify-baseline":
         verify_baseline_bundle(args.bundle)
+    elif args.command == "restore-baseline":
+        restore_baseline_bundle(args.bundle, args.destination)
     elif args.command == "pack":
         pack_result_bundle(args.run_root, args.validation_root, args.destination)
     else:

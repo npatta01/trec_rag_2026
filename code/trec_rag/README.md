@@ -2096,6 +2096,17 @@ This is a planner-derived diagnostic, not organizer ground truth; it does not
 open qrels or gold nuggets. Completed candidate judge stages resume without a
 new hosted call and reproduce the same comparison bytes.
 
+The full RAG25 validation is launched only through
+`apply_cached_segmentation_validation.sh`. Its preview path constructs a clean,
+committed-only repository transport and declines dstack submission; its launch
+path submits exactly one detached task. The remote wrapper authenticates all 22
+portable source bundles before one strict merge, restores the private baseline,
+runs topic 407 first, warms topics 14/31, and then runs all 22 topics with four
+workers under `--cached-upstream-rescore`. It publishes the private result
+archive first and its completion marker last, then downloads and revalidates
+both bytes. Planning, retrieval, and passage scoring must report zero misses,
+network/provider calls, and model batches throughout.
+
 ## Answer-quality evaluation
 
 `ragdoll_io.py` and `dev_rag_inputs.py` support scoring generated answers with the organizer
