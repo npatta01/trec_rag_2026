@@ -249,6 +249,8 @@ def test_extract_input_archive_verifies_inner_manifest(tmp_path: Path) -> None:
 
     assert receipt["member_count"] == 5
     assert receipt["topic_ids"] == ["rag2026-0"]
+    assert receipt["canary_topic_ids"] == []
+    assert receipt["source_export_code_commit"] == "a" * 40
     assert verify_input_directory(tmp_path / "extracted")["member_count"] == 5
 
 

@@ -1033,10 +1033,16 @@ def extract_input_archive(
         "archive_byte_count": archive_size,
         "archive_sha256": archive_sha256,
         "cache_stats": verified["cache_stats"],
+        "canary_topic_ids": verified["canary_topic_ids"],
         "manifest_sha256": manifest_sha256,
         "member_count": verified["member_count"],
+        "source_export_code_commit": verified["source_export_code_commit"],
+        "source_export_manifest_sha256": verified[
+            "source_export_manifest_sha256"
+        ],
         "source_run_id": verified["source_run_id"],
         "topic_ids": verified["topic_ids"],
+        "topic_stats": verified["topic_stats"],
     }
 
 
@@ -1069,7 +1075,7 @@ def _parser() -> argparse.ArgumentParser:
     extract.add_argument("--archive", type=Path, required=True)
     extract.add_argument("--output-dir", type=Path, required=True)
     extract.add_argument("--input-manifest-sha256", required=True)
-    extract.add_argument("--topic", action="append", dest="topic_ids", required=True)
+    extract.add_argument("--topic", action="append", dest="topic_ids", default=[])
     return parser
 
 
@@ -1091,12 +1097,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         receipt = {
             "cache_stats": verified["cache_stats"],
+            "canary_topic_ids": verified["canary_topic_ids"],
             "manifest_sha256": sha256(
                 (args.input_dir / MANIFEST_NAME).read_bytes()
             ).hexdigest(),
             "member_count": verified["member_count"],
+            "source_export_code_commit": verified["source_export_code_commit"],
+            "source_export_manifest_sha256": verified[
+                "source_export_manifest_sha256"
+            ],
             "source_run_id": verified["source_run_id"],
             "topic_ids": verified["topic_ids"],
+            "topic_stats": verified["topic_stats"],
         }
     elif args.command == "import-scores":
         receipt = import_portable_scores(args.input_dir, args.score_cache)

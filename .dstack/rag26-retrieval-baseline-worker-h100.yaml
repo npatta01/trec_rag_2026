@@ -1,5 +1,5 @@
 type: task
-name: rag26-retrieval-baseline-worker
+name: rag26-retrieval-baseline-worker-h100
 
 image: huggingface/trl@sha256:4de10fa68e4f4e060cb41885044208e2a44715fc0d52ce83bb071b1fc6d63db1
 entrypoint: /bin/bash -c
@@ -19,7 +19,7 @@ commands:
 
 resources:
   gpu:
-    name: [H200]
+    name: [H100]
     count: 1
     memory: 48GB..
   memory: 48GB..

@@ -10,9 +10,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKER = REPO_ROOT / "code/tools/run_retrieval_baseline_worker.sh"
 LAUNCHER = REPO_ROOT / "code/tools/apply_retrieval_baseline_worker.sh"
 TEMPLATE = REPO_ROOT / ".dstack/rag26-retrieval-baseline-worker.yaml"
+H100_TEMPLATE = REPO_ROOT / ".dstack/rag26-retrieval-baseline-worker-h100.yaml"
 
 
-def test_worker_credential_free_preflight_accepts_two_topics() -> None:
+def test_worker_credential_free_preflight_uses_authenticated_all_topic_bundle() -> None:
     completed = subprocess.run(
         [
             "bash",
@@ -26,10 +27,6 @@ def test_worker_credential_free_preflight_accepts_two_topics() -> None:
             "a" * 64,
             "--output-prefix",
             "hf://buckets/private/trec_rag_2026/experiments/baseline-smoke-v1",
-            "--topic",
-            "rag2026-0",
-            "--topic",
-            "rag2026-37",
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -38,12 +35,14 @@ def test_worker_credential_free_preflight_accepts_two_topics() -> None:
     )
 
     assert "preflight=ok" in completed.stdout
-    assert "topic_ids=rag2026-0,rag2026-37" in completed.stdout
+    assert "topic_assignment=authenticated-input-manifest" in completed.stdout
+    assert "required_topic_count=119" in completed.stdout
+    assert "canary_topic_ids=rag2026-1,rag2026-18" in completed.stdout
     assert f"input_manifest_sha256={'a' * 64}" in completed.stdout
-    assert "sequential_topic_processes=1" in completed.stdout
+    assert "live_model_processes=1" in completed.stdout
 
 
-def test_worker_preflight_rejects_duplicate_topics() -> None:
+def test_worker_preflight_rejects_external_topic_selectors() -> None:
     completed = subprocess.run(
         [
             "bash",
@@ -59,8 +58,6 @@ def test_worker_preflight_rejects_duplicate_topics() -> None:
             "hf://buckets/private/trec_rag_2026/experiments/baseline-v1",
             "--topic",
             "rag2026-0",
-            "--topic",
-            "rag2026-0",
         ],
         cwd=REPO_ROOT,
         check=False,
@@ -69,7 +66,7 @@ def test_worker_preflight_rejects_duplicate_topics() -> None:
     )
 
     assert completed.returncode != 0
-    assert "unique" in completed.stderr
+    assert "unknown argument" in completed.stderr
 
 
 def test_dstack_template_is_pinned_private_and_gpu_bounded() -> None:
@@ -88,6 +85,15 @@ def test_dstack_template_is_pinned_private_and_gpu_bounded() -> None:
     assert value["spot_policy"] == "on-demand"
     assert value["idle_duration"] == "0s"
     assert value["max_price"] == 5.0
+    assert value["max_duration"] == "2h"
+
+    fallback = yaml.safe_load(H100_TEMPLATE.read_text(encoding="utf-8"))
+    assert fallback["resources"]["gpu"]["name"] == ["H100"]
+    assert fallback["resources"]["gpu"]["count"] == 1
+    assert fallback["resources"]["gpu"]["memory"] == "48GB.."
+    assert fallback["max_price"] == 5.0
+    assert fallback["max_duration"] == "2h"
+    assert fallback["spot_policy"] == "on-demand"
 
 
 def test_launcher_defaults_to_declined_preview_and_uses_clean_snapshot() -> None:
@@ -100,6 +106,9 @@ def test_launcher_defaults_to_declined_preview_and_uses_clean_snapshot() -> None
     assert '"$dstack_bin" apply' in source
     assert ' -y -d -- ' in source
     assert "--input-manifest-sha256" in source
+    assert "--gpu" in source
+    assert "rag26-retrieval-baseline-worker-h100.yaml" in source
+    assert "topic_ids" not in source
 
 
 def test_worker_checks_privacy_and_output_before_model_scoring() -> None:
@@ -108,14 +117,15 @@ def test_worker_checks_privacy_and_output_before_model_scoring() -> None:
     privacy_offset = source.index('buckets info "$bucket"')
     empty_offset = source.index('require_empty_prefix "$output_prefix"')
     model_offset = source.index("snapshot_download(model, revision=revision)")
-    scoring_offset = source.index("retrieval_baseline_runs score-topic")
+    scoring_offset = source.index("retrieval_baseline_remote_worker")
     assert privacy_offset < model_offset
     assert empty_offset < model_offset
     assert model_offset < scoring_offset
     assert "--no-managed-python" in source
     assert "--no-python-downloads" in source
-    assert "--cache-only" in source
-    assert "export-cache" in source
+    assert "replay-receipts" in source or "remote-scoring-receipt.json" in source
+    assert "remote-scoring-receipt.json" in source
     assert '"$input_prefix/input.tar.gz"' in source
     assert "extract-archive" in source
     assert 'cmp -- "$publication/SHA256SUMS" "$roundtrip/SHA256SUMS"' in source
+    assert "required_topic_count=119" in source
