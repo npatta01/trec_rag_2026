@@ -10,17 +10,20 @@
 
 ## Current Status
 
-- Tasks 1 and 2 are complete at commits `94ad0e4`, `b1a84db`, and the provider-schema fix
-  `e0c368f`; 33 combined focused tests pass.
+- Tasks 1 and 2 are complete at commits `94ad0e4`, `b1a84db`, the provider-schema fix
+  `e0c368f`, and the resume/repair safety fix `07df2d2`; 35 combined focused tests pass.
 - Task 3 ran topic `707` twice under separate private namespaces. Neither attempt produced a
   draft-to-splice pair: the first hit a provider schema rejection and the second required its Sol
   repair reservation for an over-limit initial draft.
 - The trial stopped after four Sol requests across the topic. No post-hoc pair evaluation was run.
-- Aggregate evidence and exact cost are in
+- Under the deadline decision, one fresh full-extraction topic (`897`) completed under the
+  corrected schema. Its invalid six-operation patch used the allowed splice-only repair; the
+  accepted two-operation final is a real draft/final pair.
+- The paired cheap evaluator and an evidence-only Luna review both prefer the final. Aggregate
+  evidence and exact cost are in
   `docs/superpowers/reports/2026-08-08-bounded-splice-revision-results.md`.
-- Next action: choose between one fresh topic under the corrected schema or a cheaper Luna-only
-  mechanical splice probe. Do not make another topic-707 Sol call without revisiting the user's
-  per-topic call limit.
+- Next action: use the topic-897 result as the best available submission-design evidence. Do not
+  run another topic or revision loop before the deadline.
 
 ## Global Constraints
 
