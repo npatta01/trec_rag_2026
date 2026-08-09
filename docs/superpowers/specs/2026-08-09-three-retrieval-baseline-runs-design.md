@@ -24,9 +24,11 @@ cutoff. They differ only in ordering:
 - A topic's document pool is the deduplicated union in
   `scoring/selection.json:union_pool`.
 - The original narrative is one semantic unit.
-- Each valid subnarrative is one semantic unit for document relevance, even
-  when it has multiple BM25 query variants.
-- Query variants remain distinct only for breadth evidence in run 3.
+- Each valid subnarrative is one semantic unit for document relevance and
+  breadth evidence, even when the plan contains multiple BM25 query variants.
+- The existing authenticated `facet:<subnarrative>:text` lane is the pooled
+  retrieval source. Planned query strings without retrieval-result lanes are
+  excluded because using them would require new retrieval.
 - A topic with zero valid subnarratives is invalid and must fail closed.
 - A document's best retrieval rank is the minimum source rank over every
   occurrence of that document in the retrieval audit.
@@ -36,8 +38,7 @@ cutoff. They differ only in ordering:
 For every topic, score every document in the complete union against:
 
 - the untouched narrative;
-- every subnarrative text; and
-- every BM25 query variant used by run 3.
+- every subnarrative text.
 
 Use the pinned `mixedbread-ai/mxbai-rerank-base-v2` scorer and the competition
 chunker (`chunk_max_characters: 3500`, `chunk_overlap_characters: 350`). Reject
@@ -80,22 +81,25 @@ where `L` is the number of lower values and `T` is the tied group size. For
 
 ## Shared topic-specific cutoff
 
-Let `D(d)` be a document's strongest semantic relevance:
+Let `A_u(d)` be the finite top-four weighted raw passage aggregate for document
+`d` and semantic unit `u`. For the narrative and for each subnarrative
+separately, compute the median and MAD over the complete document union.
 
-`D(d) = max(P_narrative(d), max_s P_subnarrative_s(d))`.
-
-For every topic:
-
-- if `MAD(D) > 0`, admit `d` when
-  `D(d) >= median(D) + 2.5 * 1.4826 * MAD(D)`;
-- if `MAD(D) = 0`, admit only documents with `D(d) > median(D)`;
-- if that produces an empty set, admit exactly the document with highest
-  narrative percentile, breaking ties by best retrieval rank and then bytewise
+- if `MAD_u > 0`, unit `u` admits `d` when
+  `A_u(d) >= median_u + 2.5 * 1.4826 * MAD_u`;
+- if `MAD_u = 0`, unit `u` admits only documents with
+  `A_u(d) > median_u`;
+- the topic eligible set is the union of documents admitted by the narrative
+  or any subnarrative;
+- if that union is empty, admit exactly the document with highest narrative raw
+  aggregate, breaking ties by best retrieval rank and then UTF-8 bytewise
   document ID.
 
+Percentiles are used only for run ordering; they never affect eligibility.
+
 This yields one eligible set `E_t` and one variable depth `k_t = |E_t|` shared
-by all three runs. Never pad a topic to 1,000 documents. The organizer ceiling
-still applies: fail if `k_t > 1000` rather than silently truncate.
+by all three runs. Never pad or truncate a topic to 1,000 documents: 1,000 is a
+per-query retrieval ceiling, not a fixed final run depth.
 
 ## Run 1: narrative
 
@@ -121,15 +125,16 @@ Then compute `combo = 0.5 * narrative + 0.5 * facet` and rank `E_t` by:
 
 ## Run 3: breadth of passage support
 
-For every document/query pair, perform overlap suppression and retain at most
-the top three passages. Then, for each query, select the globally best 100
-retained passage hits across the complete topic union, before applying `E_t`.
+For every document/subnarrative pair, perform overlap suppression and retain at
+most the top three passages. Then, for each subnarrative, select the globally
+best 100 retained passage hits across the complete topic union, before applying
+`E_t`.
 Ties use raw score descending, best retrieval rank ascending, document ID
 ascending, and span offsets ascending.
 
 For each eligible document:
 
-- `supported_query_count` is the number of distinct subnarrative BM25 queries
+- `supported_subnarrative_count` is the number of distinct subnarratives
   represented by at least one selected global hit;
 - `admitted_hit_count` is the total number of its selected global hits.
 
