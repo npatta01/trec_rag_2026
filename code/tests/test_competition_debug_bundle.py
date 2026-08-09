@@ -11,6 +11,7 @@ import pytest
 
 from offline_evaluation_fixture import TopicSpec, build_run
 from trec_rag.competition_debug_report import load_debug_report_data
+from trec_rag.friendly_report import ReportPrivacyError
 from trec_rag.offline_evaluation import (
     EvaluationError,
     JudgeOutcome,
@@ -275,3 +276,112 @@ def test_evaluation_overlay_rejects_aba_manifest_replacement_at_load_boundary(
         "metrics"
     ]["retrieval"]["per_topic"]["alpha-topic"]["ndcg@10"]
     assert overlay.manifest_sha256 == sha256(snapshot).hexdigest()
+
+
+def _evaluated_two_topic_data(tmp_path: Path):
+    from trec_rag.competition_debug_bundle import load_evaluation_overlay
+
+    fixture = build_run(
+        tmp_path,
+        (
+            TopicSpec("alpha-topic", "private alpha narrative"),
+            TopicSpec("beta-topic", "private beta narrative"),
+        ),
+    )
+    evaluation = build_evaluation_bundle(
+        retrieval_config_path=fixture.retrieval_config,
+        rag_config_path=fixture.rag_config,
+        work_dir=tmp_path / "evaluation",
+        repository_root=REPOSITORY_ROOT,
+        cache_root=tmp_path / "judge-cache",
+        qrels_path=fixture.qrels(),
+        judge=lambda _task: JudgeOutcome(status="completed", support_label="FS"),
+        judge_settings=JudgeSettings(
+            provider="fixture",
+            model="fixture-model",
+            thinking="disabled",
+            temperature=0.0,
+            system_prompt="fixture prompt",
+            agent_binary="fixture-agent",
+        ),
+        created_utc="2026-08-09T00:00:00+00:00",
+    )
+    data = load_debug_report_data(
+        fixture.retrieval_config,
+        rag_config_path=fixture.rag_config,
+    )
+    overlay = load_evaluation_overlay(evaluation.manifest_path, fixture.topic_ids)
+    return fixture, data, overlay
+
+
+def test_summary_html_shows_health_scores_and_unavailability_without_private_text(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import build_run_summary, render_bundle_summary
+
+    fixture, data, overlay = _evaluated_two_topic_data(tmp_path)
+    summary = build_run_summary(data, overlay)
+    private_docids = tuple(fixture.docids.values())
+
+    page = render_bundle_summary(summary, denylist=private_docids)
+
+    assert page.startswith("<!doctype html>")
+    assert "Run summary" in page
+    assert "Retrieval relevance" in page
+    assert "Nugget or obligation coverage" in page
+    assert "Answer and citation quality" in page
+    assert "Unavailable" in page
+    assert "no released gold-nugget file" in page
+    assert "private alpha narrative" not in page
+    assert all(docid not in page for docid in private_docids)
+    assert 'href="topics/alpha-topic.html"' in page
+    assert 'data-sort-kind="number"' in page
+    assert 'type="search"' in page
+
+
+def test_summary_html_keeps_metric_families_definitions_and_macro_rules(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import build_run_summary, render_bundle_summary
+
+    _fixture, data, overlay = _evaluated_two_topic_data(tmp_path)
+    page = render_bundle_summary(build_run_summary(data, overlay), denylist=())
+
+    assert "Unweighted mean over the topic cells" in page
+    assert "Normalized discounted cumulative gain" in page
+    assert page.index("Retrieval relevance") < page.index("Nugget or obligation coverage")
+    assert page.index("Nugget or obligation coverage") < page.index("Answer and citation quality")
+    retrieval_names = sorted(overlay.families[0].definitions)
+    assert [page.index(f'data-metric="retrieval:{name}"') for name in retrieval_names] == sorted(
+        page.index(f'data-metric="retrieval:{name}"') for name in retrieval_names
+    )
+
+
+def test_summary_without_evaluation_is_explicit_and_keeps_official_row_order(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import build_run_summary, render_bundle_summary
+
+    fixture = build_run(
+        tmp_path,
+        (TopicSpec("alpha-topic", "alpha"), TopicSpec("beta-topic", "beta")),
+    )
+    data = load_debug_report_data(fixture.retrieval_config)
+    page = render_bundle_summary(build_run_summary(data, None), denylist=())
+
+    assert "Evaluation not supplied" in page
+    assert page.index('data-topic-id="alpha-topic"') < page.index('data-topic-id="beta-topic"')
+    assert "0.000000" not in page
+
+
+def test_summary_privacy_scan_rejects_a_run_derived_collision(tmp_path: Path) -> None:
+    from trec_rag.competition_debug_bundle import build_run_summary, render_bundle_summary
+
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    data = load_debug_report_data(fixture.retrieval_config)
+
+    with pytest.raises(ReportPrivacyError, match="private input value"):
+        render_bundle_summary(
+            build_run_summary(data, None),
+            denylist=("alpha-topic",),
+        )
