@@ -93,14 +93,14 @@ def test_dstack_template_is_pinned_private_and_gpu_bounded() -> None:
     assert value["spot_policy"] == "on-demand"
     assert value["idle_duration"] == "0s"
     assert value["max_price"] == 5.0
-    assert value["max_duration"] == "1h45m"
+    assert value["max_duration"] == "105m"
 
     fallback = yaml.safe_load(H100_TEMPLATE.read_text(encoding="utf-8"))
     assert fallback["resources"]["gpu"]["name"] == ["H100"]
     assert fallback["resources"]["gpu"]["count"] == 1
     assert fallback["resources"]["gpu"]["memory"] == "48GB.."
     assert fallback["max_price"] == 5.0
-    assert fallback["max_duration"] == "1h45m"
+    assert fallback["max_duration"] == "105m"
     assert fallback["spot_policy"] == "on-demand"
 
 

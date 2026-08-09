@@ -13,7 +13,7 @@
 - Work only in `.worktrees/retrieval-baseline-advisor-runs` on `codex/retrieval-baseline-advisor-runs`.
 - Source artifact is `outputs/facet-deepseek-b40-v3`, whose export code commit must equal current `origin/master` (`05fdf35d858bf52bec2843c699a4bfd85d4b8c61`) and whose export manifest SHA-256 is `cb5a81608c48a5c43692ada0c9121cd96b7160589f08f5bbaf4e20612001463a`.
 - Use the existing shared cache read-only while building the bundle. Remote inference writes to a new isolated cache.
-- Use H200 preferred and H100 fallback with `max_duration: 1h45m`; after two bounded failed attempts costing about $1.08 total, the relaunch remains bounded below $10 total at the configured `$5/hour` ceiling.
+- Use H200 preferred and H100 fallback with `max_duration: 105m`; after two bounded failed attempts costing about $1.08 total, the relaunch remains bounded below $10 total at the configured `$5/hour` ceiling.
 - The exact declined dstack preview and price must be shown before launch. The user’s approval authorizes the implementation and the bounded run, but the preview remains the final infrastructure safety check.
 - The remote worker must process `rag2026-1` and `rag2026-18` first and stop immediately if their fresh-cache replay is not byte-identical or requires a model batch.
 - Never overwrite or delete existing shared cache rows. Any score conflict aborts the merge.
