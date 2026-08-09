@@ -8,6 +8,8 @@ already validated offline-evaluation manifest into typed, read-only views.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 import html
 from html.parser import HTMLParser
@@ -15,7 +17,9 @@ import math
 import os
 import re
 import shutil
+import stat
 import statistics
+import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -23,7 +27,7 @@ from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from trec_rag.competition_debug_report import (
     DebugReportData,
@@ -952,6 +956,7 @@ def _summary_denylist(data: DebugReportData) -> tuple[str, ...]:
 
 _BUNDLE_SCHEMA_VERSION = "competition_debug_report_bundle_v1"
 _SAFE_TOPIC_FILENAME = re.compile(r"[^/\\\x00-\x1f\x7f]+")
+_FileIdentity = tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -972,6 +977,28 @@ class _PageReceipt:
         return value
 
 
+def _lstat_identity(path: Path, *, directory: bool = False) -> _FileIdentity:
+    try:
+        record = path.lstat()
+    except FileNotFoundError as error:
+        kind = "directory" if directory else "file"
+        raise ValueError(f"bundle {kind} disappeared: {path}") from error
+    if stat.S_ISLNK(record.st_mode):
+        raise ValueError(f"bundle path must not be a symbolic link: {path}")
+    expected = stat.S_ISDIR if directory else stat.S_ISREG
+    if not expected(record.st_mode):
+        kind = "directory" if directory else "regular file"
+        raise ValueError(f"bundle path is not a {kind}: {path}")
+    return (record.st_dev, record.st_ino)
+
+
+def _identity_matches(path: Path, expected: _FileIdentity, *, directory: bool = False) -> bool:
+    try:
+        return _lstat_identity(path, directory=directory) == expected
+    except ValueError:
+        return False
+
+
 def _canonical_json_bytes(value: object) -> bytes:
     return (
         json.dumps(
@@ -984,19 +1011,22 @@ def _canonical_json_bytes(value: object) -> bytes:
     )
 
 
-def _write_bundle_file(path: Path, payload: bytes) -> None:
+def _write_bundle_file(path: Path, payload: bytes) -> _FileIdentity:
     """Exclusively create one private bundle file and durably write its bytes."""
     descriptor = os.open(
         path,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL,
         0o600,
     )
+    identity: _FileIdentity | None = None
     try:
         with os.fdopen(descriptor, "wb") as destination:
             descriptor = -1
             destination.write(payload)
             destination.flush()
             os.fsync(destination.fileno())
+            record = os.fstat(destination.fileno())
+            identity = (record.st_dev, record.st_ino)
     except Exception:
         if descriptor != -1:
             os.close(descriptor)
@@ -1005,6 +1035,9 @@ def _write_bundle_file(path: Path, payload: bytes) -> None:
         except FileNotFoundError:
             pass
         raise
+    if identity is None:
+        raise OSError("bundle file identity was not captured")
+    return identity
 
 
 def _file_receipt(path: Path, relative_path: str, *, topic_id: str | None = None) -> _PageReceipt:
@@ -1023,7 +1056,11 @@ def _file_receipt(path: Path, relative_path: str, *, topic_id: str | None = None
 
 
 def _hash_matches(path: Path, expected_sha256: str, expected_bytes: int) -> bool:
-    actual = _file_receipt(path, "")
+    try:
+        _lstat_identity(path)
+        actual = _file_receipt(path, "")
+    except (OSError, ValueError):
+        return False
     return actual.bytes == expected_bytes and actual.sha256 == expected_sha256
 
 
@@ -1034,6 +1071,37 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    """Atomically rename a complete staging directory without replacing a target."""
+    if sys.platform != "linux":
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-replace directory rename is unavailable on this platform",
+        )
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOTSUP, "atomic no-replace directory rename is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,
+        os.fsencode(source),
+        -100,
+        os.fsencode(destination),
+        1,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), str(destination))
 
 
 def _safe_topic_filename(topic_id: str) -> str:
@@ -1089,34 +1157,67 @@ def _local_hrefs(page: str) -> tuple[str, ...]:
     return tuple(
         href
         for href in parser.hrefs
-        if not href.startswith(("http://", "https://", "mailto:", "#"))
+        if not href.startswith(("http://", "https://", "mailto:"))
     )
 
 
+def _page_anchors(page: str) -> frozenset[str]:
+    class AnchorParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.anchors: set[str] = set()
+
+        def handle_starttag(
+            self, tag: str, attrs: list[tuple[str, str | None]]
+        ) -> None:
+            attributes = dict(attrs)
+            for key in ("id", "name"):
+                value = attributes.get(key)
+                if value:
+                    self.anchors.add(value)
+
+    parser = AnchorParser()
+    parser.feed(page)
+    return frozenset(parser.anchors)
+
+
 def _validate_page_links(staging: Path, page: Path) -> None:
-    for href in _local_hrefs(page.read_text(encoding="utf-8")):
+    page_text = page.read_text(encoding="utf-8")
+    for href in _local_hrefs(page_text):
         parsed = urlsplit(href)
         if parsed.scheme or parsed.netloc or parsed.path.startswith("/"):
             raise ValueError(f"bundle page contains an unsafe link: {href}")
         relative = parsed.path
-        if not relative:
-            continue
-        destination = (page.parent / relative).resolve()
-        if not destination.is_relative_to(staging) or not destination.is_file():
+        destination = page if not relative else (page.parent / relative).resolve()
+        if relative and (
+            not destination.is_relative_to(staging) or not destination.is_file()
+        ):
             raise ValueError(f"bundle page link does not resolve: {href}")
+        fragment = unquote(parsed.fragment)
+        if fragment:
+            if not destination.is_file() or fragment not in _page_anchors(
+                destination.read_text(encoding="utf-8")
+            ):
+                raise ValueError(f"bundle page fragment does not resolve: {href}")
 
 
 def _validate_staging(
     staging: Path,
+    staging_identity: _FileIdentity,
     data: DebugReportData,
     index_receipt: _PageReceipt,
     topic_receipts: Sequence[_PageReceipt],
+    file_identities: Mapping[str, _FileIdentity],
 ) -> None:
+    if not _identity_matches(staging, staging_identity, directory=True):
+        raise ValueError("bundle staging directory identity changed")
     expected_files = {Path(index_receipt.path), *(Path(item.path) for item in topic_receipts)}
+    if (staging / "bundle-manifest.json").exists():
+        expected_files.add(Path("bundle-manifest.json"))
     actual_files = {
         path.relative_to(staging)
         for path in staging.rglob("*")
-        if path.is_file()
+        if not path.is_dir() or path.is_symlink()
     }
     if actual_files != expected_files:
         raise ValueError("bundle staging contains unlisted or missing files")
@@ -1130,12 +1231,19 @@ def _validate_staging(
     pages = (index_receipt, *topic_receipts)
     for receipt in pages:
         path = staging / Path(receipt.path)
+        identity = file_identities.get(receipt.path)
+        if identity is None or not _identity_matches(path, identity):
+            raise ValueError(f"bundle file identity changed for {receipt.path}")
         if not _hash_matches(path, receipt.sha256, receipt.bytes):
             raise ValueError(f"bundle hash reconciliation failed for {receipt.path}")
+        if not _identity_matches(path, identity):
+            raise ValueError(f"bundle file identity changed for {receipt.path}")
         _validate_page_links(staging, path)
 
 
-def _cleanup_staging(staging: Path | None, target: Path) -> None:
+def _cleanup_staging(
+    staging: Path | None, staging_identity: _FileIdentity | None, target: Path
+) -> None:
     if staging is None:
         return
     try:
@@ -1143,12 +1251,48 @@ def _cleanup_staging(staging: Path | None, target: Path) -> None:
             return
         if not staging.name.startswith(f".{target.name}.") or not staging.name.endswith(".tmp"):
             return
-        if staging.is_symlink():
+        if staging_identity is None or not _identity_matches(
+            staging, staging_identity, directory=True
+        ):
             return
-        if staging.is_dir():
-            shutil.rmtree(staging)
+        shutil.rmtree(staging)
     except FileNotFoundError:
         pass
+
+
+def _render_and_write_topic(
+    topic: TopicReport,
+    *,
+    navigation: TopicPageNavigation,
+    path: Path,
+    relative_path: str,
+) -> tuple[_PageReceipt, _FileIdentity]:
+    rendered = render_debug_topic_page(topic, navigation=navigation)
+    payload = rendered.encode("utf-8")
+    del rendered
+    written_identity = _write_bundle_file(path, payload)
+    del payload
+    if written_identity is None:
+        written_identity = _lstat_identity(path)
+    return (
+        _file_receipt(path, relative_path, topic_id=topic.topic_id),
+        written_identity,
+    )
+
+
+def _validate_manifest_file(
+    staging: Path,
+    receipt: _PageReceipt,
+    file_identities: Mapping[str, _FileIdentity],
+) -> None:
+    path = staging / Path(receipt.path)
+    identity = file_identities.get(receipt.path)
+    if identity is None or not _identity_matches(path, identity):
+        raise ValueError("bundle manifest file identity changed")
+    if not _hash_matches(path, receipt.sha256, receipt.bytes):
+        raise ValueError("bundle manifest hash reconciliation failed")
+    if not _identity_matches(path, identity):
+        raise ValueError("bundle manifest file identity changed")
 
 
 def build_bundle_from_data(
@@ -1171,6 +1315,7 @@ def build_bundle_from_data(
     )
     summary = build_run_summary(data, evaluation)
     staging: Path | None = None
+    staging_identity: _FileIdentity | None = None
     try:
         staging = Path(
             tempfile.mkdtemp(
@@ -1179,14 +1324,21 @@ def build_bundle_from_data(
                 suffix=".tmp",
             )
         )
+        staging_identity = _lstat_identity(staging, directory=True)
         staging.chmod(0o700)
         topics_dir = staging / "topics"
         topics_dir.mkdir(mode=0o700)
 
         index_body = render_bundle_summary(summary, denylist=_summary_denylist(data)).encode("utf-8")
         index_path = staging / "index.html"
-        _write_bundle_file(index_path, index_body)
+        index_written_identity = _write_bundle_file(index_path, index_body)
+        del index_body
+        if index_written_identity is None:
+            index_written_identity = _lstat_identity(index_path)
         index_receipt = _file_receipt(index_path, "index.html")
+        file_identities: dict[str, _FileIdentity] = {
+            "index.html": index_written_identity
+        }
 
         topic_receipts: list[_PageReceipt] = []
         total_topics = len(data.topics)
@@ -1198,14 +1350,24 @@ def build_bundle_from_data(
                 previous_href=None if position == 0 else f"{topic_filenames[position - 1]}",
                 next_href=None if position + 1 == total_topics else f"{topic_filenames[position + 1]}",
             )
-            body = render_debug_topic_page(topic, navigation=navigation).encode("utf-8")
             topic_path = topics_dir / filename
-            _write_bundle_file(topic_path, body)
-            topic_receipts.append(
-                _file_receipt(topic_path, f"topics/{filename}", topic_id=topic.topic_id)
+            topic_receipt, topic_identity = _render_and_write_topic(
+                topic,
+                navigation=navigation,
+                path=topic_path,
+                relative_path=f"topics/{filename}",
             )
+            topic_receipts.append(topic_receipt)
+            file_identities[topic_receipt.path] = topic_identity
 
-        _validate_staging(staging, data, index_receipt, topic_receipts)
+        _validate_staging(
+            staging,
+            staging_identity,
+            data,
+            index_receipt,
+            topic_receipts,
+            file_identities,
+        )
         pages = (index_receipt, *topic_receipts)
         manifest: dict[str, Any] = {
             "schema_version": _BUNDLE_SCHEMA_VERSION,
@@ -1235,19 +1397,44 @@ def build_bundle_from_data(
                 break
             manifest["total_bytes"] = total
         manifest_path = staging / "bundle-manifest.json"
-        _write_bundle_file(manifest_path, body)
+        manifest_bytes = len(body)
+        manifest_sha256 = sha256(body).hexdigest()
+        manifest_written_identity = _write_bundle_file(manifest_path, body)
+        if manifest_written_identity is None:
+            manifest_written_identity = _lstat_identity(manifest_path)
         manifest_receipt = _file_receipt(manifest_path, "bundle-manifest.json")
-        if not _hash_matches(
-            manifest_path, manifest_receipt.sha256, manifest_receipt.bytes
-        ) or manifest_receipt.bytes != len(body) or manifest_receipt.sha256 != sha256(body).hexdigest():
+        del body
+        file_identities[manifest_receipt.path] = manifest_written_identity
+        if (
+            manifest_receipt.bytes != manifest_bytes
+            or manifest_receipt.sha256 != manifest_sha256
+        ):
             raise ValueError("bundle manifest hash reconciliation failed")
+        _validate_manifest_file(staging, manifest_receipt, file_identities)
         _fsync_directory(topics_dir)
         _fsync_directory(staging)
         _fsync_directory(target.parent)
+        _validate_staging(
+            staging,
+            staging_identity,
+            data,
+            index_receipt,
+            topic_receipts,
+            file_identities,
+        )
+        _validate_manifest_file(staging, manifest_receipt, file_identities)
         if target.exists() or target.is_symlink():
             raise ValueError("bundle output must remain absent before publication")
-        os.rename(staging, target)
+        if not _identity_matches(staging, staging_identity, directory=True):
+            raise ValueError("bundle staging directory identity changed")
+        _rename_noreplace(staging, target)
         staging = None
+        try:
+            _fsync_directory(target.parent)
+        except Exception as error:
+            raise OSError(
+                "bundle published but target parent durability fsync failed"
+            ) from error
         all_bytes = sum(page.bytes for page in pages) + manifest_receipt.bytes
         return DebugReportBundleReceipt(
             schema_version=_BUNDLE_SCHEMA_VERSION,
@@ -1263,7 +1450,7 @@ def build_bundle_from_data(
             evaluation_included=evaluation is not None,
         )
     finally:
-        _cleanup_staging(staging, target)
+        _cleanup_staging(staging, staging_identity, target)
 
 
 __all__ = [
