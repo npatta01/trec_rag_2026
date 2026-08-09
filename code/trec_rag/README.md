@@ -807,6 +807,151 @@ The RAG runner does not branch on retrieval mode; it validates and consumes the
 same typed handoff produced by fixed retrieval. Do not start hosted RAG
 generation as part of a retrieval smoke unless it is separately authorized.
 
+## Cache-first variable-depth retrieval baselines
+
+This path creates three organizer-facing retrieval runs from the authenticated
+`facet-deepseek-b40-v3` union without rerunning retrieval. It scores only one
+deterministic candidate core per topic. For every source lane `u`, let `A_u(d)`
+be the existing aggregate score, `m_u` its median, and `MAD_u` the median
+absolute deviation. A document is admitted by that lane when:
+
+```text
+MAD_u > 0:  A_u(d) >= m_u + 2.5 * 1.4826 * MAD_u
+MAD_u = 0:  A_u(d) >  m_u
+
+C_t = union of the original-narrative admissions and every facet:text admission
+k_t = |C_t|
+```
+
+If the union is empty, exactly the strongest original-narrative document is
+used. Each authenticated `facet:<subnarrative>:text` lane is one pooled
+subnarrative source; the planned BM25 query strings are not treated as separate
+result pools because the source artifact has no separate result lane for them.
+The same variable `k_t` and document set are used in all three submissions:
+
+```text
+authenticated source lanes
+          |
+          v
+robust threshold each lane ----> union C_t (shared cutoff)
+                                      |
+                  score C_t x {narrative + subnarratives} once
+                                      |
+              +-----------------------+-----------------------+
+              |                       |                       |
+              v                       v                       v
+       narrative order       narrative+facet order      evidence breadth
+       P(narrative)           .5 P(narrative) +          distinct supported
+                              .5 [.7 best facet +         subnarratives, then
+                                  .3 second facet]        strong passage count
+```
+
+Passage breadth uses every candidate passage, suppresses overlapping passages
+within each document/subnarrative, retains at most three, robust-thresholds raw
+passage scores per subnarrative, and then orders by distinct supported
+subnarratives, strong-passage count, and the combo score. Percentiles only
+normalize ordering; they do not determine eligibility.
+
+Build the sealed 119-topic input from the latest local artifact and shared
+cache. The destination must be absent or empty. Generated inputs, archives,
+receipts, model scores, and runs are private and must remain untracked:
+
+```bash
+BASELINE_SOURCE=outputs/facet-deepseek-b40-v3
+BASELINE_PRIVATE=outputs/retrieval-baseline-candidate-core-v1
+BASELINE_INPUT="$BASELINE_PRIVATE/input"
+BASELINE_ARCHIVE="$BASELINE_PRIVATE/input.tar.gz"
+mkdir -p "$BASELINE_PRIVATE"
+
+mapfile -t BASELINE_TOPICS < <(
+  .venv/bin/python - "$BASELINE_SOURCE/retrieval_export_manifest.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+for topic_id in value["selected_topic_ids"]:
+    print(topic_id)
+PY
+)
+BASELINE_TOPIC_ARGS=()
+for topic_id in "${BASELINE_TOPICS[@]}"; do
+  BASELINE_TOPIC_ARGS+=(--topic "$topic_id")
+done
+
+PYTHONPATH=code .venv/bin/python \
+  -m trec_rag.retrieval_baseline_input_bundle build \
+  --source-dir "$BASELINE_SOURCE" \
+  --document-store cache/documents/v1 \
+  --score-cache cache/reranker \
+  --output-dir "$BASELINE_INPUT" \
+  --require-official-topic-set \
+  "${BASELINE_TOPIC_ARGS[@]}"
+
+PYTHONPATH=code .venv/bin/python \
+  -m trec_rag.retrieval_baseline_input_bundle create-archive \
+  --input-dir "$BASELINE_INPUT" --output "$BASELINE_ARCHIVE"
+sha256sum "$BASELINE_INPUT/input-manifest.json" "$BASELINE_ARCHIVE"
+```
+
+Upload only to a new prefix inside a confirmed-private Hugging Face Bucket.
+The worker also verifies bucket privacy, exact one-file input, and an empty
+output prefix before loading the model:
+
+```bash
+BASELINE_INPUT_PREFIX=hf://buckets/Npatta01/trec_mlm_2026/artifacts/retrieval-baseline-candidate-core-v1
+BASELINE_OUTPUT_PREFIX=hf://buckets/Npatta01/trec_mlm_2026/experiments/retrieval-baseline-candidate-core-v1
+.venv/bin/hf buckets info hf://buckets/Npatta01/trec_mlm_2026 --format json
+.venv/bin/hf buckets cp "$BASELINE_ARCHIVE" "$BASELINE_INPUT_PREFIX/input.tar.gz"
+```
+
+Preview H200 first. Preview is declined by default and must be inspected before
+launch. H100 is only a fallback when no acceptable H200 offer exists. Both
+profiles have a one-hour-45-minute duration and `$5/hour` ceiling, so either
+single job has a hard `$8.75` maximum:
+
+```bash
+BASELINE_MANIFEST_SHA=$(sha256sum "$BASELINE_INPUT/input-manifest.json" | cut -d' ' -f1)
+bash code/tools/apply_retrieval_baseline_worker.sh --preview --gpu h200 \
+  --name rag26-baseline-core-v1 --task-name candidate-core-all \
+  --input-prefix "$BASELINE_INPUT_PREFIX" \
+  --input-manifest-sha256 "$BASELINE_MANIFEST_SHA" \
+  --output-prefix "$BASELINE_OUTPUT_PREFIX"
+
+# Run only after accepting the exact preview offer.
+bash code/tools/apply_retrieval_baseline_worker.sh --launch --gpu h200 \
+  --name rag26-baseline-core-v1 --task-name candidate-core-all \
+  --input-prefix "$BASELINE_INPUT_PREFIX" \
+  --input-manifest-sha256 "$BASELINE_MANIFEST_SHA" \
+  --output-prefix "$BASELINE_OUTPUT_PREFIX"
+```
+
+The worker gates the full run on `rag2026-1` and `rag2026-18`, retains one
+loaded model for all 119 topics, exports the completed cache, and proves a fresh
+all-topic cache-only replay before publishing its terminal manifest. If the job
+is interrupted, keep the partial prefix for diagnosis and use a new task name
+and new empty output prefix; publication prefixes are immutable.
+
+After completion, download, verify, and merge transactionally into the shared
+local cache. Collection first replays the publication in a fresh cache, then
+locks and strictly imports scores into `cache/reranker`, and finally reproduces
+all matrices and runs from the shared cache with zero model batches:
+
+```bash
+BASELINE_SOURCE_REVISION=$(git rev-parse HEAD)
+bash code/tools/collect_retrieval_baseline_worker.sh \
+  --publication-prefix "$BASELINE_OUTPUT_PREFIX" \
+  --publication-dir "$BASELINE_PRIVATE/publication" \
+  --input-dir "$BASELINE_INPUT" \
+  --input-manifest-sha256 "$BASELINE_MANIFEST_SHA" \
+  --source-revision "$BASELINE_SOURCE_REVISION" \
+  --shared-cache cache/reranker \
+  --work-root "$BASELINE_PRIVATE/collection-work" \
+  --output-dir "$BASELINE_PRIVATE/final"
+```
+
+Do not submit a run unless its collection receipt reports 119 topics, both
+fresh and shared-cache replays report zero misses/model batches, all three TREC
+files contain exactly the same per-topic document sets, and topic depths vary
+without padding or truncation.
+
 ## Topic-record source geometry
 
 `topic_geometry.py` derives immutable validation geometry once per exact UTF-8
@@ -2108,3 +2253,14 @@ Outputs: a six-column TREC run and one document row per topic, both shaped for
 query-relevant chunks via `trec_rag.chunking.SemanticTextChunker` instead of being left for the
 generator to head-truncate. Validation: ranks are dense and scores non-increasing so
 `load_trec_run` accepts the output, and duplicate docids are collapsed to their best rank.
+
+### `retrieval_baseline_runs.py`
+
+Implements the authenticated matrix and ordering kernel used by the canonical
+all-topic workflow in [Cache-first variable-depth retrieval baselines](#cache-first-variable-depth-retrieval-baselines).
+It accepts an explicit candidate core for every topic, scores only those
+documents against the untouched narrative and pooled subnarrative texts, and
+exports narrative, combo, and breadth orderings over that same core. The
+all-topic worker and collector are the supported production entrypoints; do not
+bypass their canary, publication, fresh-replay, or cache-merge checks with a
+manual `score-topic` invocation.
