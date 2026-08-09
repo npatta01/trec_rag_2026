@@ -981,7 +981,9 @@ If a run is interrupted, change only its local config from `mode: create` to `mo
 repeat the same command. Multi-stage resume authenticates the complete run identity, resumes an
 existing per-topic state, creates a topic that never started, and publishes no organizer JSONL
 until every selected final row passes local validation. Multi-stage `overwrite` is intentionally
-unsupported; use a fresh experiment ID for a materially different run.
+unsupported; use a fresh experiment ID for a materially different run. If any topic or final-row
+validation fails, the runner prints each topic ID and sanitized exception and records the same
+details in `work/failures.json`; resume remains the recovery path.
 
 ## Private post-run competition debug report
 
@@ -2038,11 +2040,13 @@ query-relevant chunks via `trec_rag.chunking.SemanticTextChunker` instead of bei
 generator to head-truncate. Validation: ranks are dense and scores non-increasing so
 `load_trec_run` accepts the output, and duplicate docids are collapsed to their best rank.
 
-### Bounded narrative-revision prototype
+### Bounded narrative revision
 
-`narrative_blueprint_trial` has an opt-in, throwaway one-topic experiment for testing whether a
-post-draft, evidence-only omission audit followed by one bounded Sol splice revision improves
-paired nugget coverage. The revision response is a strict `keep_draft`/`edit` splice contract;
+`narrative_blueprint_trial` retains legacy throwaway experiment modes, but its opt-in bounded-
+revision state machine is also the supported per-topic engine used by
+`competition_rag_multistage`. The one-topic CLI is useful for smoke runs and diagnosis; the
+competition runner supplies full-run orchestration, concurrency, failure reporting, and atomic
+publication. The revision response is a strict `keep_draft`/`edit` splice contract;
 each new object must be one sentence intended to state one atomic claim, with one strongest
 citation by default and at most two. Each citation must be in the topic-wide authenticated domain
 and in the selected evidence linked to that operation's named audit cards. A structurally valid,
@@ -2051,8 +2055,9 @@ surviving draft, named audit cards, and selected evidence. Local code applies on
 pass all five support, atomicity, materiality, redundancy, and replacement-safety gates; malformed
 or unacceptable screen output preserves the validated draft. Old trial state cannot resume under
 a changed splice or screen contract. Give each experiment a new ignored local config and output
-namespace. Run topics separately; this driver is not the production competition path and never
-reads gold nuggets, qrels, TREC runs, full-text archives, or RAGDoll results during generation.
+namespace. The one-topic CLI runs topics separately; both it and the production multi-stage
+runner consume only the authenticated handoff and never read gold nuggets, qrels, TREC runs,
+full-text archives, or RAGDoll results during generation.
 
 ```bash
 PYTHONPATH=code .venv/bin/python -m trec_rag.narrative_blueprint_trial \

@@ -2156,6 +2156,14 @@ def test_openrouter_uses_an_openai_compatible_http_transport() -> None:
     assert raw["id"] == "response-1"
 
 
+def test_openrouter_generator_closes_its_owned_http_client() -> None:
+    generator = _openrouter_generator()
+
+    generator.close()
+
+    assert generator._http_client.is_closed
+
+
 def test_openrouter_honors_an_http_date_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -113,6 +113,91 @@ def test_new_object_must_be_one_terminal_sentence() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The U.S. government reported a 12 percent increase.",
+        "Sept. 5 marked the first outage.",
+        "Acme Inc. said the plant would close.",
+        "The report cited Rep. Smith on the timeline.",
+    ],
+)
+def test_new_object_accepts_one_sentence_with_common_abbreviations(text: str) -> None:
+    operations = _validate(
+        _draft(),
+        {
+            "decision": "edit",
+            "operations": [
+                {
+                    "start_index": 0,
+                    "delete_count": 0,
+                    "new_object": {
+                        "text": text,
+                        "citations": ["doc-insert"],
+                    },
+                    "audit_card_ids": ["a001"],
+                }
+            ],
+        },
+    )
+
+    assert operations is not None
+    assert operations[0].text == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The owner was Acme Inc. The plant then closed.",
+        "The owner was Acme Inc. Operations ceased immediately.",
+        "The agency was in the U.S. It reported the closure.",
+        "The agency was in the U.S. Officials reported the closure.",
+        "The proposal applied only within the U.S. Congress rejected it.",
+        "Funding came from the U.S. Federal regulators later objected.",
+    ],
+)
+def test_new_object_rejects_sentence_break_after_an_abbreviation(text: str) -> None:
+    with pytest.raises(SpliceValidationError, match="one terminal sentence"):
+        _validate(
+            _draft(),
+            {
+                "decision": "edit",
+                "operations": [
+                    {
+                        "start_index": 0,
+                        "delete_count": 0,
+                        "new_object": {
+                            "text": text,
+                            "citations": ["doc-insert"],
+                        },
+                        "audit_card_ids": ["a001"],
+                    }
+                ],
+            },
+        )
+
+
+def test_empty_citations_reports_the_failed_lower_bound() -> None:
+    with pytest.raises(SpliceValidationError, match="at least 1 item"):
+        _validate(
+            _draft(),
+            {
+                "decision": "edit",
+                "operations": [
+                    {
+                        "start_index": 0,
+                        "delete_count": 0,
+                        "new_object": {
+                            "text": "A supported claim.",
+                            "citations": [],
+                        },
+                        "audit_card_ids": ["a001"],
+                    }
+                ],
+            },
+        )
+
+
 def test_new_object_citations_must_come_from_its_named_audit_cards() -> None:
     draft = _draft()
     payload = {

@@ -11,9 +11,11 @@
 ## Global Constraints
 
 - Reuse only `outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json`; never rerun retrieval.
-- Do not change `competition_rag.py`, models, audit grouping, splice, or Luna screen behavior. The
-  post-review v6 patch may change only transport classification, receipt recovery matching, and
-  deterministic invalid-draft repair as recorded in Completion Evidence.
+- Keep models, audit grouping, and semantic call ceilings unchanged. The post-review v6 patch may
+  change transport classification, receipt recovery matching, and deterministic invalid-draft
+  repair. The v7 review-hardening patch may tighten splice validation and ambiguous screen
+  recovery, close owned HTTP clients, improve resume bookkeeping, and add durable failure
+  diagnostics as recorded in Completion Evidence.
 - Keep the existing maximum of three Sol reservations per topic.
 - Keep single-pass and multi-stage run IDs, output directories, work state, and cached rows completely separate.
 - Reject `experiment.mode: overwrite`; create and resume are the only multi-stage modes.
@@ -307,18 +309,21 @@ Completed 2026-08-09 in linked worktree `hardened-splice-three-topic` on branch
 - Static verification: Ruff passed for the new runner and tests; `git diff --check` passed.
 - Post-review focused verification: 227 RAG, handoff, bounded-revision, splice, and
   operation-screen tests passed.
-- Post-review full verification: 2,790 tests passed, 19 skipped, and 60 subtests passed in 124.70
-  seconds.
+- Post-review v7 full verification: 2,804 tests passed, 19 skipped, and 60 subtests passed in
+  103.89 seconds.
 - A first full-suite attempt found six stale `/tmp/trec-rag-cache-shards/fixture-pytest-0-*`
   collisions. After deleting only those generated fixtures, the clean rerun passed completely;
   the regenerated disposable fixture and external temp directories were removed afterward.
 - Scope audit against pre-implementation commit `1e306fc8`: the single-pass runner is unchanged.
-  The promoted state machine was subsequently bumped to the v6 contract after independent review
-  found three resume/liveness defects; the fixes separate transient transport failures, bind crash
-  recovery to the exact receipt ordinal/stage, and spend the existing repair allowance on a
-  deterministically invalid initial draft before skipping later stages.
-- Independent Sol review and its follow-up re-check reported no Critical findings and approved the
-  v6 fixes with no remaining Important findings.
+  The promoted state machine was subsequently bumped to v6 after independent review found three
+  resume/liveness defects; those fixes separate transient transport failures, bind crash recovery
+  to the exact receipt ordinal/stage, and spend the existing repair allowance on a deterministically
+  invalid initial draft before skipping later stages. The v7 hardening follow-up closes owned HTTP
+  clients, removes async busy-polling, validates recovered splice contracts, rejects ambiguous
+  operation-screen recovery, preserves abbreviation-aware atomic sentence checks, and makes
+  multi-topic failures visible without changing prompts, models, or call ceilings.
+- Independent Sol review found no Critical issues. Its v7 follow-up identified two runtime and one
+  documentation consistency issue; all three were addressed before the final verification rerun.
 - Privacy audit: all three local configs remain ignored; no output, private state, handoff content,
   or provider response was staged. No hosted model call was made during implementation or
   verification.

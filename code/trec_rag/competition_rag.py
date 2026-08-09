@@ -499,6 +499,11 @@ class OpenRouterJsonGenerator:
             max_retries=0,
         )
 
+    def close(self) -> None:
+        """Close the owned HTTP connection pool."""
+
+        self._client.close()
+
     def complete_json(
         self,
         *,

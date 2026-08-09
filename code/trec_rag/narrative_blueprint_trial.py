@@ -1,11 +1,11 @@
-"""Thin, throwaway one-topic experiment for narrative-blueprint generation.
+"""Narrative-blueprint experiments and the supported bounded-revision state machine.
 
 Question: does a compact narrative blueprint improve answer coverage for one
 fixed-evidence topic under the 1,024-word cap without degrading citations?
 
-Legacy modes intentionally have no resume, overwrite, orchestration, or test
-surface. The opt-in bounded-revision mode adds durable one-topic state and a
-strict call ledger while continuing to use the existing sealed handoff helpers.
+Legacy modes remain throwaway one-topic experiments with no resume or orchestration.
+The bounded-revision mode is also consumed by the production multi-stage runner,
+with durable per-topic state and a strict call ledger over the sealed handoff.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
-TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v6_resume_liveness"
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v7_review_hardening"
 SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v2_citation_bound"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
@@ -712,9 +712,7 @@ async def _complete(
             response_schema=response_schema,
         )
     )
-    while not completion.done():
-        await asyncio.sleep(0.01)
-    return completion.result()
+    return await asyncio.wrap_future(completion)
 
 
 async def _run_live(
@@ -1284,8 +1282,8 @@ def _bounded_revalidate_files(root: Path, state: dict[str, Any]) -> None:
 
 
 def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
-    changed = False
-    state.setdefault("recovered_payloads", {})
+    changed = "recovered_payloads" not in state
+    recovered_payloads = state.setdefault("recovered_payloads", {})
     for reservation in [
         *state.get("luna_reservations", []),
         *state.get("sol_reservations", []),
@@ -1310,7 +1308,9 @@ def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
             receipt.get("outcome") == "semantic_success"
             and isinstance(receipt.get("accepted_payload"), dict)
         ):
-            state["recovered_payloads"].setdefault(stage, receipt["accepted_payload"])
+            if stage not in recovered_payloads:
+                recovered_payloads[stage] = receipt["accepted_payload"]
+                changed = True
         if reservation.get("status") != "pending":
             continue
         outcome = receipt.get("outcome")
@@ -1320,14 +1320,15 @@ def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
             receipt.get("accepted_payload"), dict
         ):
             reservation["status"] = "semantic_returned"
-            state["recovered_payloads"][stage] = receipt["accepted_payload"]
+            recovered_payloads[stage] = receipt["accepted_payload"]
         elif outcome == "semantic_error":
             reservation["status"] = "semantic_error"
         elif outcome == "semantic_success":
+            # A receipt without the payload it claims was accepted cannot be reused.
             reservation["status"] = "semantic_error"
-            reservation["status"] = "semantic_returned"
         else:
             reservation["status"] = "crash_consumed"
+        changed = True
         if receipt:
             if not any(
                 call.get("stage") == stage
@@ -1354,7 +1355,7 @@ def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
                         if key in receipt
                     }
                 )
-        changed = True
+                changed = True
     if changed:
         _bounded_write_state(root, state)
 
@@ -1979,7 +1980,9 @@ def _bounded_manifest(
         "handoff_manifest_sha256": state["identity"]["handoff_manifest_sha256"],
         "topic_context_sha256": state["identity"]["topic_context_sha256"],
         "stage_completion": state.get("stages", {}),
-        "luna_call_count": sum(1 for call in state.get("calls", []) if call["model"] == LUNA_MODEL),
+        "luna_call_count": sum(
+            1 for call in state.get("calls", []) if call.get("model") == LUNA_MODEL
+        ),
         "sol_reservations_by_role": by_role,
         "sol_reservation_count": len(reservations),
         "http_transport_outcomes": transports,
@@ -2007,13 +2010,15 @@ def _bounded_record_draft_failure(
     _atomic_write_text(root / "manifest.json", json.dumps(manifest, indent=2) + "\n")
 
 
-async def _run_bounded_revision(
+async def _run_bounded_revision_with_generators(
     config: Any,
     handoff: GenerationHandoff,
     topic: GenerationTopic,
     *,
     api_key: str,
     state_mode: str,
+    luna: OpenRouterJsonGenerator,
+    sol: OpenRouterJsonGenerator,
 ) -> Path:
     _validate_artifact_paths(config)
     root = _bounded_private_root(config, topic)
@@ -2049,34 +2054,11 @@ async def _run_bounded_revision(
         if state.get("identity") != _bounded_identity(config, handoff, topic):
             raise ValueError("bounded-revision resume identity differs from create identity")
         _bounded_revalidate_files(root, state)
-        _bounded_recover_pending(root, state)
         if state.get("stages", {}).get("final") and (root / "manifest.json").is_file():
             return root
+        _bounded_recover_pending(root, state)
     else:
         raise ValueError("state_mode must be create or resume")
-
-    luna = OpenRouterJsonGenerator(
-        api_base=config.api_base,
-        api_key=api_key,
-        model=LUNA_MODEL,
-        reasoning_effort=LUNA_REASONING_EFFORT,
-        structured_output=config.structured_output,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
-        timeout_seconds=config.timeout_seconds,
-        transport_max_attempts=config.transport_max_attempts,
-    )
-    sol = OpenRouterJsonGenerator(
-        api_base=config.api_base,
-        api_key=api_key,
-        model=config.model,
-        reasoning_effort=config.reasoning_effort,
-        structured_output=config.structured_output,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
-        timeout_seconds=config.timeout_seconds,
-        transport_max_attempts=config.transport_max_attempts,
-    )
 
     blueprint: NarrativeBlueprint
     projection: BlueprintProjection
@@ -2114,7 +2096,6 @@ async def _run_bounded_revision(
                     reservation_ordinal=planner_ordinal,
                 )
             state["calls"].append(planner_call)
-            state["luna_call_count"] = state.get("luna_call_count", 0) + 1
             _bounded_finish_luna(
                 root,
                 state,
@@ -2301,12 +2282,25 @@ async def _run_bounded_revision(
         _bounded_record_draft_failure(root, state, topic, reason=failure)
         raise RuntimeError(failure)
 
+    cards_path = root / "audit.cards.json"
     cards_by_group: dict[str, tuple[dict[str, Any], ...]] = {}
+    completed_group_ids = set(state["stages"].get("audit_groups", []))
+    if completed_group_ids:
+        try:
+            persisted_cards = json.loads(cards_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("cannot read completed audit cards") from exc
+        if not isinstance(persisted_cards, dict):
+            raise ValueError("completed audit cards must be an object")
+        for group_id in completed_group_ids:
+            raw_cards = persisted_cards.get(group_id)
+            if not isinstance(raw_cards, list) or not all(
+                isinstance(card, dict) for card in raw_cards
+            ):
+                raise ValueError(f"completed audit cards are invalid for {group_id}")
+            cards_by_group[group_id] = tuple(raw_cards)
     for group in topic.groups:
-        if group.group_id in state["stages"].get("audit_groups", []):
-            cards_path = root / "audit.cards.json"
-            all_cards = json.loads(cards_path.read_text(encoding="utf-8"))
-            cards_by_group[group.group_id] = tuple(all_cards.get(group.group_id, ()))
+        if group.group_id in completed_group_ids:
             continue
         audit_stage = f"audit-{_audit_aliases(topic)[0][group.group_id]}"
         recovered, audit_payload = _bounded_recovered_payload(state, audit_stage)
@@ -2359,7 +2353,7 @@ async def _run_bounded_revision(
             cards_by_group[group.group_id] = ()
         state["stages"].setdefault("audit_groups", []).append(group.group_id)
         _atomic_write_text(
-            root / "audit.cards.json",
+            cards_path,
             json.dumps(
                 {key: list(value) for key, value in cards_by_group.items()},
                 ensure_ascii=False,
@@ -2368,7 +2362,7 @@ async def _run_bounded_revision(
             )
             + "\n",
         )
-        _bounded_register_file(root, state, root / "audit.cards.json")
+        _bounded_register_file(root, state, cards_path)
         _bounded_write_state(root, state)
 
     audit_cards = merge_audit_cards(topic, cards_by_group)
@@ -2460,7 +2454,21 @@ async def _run_bounded_revision(
         except (SpliceValidationError, ValueError, RuntimeError, TypeError) as exc:
             revision_errors = (f"{type(exc).__name__}: {exc}",)
     if revision_errors and initial_splice_payload is not None:
-        recovered, repaired = _bounded_recovered_payload(state, "repair")
+        repair_prompt = _bounded_splice_repair_prompt(
+            topic,
+            blueprint,
+            projection,
+            draft=draft,
+            audit_cards=audit_cards,
+            initial_payload=initial_splice_payload,
+            validation_errors=revision_errors,
+        )
+        recovered, repaired = _bounded_recovered_payload(
+            state,
+            "repair",
+            expected_prompt_sha256=_digest_text(repair_prompt),
+            expected_schema_sha256=revision_schema_sha256,
+        )
         if not recovered:
             if _bounded_blocked_stage(state, stage="repair", luna=False):
                 # A failed repair has no further safe fallback beyond the validated draft.
@@ -2472,15 +2480,6 @@ async def _run_bounded_revision(
                     role="repair",
                     receipt_name="repair",
                     has_validation_errors=True,
-                )
-                repair_prompt = _bounded_splice_repair_prompt(
-                    topic,
-                    blueprint,
-                    projection,
-                    draft=draft,
-                    audit_cards=audit_cards,
-                    initial_payload=initial_splice_payload,
-                    validation_errors=revision_errors,
                 )
                 with ThreadPoolExecutor(max_workers=1, thread_name_prefix="bounded-sol") as executor:
                     repaired, repair_call = await _bounded_provider_call(
@@ -2569,6 +2568,13 @@ async def _run_bounded_revision(
         screen_call: dict[str, Any] | None = None
         if not recovered:
             if _bounded_blocked_stage(state, stage="operation-screen", luna=True):
+                screen_status = _bounded_stage_status(
+                    state, stage="operation-screen", luna=True
+                )
+                if screen_status in {"ambiguous_failure", "crash_consumed"}:
+                    raise RuntimeError(
+                        "operation-screen outcome is ambiguous; refusing silent draft fallback"
+                    )
                 screen_payload = None
             else:
                 screen_ordinal = _bounded_reserve_luna(
@@ -2609,6 +2615,10 @@ async def _run_bounded_revision(
                     raise RuntimeError(
                         "operation-screen transport failed; resume may retry it"
                     )
+                if screen_call["outcome"] == "ambiguous_failure":
+                    raise RuntimeError(
+                        "operation-screen failed ambiguously; refusing silent draft fallback"
+                    )
         final, screen_result, used_fallback, _ = _bounded_finalize_operation_screen(
             topic,
             draft,
@@ -2646,6 +2656,59 @@ async def _run_bounded_revision(
     manifest = _bounded_manifest(root, state, topic=topic, draft=draft, final=final)
     _atomic_write_text(root / "manifest.json", json.dumps(manifest, indent=2) + "\n")
     return root
+
+
+async def _run_bounded_revision(
+    config: Any,
+    handoff: GenerationHandoff,
+    topic: GenerationTopic,
+    *,
+    api_key: str,
+    state_mode: str,
+) -> Path:
+    """Run one bounded-revision topic and close both owned provider clients."""
+
+    luna = OpenRouterJsonGenerator(
+        api_base=config.api_base,
+        api_key=api_key,
+        model=LUNA_MODEL,
+        reasoning_effort=LUNA_REASONING_EFFORT,
+        structured_output=config.structured_output,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        timeout_seconds=config.timeout_seconds,
+        transport_max_attempts=config.transport_max_attempts,
+    )
+    try:
+        sol = OpenRouterJsonGenerator(
+            api_base=config.api_base,
+            api_key=api_key,
+            model=config.model,
+            reasoning_effort=config.reasoning_effort,
+            structured_output=config.structured_output,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            timeout_seconds=config.timeout_seconds,
+            transport_max_attempts=config.transport_max_attempts,
+        )
+    except BaseException:
+        luna.close()
+        raise
+    try:
+        return await _run_bounded_revision_with_generators(
+            config,
+            handoff,
+            topic,
+            api_key=api_key,
+            state_mode=state_mode,
+            luna=luna,
+            sol=sol,
+        )
+    finally:
+        try:
+            sol.close()
+        finally:
+            luna.close()
 
 
 def _print_bounded_dry_run(config: Any, topic: GenerationTopic) -> None:

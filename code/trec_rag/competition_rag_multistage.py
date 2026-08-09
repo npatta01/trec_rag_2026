@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Sequence
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Any
 
 from filelock import FileLock, Timeout as FileLockTimeout
@@ -15,10 +16,10 @@ from filelock import FileLock, Timeout as FileLockTimeout
 from trec_rag.competition_rag import (
     RagGenerationConfig,
     _atomic_write_text,
+    _redact,
     _validate_artifact_paths,
     _validate_exact_hint_citations,
     _validate_generated_submission_record,
-    _work_has_artifacts,
     load_rag_generation_config,
 )
 from trec_rag.generation_handoff import (
@@ -27,6 +28,8 @@ from trec_rag.generation_handoff import (
     load_generation_handoff,
     select_generation_topics,
 )
+# The bounded-revision names are a supported deadline contract shared with the
+# one-topic CLI. Their identities and signatures are load-bearing for resume.
 from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
     _bounded_identity,
@@ -40,6 +43,8 @@ from trec_rag.repo_env import find_repo_root, load_repo_env
 
 MULTISTAGE_IDENTITY_VERSION = 1
 _IDENTITY_FILENAME = "multistage_generation_identity.json"
+_LOCK_FILENAME = ".multistage-generation.lock"
+_FAILURES_FILENAME = "failures.json"
 TopicRunner = Callable[..., Awaitable[Path]]
 
 
@@ -122,9 +127,15 @@ def _prepare_multistage_state(
             raise ValueError("multi-stage resume identity differs from create identity")
         return
 
-    if config.output_path.exists() or _work_has_artifacts(config.resolved_work_dir):
+    work_dir = config.resolved_work_dir
+    if work_dir.is_symlink() or (work_dir.exists() and not work_dir.is_dir()):
+        raise ValueError("multi-stage generation work path is not a directory")
+    has_artifacts = work_dir.is_dir() and any(
+        path.name != _LOCK_FILENAME for path in work_dir.iterdir()
+    )
+    if config.output_path.exists() or has_artifacts:
         raise ValueError("multi-stage generation artifacts already exist")
-    config.resolved_work_dir.mkdir(parents=True, exist_ok=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write_text(
         identity_path,
         json.dumps(identity, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -160,24 +171,61 @@ async def _run_multistage_locked(
         *(run_topic(topic) for topic in topics),
         return_exceptions=True,
     )
-    failure_count = sum(isinstance(result, BaseException) for result in results)
-    if failure_count:
+    failures: list[tuple[str, BaseException]] = [
+        (topic.topic_id, result)
+        for topic, result in zip(topics, results, strict=True)
+        if isinstance(result, BaseException)
+    ]
+    records: list[dict[str, Any]] = []
+    if not failures:
+        for topic, result in zip(topics, results, strict=True):
+            if not isinstance(result, Path):
+                failures.append(
+                    (
+                        topic.topic_id,
+                        TypeError("multi-stage topic runner returned an invalid result"),
+                    )
+                )
+                continue
+            try:
+                records.append(
+                    _load_final_record(
+                        result,
+                        config=config,
+                        handoff=handoff,
+                        topic=topic,
+                    )
+                )
+            except Exception as exc:
+                failures.append((topic.topic_id, exc))
+    failure_report = {
+        "failure_count": len(failures),
+        "topic_count": len(topics),
+        "failures": [
+            {
+                "topic_id": topic_id,
+                "exception_type": type(exc).__name__,
+                "message": _redact(str(exc), (api_key,)),
+            }
+            for topic_id, exc in failures
+        ],
+    }
+    _atomic_write_text(
+        config.resolved_work_dir / _FAILURES_FILENAME,
+        json.dumps(failure_report, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n",
+    )
+    if failures:
+        for failure in failure_report["failures"]:
+            print(
+                f"topic {failure['topic_id']}: {failure['exception_type']}: "
+                f"{failure['message']}",
+                file=sys.stderr,
+            )
         raise RuntimeError(
             "multi-stage topic execution failed for "
-            f"{failure_count} of {len(topics)} topics"
-        )
-    roots = [result for result in results if isinstance(result, Path)]
-    if len(roots) != len(topics):
-        raise RuntimeError("multi-stage topic runner returned an invalid result")
-    records = [
-        _load_final_record(
-            root,
-            config=config,
-            handoff=handoff,
-            topic=topic,
-        )
-        for topic, root in zip(topics, roots, strict=True)
-    ]
+            f"{len(failures)} of {len(topics)} topics"
+        ) from failures[0][1]
     _atomic_write_text(
         config.output_path,
         "".join(
@@ -198,7 +246,7 @@ async def run_multistage_generation(
 
     _validate_artifact_paths(config)
     topics = select_generation_topics(handoff, config.topic_ids)
-    lock_path = config.output_path.with_name(f".{config.output_path.name}.lock")
+    lock_path = config.resolved_work_dir / _LOCK_FILENAME
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with FileLock(lock_path, timeout=0):

@@ -92,6 +92,62 @@ _MAX_TOUCHED_OBJECTS = 8
 _MAX_WORDS = 1024
 _TERMINAL_PUNCTUATION = re.compile(r"[.!?](?:[\"')\]]*)$")
 _INTERNAL_SENTENCE_BOUNDARY = re.compile(r"[.!?](?:[\"')\]]*)\s+\S")
+_ABBREVIATIONS = frozenset(
+    {
+        "apr.",
+        "aug.",
+        "corp.",
+        "co.",
+        "dec.",
+        "dr.",
+        "gen.",
+        "gov.",
+        "feb.",
+        "inc.",
+        "jan.",
+        "jr.",
+        "jul.",
+        "jun.",
+        "lt.",
+        "ltd.",
+        "mar.",
+        "mt.",
+        "mr.",
+        "mrs.",
+        "ms.",
+        "no.",
+        "nov.",
+        "oct.",
+        "prof.",
+        "pres.",
+        "rep.",
+        "rev.",
+        "sen.",
+        "sept.",
+        "sr.",
+        "st.",
+        "u.s.",
+        "vs.",
+    }
+)
+_NAME_PREFIX_ABBREVIATIONS = frozenset(
+    {
+        "dr.",
+        "gen.",
+        "gov.",
+        "lt.",
+        "mr.",
+        "mrs.",
+        "ms.",
+        "mt.",
+        "pres.",
+        "prof.",
+        "rep.",
+        "rev.",
+        "sen.",
+        "st.",
+    }
+)
 
 
 def _canonical_json(value: object) -> str:
@@ -140,9 +196,10 @@ def _draft_answers(draft: object) -> list[dict[str, Any]]:
 def _nonempty_strings(value: object, *, label: str, minimum: int, maximum: int | None = None) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise SpliceValidationError(f"{label} must be an array")
-    if len(value) < minimum or (maximum is not None and len(value) > maximum):
-        bound = f"at most {maximum}" if maximum is not None else f"at least {minimum}"
-        raise SpliceValidationError(f"{label} must contain {bound} items")
+    if len(value) < minimum:
+        raise SpliceValidationError(f"{label} must contain at least {minimum} items")
+    if maximum is not None and len(value) > maximum:
+        raise SpliceValidationError(f"{label} must contain at most {maximum} items")
     result: list[str] = []
     for item in value:
         if not isinstance(item, str) or not item.strip():
@@ -151,6 +208,41 @@ def _nonempty_strings(value: object, *, label: str, minimum: int, maximum: int |
     if len(result) != len(set(result)):
         raise SpliceValidationError(f"{label} contains duplicate values")
     return tuple(result)
+
+
+def _abbreviation_continues_sentence(token: str, suffix: str) -> bool:
+    """Accept only conservative, recognizable uses of an internal abbreviation."""
+
+    next_token_match = re.match(r"(?:[A-Za-z]+|\d+)", suffix)
+    if next_token_match is None:
+        return False
+    next_token = next_token_match.group(0)
+    if next_token[0].islower() or next_token[0].isdigit():
+        return True
+
+    folded_token = token.casefold()
+    return folded_token in _NAME_PREFIX_ABBREVIATIONS
+
+
+def _has_internal_sentence_boundary(text: str) -> bool:
+    """Return whether ``text`` contains a boundary other than a safe abbreviation use."""
+
+    for boundary in _INTERNAL_SENTENCE_BOUNDARY.finditer(text):
+        punctuation = text[boundary.start()]
+        if punctuation != ".":
+            return True
+        prefix = text[: boundary.start() + 1]
+        token_match = re.search(r"([^\s\"'()\[\]]+)$", prefix)
+        token = token_match.group(1) if token_match else ""
+        abbreviation = token.casefold() in _ABBREVIATIONS or bool(
+            re.fullmatch(r"(?:[A-Za-z]\.){2,}", token)
+            or re.fullmatch(r"[A-Z]\.", token)
+        )
+        suffix = text[boundary.start() + 1 :].lstrip("\"')]} \t\r\n")
+        if abbreviation and _abbreviation_continues_sentence(token, suffix):
+            continue
+        return True
+    return False
 
 
 def _parse_operation(
@@ -192,7 +284,7 @@ def _parse_operation(
         raise SpliceValidationError(
             f"operation[{operation_index}] new_object text requires terminal punctuation"
         )
-    if _INTERNAL_SENTENCE_BOUNDARY.search(stripped_text):
+    if _has_internal_sentence_boundary(stripped_text):
         raise SpliceValidationError(
             f"operation[{operation_index}] new_object text must be one terminal sentence"
         )

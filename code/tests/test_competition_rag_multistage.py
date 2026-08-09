@@ -212,6 +212,8 @@ def test_create_publishes_all_validated_topics_in_handoff_order(tmp_path: Path) 
         )
     )
     assert identity["handoff_manifest_sha256"] == handoff.manifest_sha256
+    assert (config.work_dir / ".multistage-generation.lock").is_file()
+    assert not config.output_path.with_name(f".{config.output_path.name}.lock").exists()
 
 
 def test_resume_reuses_started_topic_and_creates_unstarted_topic(
@@ -290,7 +292,10 @@ def test_resume_refuses_changed_run_identity_before_dispatch(tmp_path: Path) -> 
     assert not changed_config.output_path.exists()
 
 
-def test_missing_final_never_publishes_and_sibling_finishes(tmp_path: Path) -> None:
+def test_missing_final_never_publishes_and_reports_each_failed_topic(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     handoff = _handoff()
     config = _config(tmp_path)
     completed: list[str] = []
@@ -322,6 +327,24 @@ def test_missing_final_never_publishes_and_sibling_finishes(tmp_path: Path) -> N
     assert "provider detail" not in str(exc_info.value)
     assert completed == ["rag2026-1"]
     assert not config.output_path.exists()
+    assert (
+        "topic rag2026-0: RuntimeError: provider detail that must not escape"
+        in capsys.readouterr().err
+    )
+    failure_report = json.loads(
+        (config.work_dir / "failures.json").read_text(encoding="utf-8")
+    )
+    assert failure_report == {
+        "failure_count": 1,
+        "topic_count": 2,
+        "failures": [
+            {
+                "topic_id": "rag2026-0",
+                "exception_type": "RuntimeError",
+                "message": "provider detail that must not escape",
+            }
+        ],
+    }
 
 
 def test_incomplete_topic_state_never_publishes(tmp_path: Path) -> None:
@@ -355,7 +378,7 @@ def test_incomplete_topic_state_never_publishes(tmp_path: Path) -> None:
         )
         return root
 
-    with pytest.raises(ValueError, match="topic is incomplete"):
+    with pytest.raises(RuntimeError, match="1 of 2 topics"):
         asyncio.run(
             run_multistage_generation(
                 config,
@@ -366,6 +389,16 @@ def test_incomplete_topic_state_never_publishes(tmp_path: Path) -> None:
         )
 
     assert not config.output_path.exists()
+    failure_report = json.loads(
+        (config.work_dir / "failures.json").read_text(encoding="utf-8")
+    )
+    assert failure_report["failures"] == [
+        {
+            "topic_id": "rag2026-0",
+            "exception_type": "ValueError",
+            "message": "multi-stage topic is incomplete: rag2026-0",
+        }
+    ]
 
 
 def test_dry_run_reports_exact_budget_without_writes_or_provider(

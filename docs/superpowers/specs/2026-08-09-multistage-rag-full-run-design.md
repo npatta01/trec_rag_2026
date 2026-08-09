@@ -9,8 +9,10 @@ experiment IDs, output directories, work directories, identities, and final JSON
 
 Do not generalize the single-pass runner, shell-loop 119 one-topic configs, manually concatenate
 rows, or mix single-pass fallback rows into the multi-stage run. After independent review, the
-state machine may change only for the documented v6 resume/liveness fixes; prompts, models, audit
-grouping, splice, and screen policy otherwise remain frozen.
+state machine includes the documented v6 resume/liveness fixes and v7 review-hardening fixes.
+Prompts, models, audit grouping, and the three-Sol-call ceiling otherwise remain frozen; v7 tightens
+splice validation, ambiguous screen recovery, client ownership, and durable diagnostics without
+adding a semantic model call.
 
 ## Run Layout
 

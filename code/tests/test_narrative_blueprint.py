@@ -37,6 +37,7 @@ from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
     _bounded_provider_call,
     _bounded_recover_pending,
+    _bounded_manifest,
     _bounded_record_draft_failure,
     _bounded_rebind_candidate,
     _bounded_recovered_payload,
@@ -499,6 +500,64 @@ def test_pending_reservation_ignores_a_stale_receipt_ordinal(tmp_path) -> None:
     assert state["calls"] == []
 
 
+def test_recovery_rejects_semantic_success_without_an_accepted_payload(
+    tmp_path,
+) -> None:
+    root = tmp_path / "bounded"
+    receipts = root / "receipts"
+    receipts.mkdir(parents=True)
+    (receipts / "draft.json").write_text(
+        json.dumps(
+            {
+                "stage": "draft",
+                "reservation_ordinal": 1,
+                "outcome": "semantic_success",
+                "transport_outcome": "response",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "luna_reservations": [],
+        "sol_reservations": [
+            {
+                "ordinal": 1,
+                "role": "draft",
+                "stage": "draft",
+                "status": "pending",
+                "receipt": "receipts/draft.json",
+            }
+        ],
+        "recovered_payloads": {},
+        "calls": [],
+    }
+
+    _bounded_recover_pending(root, state)
+
+    assert state["sol_reservations"][0]["status"] == "semantic_error"
+    assert state["recovered_payloads"] == {}
+
+
+def test_manifest_tolerates_a_recovered_call_without_model(tmp_path) -> None:
+    root = tmp_path / "bounded"
+    root.mkdir()
+    topic = _topic_fixture()
+    state = {
+        "identity": {
+            "handoff_manifest_sha256": "h" * 64,
+            "topic_context_sha256": "t" * 64,
+        },
+        "stages": {},
+        "sol_reservations": [],
+        "calls": [{"stage": "planner", "transport_outcome": "response"}],
+    }
+
+    manifest = _bounded_manifest(root, state, topic=topic, draft=None, final=None)
+
+    assert manifest["luna_call_count"] == 0
+
+
 def test_invalid_initial_draft_uses_repair_then_skips_audit_and_revision(
     tmp_path,
     monkeypatch,
@@ -560,6 +619,13 @@ def test_invalid_initial_draft_uses_repair_then_skips_audit_and_revision(
         "repair": repaired_draft,
     }
     invoked: list[str] = []
+    created_generators = []
+    generator_class = narrative_blueprint_trial.OpenRouterJsonGenerator
+
+    def tracking_generator(**kwargs):
+        generator = generator_class(**kwargs)
+        created_generators.append(generator)
+        return generator
 
     async def fake_provider_call(_generator, **kwargs):
         stage = kwargs["stage"]
@@ -585,6 +651,11 @@ def test_invalid_initial_draft_uses_repair_then_skips_audit_and_revision(
         "_bounded_provider_call",
         fake_provider_call,
     )
+    monkeypatch.setattr(
+        narrative_blueprint_trial,
+        "OpenRouterJsonGenerator",
+        tracking_generator,
+    )
 
     root = asyncio.run(
         narrative_blueprint_trial._run_bounded_revision(
@@ -609,6 +680,8 @@ def test_invalid_initial_draft_uses_repair_then_skips_audit_and_revision(
     assert state["stages"]["revision"] is False
     assert state["stages"]["final"] is True
     assert final["answer"][0]["text"] == "The repaired answer is locally valid."
+    assert len(created_generators) == 2
+    assert all(generator._http_client.is_closed for generator in created_generators)
 
 
 def test_bounded_rebind_prunes_references_orphaned_by_splice_replacement() -> None:
