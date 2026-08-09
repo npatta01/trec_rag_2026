@@ -10,10 +10,12 @@ only after every local preflight and run-state check succeeds.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import re
@@ -327,6 +329,36 @@ def _failure_body(request: TopicExecutionRequest, reason: str) -> bytes:
     )
 
 
+def _finalize_topic_execution_result(
+    *,
+    work_dir: Path,
+    plan: AgenticRunPlan,
+    request: TopicExecutionRequest,
+    result: TopicExecutionResult,
+) -> None:
+    if not isinstance(result, TopicExecutionResult):
+        raise TypeError("topic executor must return TopicExecutionResult")
+    if result.status == "incomplete":
+        request.attempt.write_artifact(
+            "failure.json",
+            _failure_body(request, result.stopping_reason),
+        )
+        return
+    try:
+        seal_topic_success(
+            work_dir=work_dir,
+            plan=plan,
+            projection=result.projection,
+            attempt=request.attempt,
+            status="complete",
+            stopping_reason=result.stopping_reason,
+            synthesis_outcome=result.synthesis_outcome,
+            records_receipt=result.records_receipt,
+        )
+    except AgenticRunStateError as exc:
+        raise AgenticRunnerError("topic_seal_invalid", str(exc)) from exc
+
+
 def _canonical_line(value: object) -> bytes:
     try:
         return (
@@ -375,39 +407,37 @@ def _build_production_topic_executor(config: Any) -> Callable[[TopicExecutionReq
     from .mixedbread_passage_scorer import MixedbreadPassageScorer
     from .topic_records import TopicEvidenceSnapshot, TopicRecordsBuilder
 
-    document_store = DocumentStore(config.caches.document_store_dir)
-    pyserini = build_pyserini_retriever(
-        config.retrieval.cache_dir,
-        index=config.retrieval.index,
-        hits=config.retrieval.documents_per_query,
-        corpus_epoch=config.retrieval.corpus_epoch,
-    )
-    passage_scorer = MixedbreadPassageScorer(
-        score_cache_root=config.passage.score_cache_dir,
-        device=config.passage.device,
-    )
-    chunker = SemanticTextChunker(
-        ChunkingConfig(
-            max_characters=config.passage.chunk_max_characters,
-            overlap_characters=config.passage.chunk_overlap_characters,
+    def execute(request: TopicExecutionRequest) -> TopicExecutionResult:
+        document_store = DocumentStore(config.caches.document_store_dir)
+        pyserini = build_pyserini_retriever(
+            config.retrieval.cache_dir,
+            index=config.retrieval.index,
+            hits=config.retrieval.documents_per_query,
+            corpus_epoch=config.retrieval.corpus_epoch,
         )
-    )
-    snippet_config = SnippetExtractionConfig(
-        snippets_per_page=config.snippets.snippets_per_page,
-        chunk_max_characters=config.passage.chunk_max_characters,
-        chunk_overlap_characters=config.passage.chunk_overlap_characters,
-    )
-    snippet_extractor = RelevantSnippetExtractor(
-        ranker=LocalMixedbreadSnippetRanker(
+        passage_scorer = MixedbreadPassageScorer(
             score_cache_root=config.passage.score_cache_dir,
             device=config.passage.device,
-        ),
-        result_cache=SnippetResultCache(config.snippets.result_cache_dir),
-        config=snippet_config,
-        chunker=chunker,
-    )
-
-    def execute(request: TopicExecutionRequest) -> TopicExecutionResult:
+        )
+        chunker = SemanticTextChunker(
+            ChunkingConfig(
+                max_characters=config.passage.chunk_max_characters,
+                overlap_characters=config.passage.chunk_overlap_characters,
+            )
+        )
+        snippet_extractor = RelevantSnippetExtractor(
+            ranker=LocalMixedbreadSnippetRanker(
+                score_cache_root=config.passage.score_cache_dir,
+                device=config.passage.device,
+            ),
+            result_cache=SnippetResultCache(config.snippets.result_cache_dir),
+            config=SnippetExtractionConfig(
+                snippets_per_page=config.snippets.snippets_per_page,
+                chunk_max_characters=config.passage.chunk_max_characters,
+                chunk_overlap_characters=config.passage.chunk_overlap_characters,
+            ),
+            chunker=chunker,
+        )
         passage_search = _build_topic_passage_search(
             request.topic,
             retriever=pyserini,
@@ -493,6 +523,15 @@ def _build_production_topic_executor(config: Any) -> Callable[[TopicExecutionReq
     return execute
 
 
+def _run_production_topic_request(
+    config: Any,
+    request: TopicExecutionRequest,
+) -> TopicExecutionResult:
+    """Build and run one topic inside a spawn-safe production worker."""
+
+    return _build_production_topic_executor(config)(request)
+
+
 def run_agentic_retrieval(
     config: str | Path,
     *,
@@ -509,6 +548,7 @@ def run_agentic_retrieval(
         environ=None,
         repository_probe=_probe_repository,
         topic_executor_factory=_build_production_topic_executor,
+        production_dispatch=True,
     )
 
 
@@ -522,11 +562,14 @@ def _run_agentic_retrieval(
     repository_probe: Callable[[Path], AgenticRepositoryBinding],
     topic_executor_factory: Callable[[Any], Callable[[TopicExecutionRequest], TopicExecutionResult]],
     export_publisher: Callable[..., Any] | None = None,
+    production_dispatch: bool = False,
 ) -> AgenticRunReceipt:
     """Injected implementation used by offline orchestration tests."""
 
     if not isinstance(resume, bool):
         raise TypeError("resume must be Boolean")
+    if not isinstance(production_dispatch, bool):
+        raise TypeError("production_dispatch must be Boolean")
     if topic_ids is None:
         requested_ids: tuple[str, ...] = ()
     else:
@@ -638,10 +681,13 @@ def _run_agentic_retrieval(
     os.environ["HF_HOME"] = str(loaded.caches.model_cache_dir)
     topic_by_id = {topic.id: topic for topic in cohort}
     executed: list[str] = []
+    requests: list[TopicExecutionRequest] = []
     if selection.execute_topic_ids:
-        executor = topic_executor_factory(loaded)
-        if not callable(executor):
-            raise TypeError("topic_executor_factory must return a callable")
+        executor = None
+        if not production_dispatch:
+            executor = topic_executor_factory(loaded)
+            if not callable(executor):
+                raise TypeError("topic_executor_factory must return a callable")
         invoked: set[str] = set()
         for topic_id in selection.execute_topic_ids:
             if topic_id in invoked:
@@ -664,35 +710,84 @@ def _run_agentic_retrieval(
                 attempt=attempt,
                 official_topics_sha256=official_topics_sha256,
             )
+            requests.append(request)
             executed.append(topic_id)
-            try:
-                result = executor(request)
-            except TopicOperationalError as exc:
-                attempt.write_artifact(
-                    "failure.json", _failure_body(request, exc.reason)
-                )
-                continue
-            if not isinstance(result, TopicExecutionResult):
-                raise TypeError("topic executor must return TopicExecutionResult")
-            if result.status == "incomplete":
-                attempt.write_artifact(
-                    "failure.json",
-                    _failure_body(request, result.stopping_reason),
-                )
-                continue
-            try:
-                seal_topic_success(
-                    work_dir=work_dir,
-                    plan=plan,
-                    projection=result.projection,
-                    attempt=attempt,
-                    status="complete",
-                    stopping_reason=result.stopping_reason,
-                    synthesis_outcome=result.synthesis_outcome,
-                    records_receipt=result.records_receipt,
-                )
-            except AgenticRunStateError as exc:
-                raise AgenticRunnerError("topic_seal_invalid", str(exc)) from exc
+
+        def finalize(request: TopicExecutionRequest, result: TopicExecutionResult) -> None:
+            _finalize_topic_execution_result(
+                work_dir=work_dir,
+                plan=plan,
+                request=request,
+                result=result,
+            )
+
+        if loaded.execution.topic_workers == 1:
+            for request in requests:
+                try:
+                    if production_dispatch:
+                        result = _run_production_topic_request(loaded, request)
+                    else:
+                        assert executor is not None
+                        result = executor(request)
+                except TopicOperationalError as exc:
+                    request.attempt.write_artifact(
+                        "failure.json", _failure_body(request, exc.reason)
+                    )
+                    continue
+                finalize(request, result)
+        elif production_dispatch:
+            errors: list[Exception] = []
+            with ProcessPoolExecutor(
+                max_workers=loaded.execution.topic_workers,
+                mp_context=multiprocessing.get_context("spawn"),
+            ) as pool:
+                futures = {
+                    pool.submit(_run_production_topic_request, loaded, request): request
+                    for request in requests
+                }
+                for future in as_completed(futures):
+                    request = futures[future]
+                    try:
+                        result = future.result()
+                    except TopicOperationalError as exc:
+                        request.attempt.write_artifact(
+                            "failure.json", _failure_body(request, exc.reason)
+                        )
+                    except Exception as exc:
+                        errors.append(exc)
+                    else:
+                        try:
+                            finalize(request, result)
+                        except Exception as exc:
+                            errors.append(exc)
+            if errors:
+                raise errors[0]
+        else:
+            errors = []
+            assert executor is not None
+            with ThreadPoolExecutor(
+                max_workers=loaded.execution.topic_workers
+            ) as pool:
+                futures = {
+                    pool.submit(executor, request): request for request in requests
+                }
+                for future in as_completed(futures):
+                    request = futures[future]
+                    try:
+                        result = future.result()
+                    except TopicOperationalError as exc:
+                        request.attempt.write_artifact(
+                            "failure.json", _failure_body(request, exc.reason)
+                        )
+                    except Exception as exc:
+                        errors.append(exc)
+                    else:
+                        try:
+                            finalize(request, result)
+                        except Exception as exc:
+                            errors.append(exc)
+            if errors:
+                raise errors[0]
 
     try:
         final_selection = select_run_topics(

@@ -8,7 +8,7 @@ topics:
   path: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
 
 execution:
-  topic_workers: 1
+  topic_workers: 2
 
 caches:
   document_store_dir: cache/documents/v1

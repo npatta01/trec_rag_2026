@@ -38,7 +38,7 @@ CHUNK_MAX_CHARACTERS = 3_500
 CHUNK_OVERLAP_CHARACTERS = 350
 SNIPPETS_PER_PAGE = 10
 FUSED_RESULT_LIMIT = 20
-TOPIC_WORKERS = 1
+TOPIC_WORKERS = 2
 OFFICIAL_TOPICS_RELATIVE_PATH = Path(
     "trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv"
 )
@@ -272,11 +272,8 @@ def load_agentic_retrieval_config(
 
     execution_raw = _strict_mapping(raw.get("execution"), "execution")
     _reject_unknown(execution_raw, {"topic_workers"}, "execution")
-    topic_workers = _require_exact_int(
-        execution_raw,
-        "topic_workers",
-        "execution",
-        TOPIC_WORKERS,
+    topic_workers = _require_positive_int(
+        execution_raw, "topic_workers", "execution"
     )
 
     caches_raw = _strict_mapping(raw.get("caches"), "caches")
@@ -537,6 +534,17 @@ def _require_exact_int(
     value = mapping.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value != expected:
         raise ValueError(f"{owner}.{key} must be {expected}")
+    return value
+
+
+def _require_positive_int(
+    mapping: dict[str, Any],
+    key: str,
+    owner: str,
+) -> int:
+    value = mapping.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{owner}.{key} must be a positive integer")
     return value
 
 

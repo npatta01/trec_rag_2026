@@ -601,6 +601,16 @@ smoke with repeated selectors:
   --topic rag2026-0 --topic rag2026-1
 ```
 
+`execution.topic_workers` controls bounded concurrency across independent
+topics; the canonical agentic config uses `2`. Live execution gives each topic
+worker its own retriever, passage/snippet scorer, chunker, and agent so model
+state is not shared across processes. This can overlap local scoring and model
+waits, but it also multiplies peak memory; use `1` when one accelerator cannot
+hold two scorer/model stacks. Retrieval requests still pass through the shared
+SQLite limiter, including requests from every worker, so extra workers do not
+increase the hosted Pyserini origin quota. Follow-up searches within one topic
+remain serialized by that topic's lock.
+
 Before any live create or resume, verify the tracked worktree is clean,
 submodules match the superproject, the local model revision is available to
 ROCm, and the ignored `.env`/`.env.local` supplies `INDEX_URL`,

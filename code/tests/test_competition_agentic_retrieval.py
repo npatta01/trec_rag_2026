@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -84,6 +85,7 @@ def _workspace(
     *,
     topic_count: int = 2,
     run_id: str = "agentic-cli-test",
+    topic_workers: int = 1,
 ) -> tuple[Path, tuple[Topic, ...]]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "AGENTS.md").write_text("# test root\n", encoding="utf-8")
@@ -120,7 +122,7 @@ experiment:
 topics:
   path: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
 execution:
-  topic_workers: 1
+  topic_workers: {topic_workers}
 caches:
   document_store_dir: cache/documents/v1
   model_cache_dir: cache/models/huggingface
@@ -403,6 +405,42 @@ def test_repository_probe_rejects_non_sha1_git_object_ids(
 
     with pytest.raises(AgenticRunnerError, match=match):
         _probe_repository(tmp_path)
+
+
+def test_two_topic_workers_execute_topics_concurrently(tmp_path: Path) -> None:
+    config, topics = _workspace(tmp_path, topic_count=2, topic_workers=2)
+    barrier = threading.Barrier(2, timeout=1.0)
+    lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def factory(_config):
+        def execute(request):
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass
+                return _success(request)
+            finally:
+                with lock:
+                    active -= 1
+
+        return execute
+
+    receipt = _run(
+        config,
+        factory=factory,
+        topic_ids=tuple(topic.id for topic in topics),
+    )
+
+    assert receipt.complete
+    assert receipt.executed_topic_ids == tuple(topic.id for topic in topics)
+    assert maximum_active == 2
 
 
 @pytest.mark.parametrize("missing_name", tuple(SECRETS))

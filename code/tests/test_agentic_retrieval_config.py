@@ -110,7 +110,7 @@ def test_canonical_config_pins_the_approved_production_limits() -> None:
 
     config = module.load_agentic_retrieval_config(CANONICAL_CONFIG)
 
-    assert config.execution.topic_workers == 1
+    assert config.execution.topic_workers == 2
     assert config.retrieval.documents_per_query == 1000
     assert config.retrieval.hits_per_search == 10
     assert config.agent.fused_result_limit == 20
@@ -128,6 +128,38 @@ def test_canonical_config_pins_the_approved_production_limits() -> None:
     assert config.budget.no_progress_rounds == 2
     assert config.budget.soft_seconds is None
     assert config.budget.hard_seconds is None
+
+
+def test_config_accepts_two_topic_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _agentic_module()
+    monkeypatch.setattr(module, "find_repo_root", lambda _start: ROOT)
+
+    config = module.load_agentic_retrieval_config(
+        _write_config(tmp_path, _config_text().replace("topic_workers: 1", "topic_workers: 2"))
+    )
+
+    assert config.execution.topic_workers == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "2"])
+def test_config_rejects_invalid_topic_worker_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: object,
+) -> None:
+    module = _agentic_module()
+    monkeypatch.setattr(module, "find_repo_root", lambda _start: ROOT)
+    rendered = f'"{value}"' if isinstance(value, str) else str(value).lower()
+    text = _config_text().replace(
+        "  topic_workers: 1",
+        f"  topic_workers: {rendered}",
+    )
+
+    with pytest.raises(ValueError, match="execution.topic_workers"):
+        module.load_agentic_retrieval_config(_write_config(tmp_path, text))
 
 
 def test_agentic_and_fixed_loaders_reject_the_other_mode() -> None:
