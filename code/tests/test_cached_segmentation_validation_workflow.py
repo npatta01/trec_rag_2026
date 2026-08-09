@@ -91,7 +91,7 @@ def test_task_uses_one_fast_bounded_on_demand_gpu_and_only_named_secrets() -> No
     assert value["resources"]["gpu"]["count"] == 1
     assert value["resources"]["gpu"]["memory"] == "80GB.."
     assert value["resources"]["gpu"]["name"] == ["H200", "H100"]
-    assert value["resources"]["memory"] == "96GB.."
+    assert value["resources"]["memory"] == "64GB.."
     assert value["resources"]["disk"] == "100GB"
     assert value["backends"] == ["runpod", "vastai"]
     assert value["spot_policy"] == "on-demand"
@@ -225,8 +225,8 @@ def test_workflow_source_encodes_verify_merge_canary_full_and_marker_last() -> N
     wrapper = WRAPPER.read_text()
     launcher = LAUNCHER.read_text()
 
-    assert "competition_cache_bundle verify" in wrapper
-    assert "competition_cache_bundle merge" in wrapper
+    assert "competition_cache_bundle verify-rescore-source" in wrapper
+    assert "competition_cache_bundle merge-rescore-source" in wrapper
     assert "SOURCE_VERIFY_WORKERS=8" in wrapper
     assert 'download_and_verify_source_bundle "$topic_id" &' in wrapper
     assert 'wait_source_bundle_batch "${source_verify_pids[@]}"' in wrapper

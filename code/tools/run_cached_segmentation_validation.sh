@@ -276,7 +276,8 @@ download_and_verify_source_bundle() {
   hf_cli buckets cp \
     "$source_prefix/$topic_id/bundle-complete.json" \
     "$topic_bundle/bundle-complete.json"
-  "$venv_python" -m trec_rag.competition_cache_bundle verify "$topic_bundle"
+  "$venv_python" -m trec_rag.competition_cache_bundle verify-rescore-source \
+    "$topic_bundle"
 }
 wait_source_bundle_batch() {
   local first_status=0
@@ -310,7 +311,7 @@ if ((${#source_verify_pids[@]})); then
   wait_source_bundle_batch "${source_verify_pids[@]}"
 fi
 # All 22 are authenticated before a single destination mutation.
-"$venv_python" -m trec_rag.competition_cache_bundle merge \
+"$venv_python" -m trec_rag.competition_cache_bundle merge-rescore-source \
   --cache-root "$cache_root" --outputs-root "$source_outputs" \
   "${bundle_dirs[@]}"
 
