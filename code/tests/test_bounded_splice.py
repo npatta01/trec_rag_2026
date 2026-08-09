@@ -119,7 +119,9 @@ def test_new_object_must_be_one_terminal_sentence() -> None:
         "The U.S. government reported a 12 percent increase.",
         "Sept. 5 marked the first outage.",
         "Acme Inc. said the plant would close.",
+        "Acme Inc. — the largest local employer — closed.",
         "The report cited Rep. Smith on the timeline.",
+        "The U.S. (and Canada) joined the pact.",
     ],
 )
 def test_new_object_accepts_one_sentence_with_common_abbreviations(text: str) -> None:
@@ -175,6 +177,12 @@ def test_new_object_rejects_sentence_break_after_an_abbreviation(text: str) -> N
                 ],
             },
         )
+
+
+def test_single_capital_initial_is_not_treated_as_a_safe_abbreviation() -> None:
+    assert bounded_splice._has_internal_sentence_boundary(
+        "The filing was Exhibit A. Results followed."
+    )
 
 
 def test_empty_citations_reports_the_failed_lower_bound() -> None:

@@ -983,7 +983,10 @@ existing per-topic state, creates a topic that never started, and publishes no o
 until every selected final row passes local validation. Multi-stage `overwrite` is intentionally
 unsupported; use a fresh experiment ID for a materially different run. If any topic or final-row
 validation fails, the runner prints each topic ID and sanitized exception and records the same
-details in `work/failures.json`; resume remains the recovery path.
+details in `work/failures.json`; resume remains the recovery path. If a process dies while an
+operation-screen call is in flight, resume cannot safely repeat that consumed Luna reservation.
+The topic therefore publishes its already validated draft fallback and records a loud per-topic
+`operation_screen_crash_fallback` warning in both stderr and `work/failures.json`.
 
 ## Private post-run competition debug report
 

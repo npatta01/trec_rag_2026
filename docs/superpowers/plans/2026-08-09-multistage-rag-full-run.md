@@ -15,7 +15,8 @@
   change transport classification, receipt recovery matching, and deterministic invalid-draft
   repair. The v7 review-hardening patch may tighten splice validation and ambiguous screen
   recovery, close owned HTTP clients, improve resume bookkeeping, and add durable failure
-  diagnostics as recorded in Completion Evidence.
+  diagnostics. The v8 follow-up may convert only a crash-consumed operation screen into a loud,
+  durable validated-draft fallback so an interrupted topic can finish without another model call.
 - Keep the existing maximum of three Sol reservations per topic.
 - Keep single-pass and multi-stage run IDs, output directories, work state, and cached rows completely separate.
 - Reject `experiment.mode: overwrite`; create and resume are the only multi-stage modes.
@@ -311,6 +312,8 @@ Completed 2026-08-09 in linked worktree `hardened-splice-three-topic` on branch
   operation-screen tests passed.
 - Post-review v7 full verification: 2,804 tests passed, 19 skipped, and 60 subtests passed in
   103.89 seconds.
+- Post-follow-up v8 full verification: 2,811 tests passed, 19 skipped, and 60 subtests passed in
+  121.93 seconds.
 - A first full-suite attempt found six stale `/tmp/trec-rag-cache-shards/fixture-pytest-0-*`
   collisions. After deleting only those generated fixtures, the clean rerun passed completely;
   the regenerated disposable fixture and external temp directories were removed afterward.
@@ -324,6 +327,11 @@ Completed 2026-08-09 in linked worktree `hardened-splice-three-topic` on branch
   multi-topic failures visible without changing prompts, models, or call ceilings.
 - Independent Sol review found no Critical issues. Its v7 follow-up identified two runtime and one
   documentation consistency issue; all three were addressed before the final verification rerun.
+- Claude's v8 follow-up identified a publication-liveness regression for a crash-consumed
+  operation screen. Resume now preserves the semantic call ceiling, publishes the validated draft
+  for that topic, and records the downgrade in per-topic state, manifest, stderr, and
+  `work/failures.json`; receipt recovery explicitly preserves true ambiguous failures as
+  fail-closed. Independent follow-up review reported no remaining Critical or Important findings.
 - Privacy audit: all three local configs remain ignored; no output, private state, handoff content,
   or provider response was staged. No hosted model call was made during implementation or
   verification.

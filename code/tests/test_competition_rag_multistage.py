@@ -137,6 +137,8 @@ def _write_completed_topic(
     config: RagGenerationConfig,
     handoff: GenerationHandoff,
     topic: GenerationTopic,
+    *,
+    operation_screen_crash_fallback: bool = False,
 ) -> Path:
     root = _bounded_private_root(config, topic)
     final_path = root / "evaluation/final/submission.jsonl"
@@ -160,6 +162,9 @@ def _write_completed_topic(
         "trial_contract_version": TRIAL_CONTRACT_VERSION,
         "identity": _bounded_identity(config, handoff, topic),
         "stages": {"final": True},
+        "operation_screen": {
+            "crash_fallback": operation_screen_crash_fallback,
+        },
         "stage_hashes": {
             "evaluation/final/submission.jsonl": sha256(final_bytes).hexdigest(),
         },
@@ -259,6 +264,56 @@ def test_resume_reuses_started_topic_and_creates_unstarted_topic(
     assert len(resume_config.output_path.read_text(encoding="utf-8").splitlines()) == 2
 
 
+def test_crash_consumed_screen_fallback_publishes_with_durable_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handoff = _handoff()
+    config = _config(tmp_path)
+
+    async def fake_topic_runner(
+        runner_config: RagGenerationConfig,
+        runner_handoff: GenerationHandoff,
+        topic: GenerationTopic,
+        **_kwargs: object,
+    ) -> Path:
+        return _write_completed_topic(
+            runner_config,
+            runner_handoff,
+            topic,
+            operation_screen_crash_fallback=topic == handoff.topics[0],
+        )
+
+    asyncio.run(
+        run_multistage_generation(
+            config,
+            handoff,
+            api_key="fixture-key",
+            topic_runner=fake_topic_runner,
+        )
+    )
+
+    assert config.output_path.is_file()
+    report = json.loads(
+        (config.work_dir / "failures.json").read_text(encoding="utf-8")
+    )
+    assert report["failure_count"] == 0
+    assert report["warning_count"] == 1
+    assert report["warnings"] == [
+        {
+            "topic_id": "rag2026-0",
+            "kind": "operation_screen_crash_fallback",
+            "message": (
+                "operation-screen call was crash-consumed; published validated "
+                "draft fallback"
+            ),
+        }
+    ]
+    assert "topic rag2026-0: warning: operation-screen call was crash-consumed" in (
+        capsys.readouterr().err
+    )
+
+
 def test_resume_refuses_changed_run_identity_before_dispatch(tmp_path: Path) -> None:
     handoff = _handoff()
     create_config = _config(tmp_path)
@@ -337,6 +392,7 @@ def test_missing_final_never_publishes_and_reports_each_failed_topic(
     assert failure_report == {
         "failure_count": 1,
         "topic_count": 2,
+        "warning_count": 0,
         "failures": [
             {
                 "topic_id": "rag2026-0",
@@ -344,6 +400,7 @@ def test_missing_final_never_publishes_and_reports_each_failed_topic(
                 "message": "provider detail that must not escape",
             }
         ],
+        "warnings": [],
     }
 
 

@@ -45,6 +45,9 @@ MULTISTAGE_IDENTITY_VERSION = 1
 _IDENTITY_FILENAME = "multistage_generation_identity.json"
 _LOCK_FILENAME = ".multistage-generation.lock"
 _FAILURES_FILENAME = "failures.json"
+_CRASH_FALLBACK_WARNING = (
+    "operation-screen call was crash-consumed; published validated draft fallback"
+)
 TopicRunner = Callable[..., Awaitable[Path]]
 
 
@@ -176,6 +179,7 @@ async def _run_multistage_locked(
         for topic, result in zip(topics, results, strict=True)
         if isinstance(result, BaseException)
     ]
+    warnings: list[dict[str, str]] = []
     records: list[dict[str, Any]] = []
     if not failures:
         for topic, result in zip(topics, results, strict=True):
@@ -188,19 +192,32 @@ async def _run_multistage_locked(
                 )
                 continue
             try:
-                records.append(
-                    _load_final_record(
-                        result,
-                        config=config,
-                        handoff=handoff,
-                        topic=topic,
-                    )
+                record = _load_final_record(
+                    result,
+                    config=config,
+                    handoff=handoff,
+                    topic=topic,
                 )
+                records.append(record)
+                state = _bounded_read_state(result)
+                operation_screen = state.get("operation_screen")
+                if (
+                    isinstance(operation_screen, dict)
+                    and operation_screen.get("crash_fallback") is True
+                ):
+                    warnings.append(
+                        {
+                            "topic_id": topic.topic_id,
+                            "kind": "operation_screen_crash_fallback",
+                            "message": _CRASH_FALLBACK_WARNING,
+                        }
+                    )
             except Exception as exc:
                 failures.append((topic.topic_id, exc))
     failure_report = {
         "failure_count": len(failures),
         "topic_count": len(topics),
+        "warning_count": len(warnings),
         "failures": [
             {
                 "topic_id": topic_id,
@@ -209,12 +226,18 @@ async def _run_multistage_locked(
             }
             for topic_id, exc in failures
         ],
+        "warnings": warnings,
     }
     _atomic_write_text(
         config.resolved_work_dir / _FAILURES_FILENAME,
         json.dumps(failure_report, ensure_ascii=False, indent=2, sort_keys=True)
         + "\n",
     )
+    for warning in warnings:
+        print(
+            f"topic {warning['topic_id']}: warning: {warning['message']}",
+            file=sys.stderr,
+        )
     if failures:
         for failure in failure_report["failures"]:
             print(

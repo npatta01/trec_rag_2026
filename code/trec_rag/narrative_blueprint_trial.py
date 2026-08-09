@@ -83,7 +83,7 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
-TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v7_review_hardening"
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v8_screen_liveness"
 SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v2_citation_bound"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
@@ -1323,6 +1323,8 @@ def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
             recovered_payloads[stage] = receipt["accepted_payload"]
         elif outcome == "semantic_error":
             reservation["status"] = "semantic_error"
+        elif outcome == "ambiguous_failure":
+            reservation["status"] = "ambiguous_failure"
         elif outcome == "semantic_success":
             # A receipt without the payload it claims was accepted cannot be reused.
             reservation["status"] = "semantic_error"
@@ -1503,6 +1505,17 @@ def _bounded_stage_status(
         if item.get("stage", item.get("role")) == stage
     ]
     return statuses[-1] if statuses else None
+
+
+def _bounded_operation_screen_crash_fallback(state: dict[str, Any]) -> bool:
+    """Choose the only safe terminal policy for a consumed screen reservation."""
+
+    status = _bounded_stage_status(state, stage="operation-screen", luna=True)
+    if status == "ambiguous_failure":
+        raise RuntimeError(
+            "operation-screen failed ambiguously; refusing silent draft fallback"
+        )
+    return status == "crash_consumed"
 
 
 def _bounded_finish_sol(
@@ -2548,6 +2561,7 @@ async def _run_bounded_revision_with_generators(
         )
 
     if operations_to_screen:
+        screen_crash_fallback = False
         screen_prompt = _bounded_operation_screen_prompt(
             topic,
             blueprint,
@@ -2568,13 +2582,9 @@ async def _run_bounded_revision_with_generators(
         screen_call: dict[str, Any] | None = None
         if not recovered:
             if _bounded_blocked_stage(state, stage="operation-screen", luna=True):
-                screen_status = _bounded_stage_status(
-                    state, stage="operation-screen", luna=True
+                screen_crash_fallback = _bounded_operation_screen_crash_fallback(
+                    state
                 )
-                if screen_status in {"ambiguous_failure", "crash_consumed"}:
-                    raise RuntimeError(
-                        "operation-screen outcome is ambiguous; refusing silent draft fallback"
-                    )
                 screen_payload = None
             else:
                 screen_ordinal = _bounded_reserve_luna(
@@ -2635,12 +2645,14 @@ async def _run_bounded_revision_with_generators(
                 else 0
             ),
             "used_draft_fallback": used_fallback,
+            "crash_fallback": screen_crash_fallback,
         }
     else:
         state["operation_screen"] = {
             "candidate_count": 0,
             "accepted_count": 0,
             "used_draft_fallback": False,
+            "crash_fallback": False,
         }
     state["stages"]["operation_screen"] = True
 

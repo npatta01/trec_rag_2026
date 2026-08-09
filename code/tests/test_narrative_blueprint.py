@@ -38,6 +38,7 @@ from trec_rag.narrative_blueprint_trial import (
     _bounded_provider_call,
     _bounded_recover_pending,
     _bounded_manifest,
+    _bounded_operation_screen_crash_fallback,
     _bounded_record_draft_failure,
     _bounded_rebind_candidate,
     _bounded_recovered_payload,
@@ -539,6 +540,45 @@ def test_recovery_rejects_semantic_success_without_an_accepted_payload(
     assert state["recovered_payloads"] == {}
 
 
+def test_recovery_preserves_an_ambiguous_operation_screen_receipt(
+    tmp_path,
+) -> None:
+    root = tmp_path / "bounded"
+    receipts = root / "receipts"
+    receipts.mkdir(parents=True)
+    (receipts / "operation-screen.json").write_text(
+        json.dumps(
+            {
+                "stage": "operation-screen",
+                "reservation_ordinal": 1,
+                "outcome": "ambiguous_failure",
+                "transport_outcome": "unknown",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "luna_reservations": [
+            {
+                "ordinal": 1,
+                "stage": "operation-screen",
+                "status": "pending",
+                "receipt": "receipts/operation-screen.json",
+            }
+        ],
+        "sol_reservations": [],
+        "recovered_payloads": {},
+        "calls": [],
+    }
+
+    _bounded_recover_pending(root, state)
+
+    assert state["luna_reservations"][0]["status"] == "ambiguous_failure"
+    with pytest.raises(RuntimeError, match="failed ambiguously"):
+        _bounded_operation_screen_crash_fallback(state)
+
+
 def test_manifest_tolerates_a_recovered_call_without_model(tmp_path) -> None:
     root = tmp_path / "bounded"
     root.mkdir()
@@ -556,6 +596,27 @@ def test_manifest_tolerates_a_recovered_call_without_model(tmp_path) -> None:
     manifest = _bounded_manifest(root, state, topic=topic, draft=None, final=None)
 
     assert manifest["luna_call_count"] == 0
+
+
+def test_operation_screen_crash_consumed_uses_loud_draft_fallback() -> None:
+    state = {
+        "luna_reservations": [
+            {"stage": "operation-screen", "status": "crash_consumed"}
+        ]
+    }
+
+    assert _bounded_operation_screen_crash_fallback(state) is True
+
+
+def test_operation_screen_ambiguous_failure_remains_fail_closed() -> None:
+    state = {
+        "luna_reservations": [
+            {"stage": "operation-screen", "status": "ambiguous_failure"}
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="failed ambiguously"):
+        _bounded_operation_screen_crash_fallback(state)
 
 
 def test_invalid_initial_draft_uses_repair_then_skips_audit_and_revision(

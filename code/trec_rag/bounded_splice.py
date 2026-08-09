@@ -236,9 +236,10 @@ def _has_internal_sentence_boundary(text: str) -> bool:
         token = token_match.group(1) if token_match else ""
         abbreviation = token.casefold() in _ABBREVIATIONS or bool(
             re.fullmatch(r"(?:[A-Za-z]\.){2,}", token)
-            or re.fullmatch(r"[A-Z]\.", token)
         )
-        suffix = text[boundary.start() + 1 :].lstrip("\"')]} \t\r\n")
+        suffix = text[boundary.start() + 1 :].lstrip(
+            "\"'()[]{} \t\r\n—–-"
+        )
         if abbreviation and _abbreviation_continues_sentence(token, suffix):
             continue
         return True
