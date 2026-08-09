@@ -247,7 +247,7 @@ def _is_complete(text: str, tokens: Sequence[Any]) -> bool:
         return False
     if _TERMINAL_PUNCTUATION.search(stripped):
         return True
-    return any(token.pos_ in {"VERB", "AUX"} for token in tokens)
+    return any("Fin" in token.morph.get("VerbForm") for token in tokens)
 
 
 def _import_text_splitter():

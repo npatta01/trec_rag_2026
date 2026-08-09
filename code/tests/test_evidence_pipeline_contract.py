@@ -430,12 +430,117 @@ def test_exact_extraction_keeps_character_byte_and_adjacent_evidence() -> None:
     sentence = measured.evidence_sentences[0]
     assert source[sentence.start_char:sentence.end_char] == measured.text
     assert source.encode()[sentence.start_byte:sentence.end_byte].decode() == measured.text
-    assert measured.context_before is not None
-    assert measured.context_before.text == "Heading: Café findings"
+    assert measured.context_before is None
+    assert measured.matched_paragraph.text == (
+        "Heading: Café findings\n\n"
+        "Dr. Ada measured  3.5 meters. This result confirms safety."
+    )
+    assert all(row.text != "Heading: Café findings" for row in candidates)
     assert measured.context_after is not None
     assert measured.context_after.text == "Ωmega evidence proves durability! Another detail ends."
     assert [row.text for row in candidates if row.candidate_kind == "exact_sentence_pair"] == [
         "Dr. Ada measured  3.5 meters. This result confirms safety."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("passage_start", "passage_end"),
+    [
+        (0, len("Alpha")),
+        (len("Alpha reported a clear "), len("Alpha reported a clear improvement.")),
+    ],
+)
+def test_partial_passage_overlap_does_not_authorize_a_whole_sentence(
+    passage_start: int,
+    passage_end: int,
+) -> None:
+    source = "Alpha reported a clear improvement."
+    scoring_text = _scoring_text(source)
+    request = ExtractiveCandidateRequest(
+        topic_id="224",
+        document_id="doc-partial-singleton",
+        source=source,
+        document_sha256=_digest(source),
+        scoring_text_sha256=_digest(scoring_text),
+        subnarratives=(CandidateSubnarrative("safety", "Safety evidence"),),
+        passages=(
+            ScoredPassage(
+                "p1",
+                "original",
+                "topic-224",
+                passage_start,
+                passage_end,
+                _digest(scoring_text),
+                _digest(scoring_text[passage_start:passage_end]),
+                1.0,
+                1,
+            ),
+        ),
+    )
+
+    candidates = extract_document_candidates(
+        request,
+        _FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+    )
+
+    assert candidates == ()
+
+
+@pytest.mark.parametrize("partial_second", ["prefix", "suffix"])
+def test_partial_passage_overlap_does_not_authorize_a_sentence_pair(
+    partial_second: str,
+) -> None:
+    source = (
+        "Alpha reported a clear improvement. "
+        "This result confirms the safety profile."
+    )
+    scoring_text = _scoring_text(source)
+    first_end = scoring_text.index(" This")
+    second_start = scoring_text.index("This")
+    if partial_second == "prefix":
+        partial_start, partial_end = second_start, second_start + len("This")
+    else:
+        partial_start, partial_end = scoring_text.index("profile"), len(scoring_text)
+    request = ExtractiveCandidateRequest(
+        topic_id="224",
+        document_id="doc-partial-pair",
+        source=source,
+        document_sha256=_digest(source),
+        scoring_text_sha256=_digest(scoring_text),
+        subnarratives=(CandidateSubnarrative("safety", "Safety evidence"),),
+        passages=(
+            ScoredPassage(
+                "p1",
+                "original",
+                "topic-224",
+                0,
+                first_end,
+                _digest(scoring_text),
+                _digest(scoring_text[:first_end]),
+                1.0,
+                1,
+            ),
+            ScoredPassage(
+                "p2",
+                "original",
+                "topic-224",
+                partial_start,
+                partial_end,
+                _digest(scoring_text),
+                _digest(scoring_text[partial_start:partial_end]),
+                0.9,
+                2,
+            ),
+        ),
+    )
+
+    candidates = extract_document_candidates(
+        request,
+        _FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+    )
+
+    assert [candidate.text for candidate in candidates] == [
+        "Alpha reported a clear improvement."
     ]
 
 

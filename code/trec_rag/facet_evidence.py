@@ -854,11 +854,23 @@ def _passage_provenance(
     translated: Sequence[_TranslatedPassage],
     source: str,
     byte_offsets: tuple[int, ...],
-    paragraph: SourceSpan,
+    span: SourceSpan,
+    *,
+    require_full_span: bool = False,
 ) -> tuple[PassageProvenance, ...]:
+    """Return intersecting passages, or passages containing the complete span."""
     selected = [
         row for row in translated
-        if row.source_start_char < paragraph.end_char and row.source_end_char > paragraph.start_char
+        if (
+            require_full_span
+            and row.source_start_char <= span.start_char
+            and row.source_end_char >= span.end_char
+        )
+        or (
+            not require_full_span
+            and row.source_start_char < span.end_char
+            and row.source_end_char > span.start_char
+        )
     ]
     unique = {
         (
@@ -929,7 +941,16 @@ def extract_document_candidates(request: ExtractiveCandidateRequest, scorer: Sen
             paragraph,
             provenance,
             tuple(
-                (sentence, _passage_provenance(translated, request.source, byte_offsets, sentence))
+                (
+                    sentence,
+                    _passage_provenance(
+                        translated,
+                        request.source,
+                        byte_offsets,
+                        sentence,
+                        require_full_span=True,
+                    ),
+                )
                 for sentence in _sentences_in_paragraph(request.source, paragraph, byte_offsets)
             ),
         )

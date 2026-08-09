@@ -191,6 +191,20 @@ def test_a_noun_phrase_heading_does_not_stand_alone() -> None:
     assert [row.is_complete for row in sentence_segmenter().segment("Vaccine Safety Data")] == [False]
 
 
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "How to Apply",
+        "Getting Started",
+        "Learn More",
+        "Ways to Save",
+        "Frequently Asked Questions",
+    ],
+)
+def test_an_unpunctuated_nonfinite_heading_does_not_stand_alone(heading: str) -> None:
+    assert [row.is_complete for row in sentence_segmenter().segment(heading)] == [False]
+
+
 def test_a_document_past_spacy_max_length_still_segments() -> None:
     """One oversized document must not abort a topic's candidate generation."""
     block = "The committee approved the rules. Prices rose sharply that year.\n\n"
