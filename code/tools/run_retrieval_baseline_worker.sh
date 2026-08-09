@@ -20,8 +20,8 @@ Usage:
     --input-prefix HF_PREFIX --output-prefix HF_PREFIX \
     --topic SAFE_ID [--topic SAFE_ID]
 
-The worker restores one or two authenticated input cache bundles, scores each
-topic sequentially on one GPU, exports the three runs, and publishes only
+The worker restores one authenticated private input directory, scores its one
+or two topics sequentially on one GPU, exports the three runs, and publishes only
 text-free matrices, run files, manifests, and receipts.
 EOF
 }
@@ -115,28 +115,28 @@ print(f"cuda_device={torch.cuda.get_device_name(0)}")
 print(f"model_snapshot_verified={model}@{revision}")
 PY
 
-for topic_id in "${topic_ids[@]}"; do
-  bundle_dir="$worker_root/input/$topic_id"
-  mkdir -m 700 "$bundle_dir"
-  "$venv_hf" buckets sync "$input_prefix/$topic_id" "$bundle_dir" --no-delete
-  "$venv_python" -m trec_rag.competition_cache_bundle verify "$bundle_dir"
-done
-
-bundle_args=()
-for topic_id in "${topic_ids[@]}"; do
-  bundle_args+=("$worker_root/input/$topic_id")
-done
-"$venv_python" -m trec_rag.competition_cache_bundle merge \
-  --cache-root "$worker_root/cache" \
-  --outputs-root "$worker_root/outputs" \
-  --score-conflicts strict \
-  "${bundle_args[@]}"
+input_dir="$worker_root/input/private"
+mkdir -m 700 "$input_dir"
+"$venv_hf" buckets sync "$input_prefix" "$input_dir" --no-delete
+verify_args=()
+for topic_id in "${topic_ids[@]}"; do verify_args+=(--topic "$topic_id"); done
+"$venv_python" -m trec_rag.retrieval_baseline_input_bundle verify \
+  "$input_dir" "${verify_args[@]}"
+"$venv_python" -m trec_rag.retrieval_baseline_input_bundle import-scores \
+  "$input_dir" --score-cache "$worker_root/cache/reranker"
+source_run_id=$("$venv_python" - "$input_dir/input-manifest.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+print(value["source_run_id"])
+PY
+)
+safe_id "$source_run_id" || die "input source run ID is unsafe"
 
 for topic_id in "${topic_ids[@]}"; do
   mkdir -p "$worker_root/matrices/$topic_id"
   "$venv_python" -m trec_rag.retrieval_baseline_runs score-topic \
-    --source-dir "$worker_root/outputs/facet-deepseek-b40-v3" \
-    --document-store "$worker_root/cache/documents/v1" \
+    --source-dir "$input_dir/source/$source_run_id" \
+    --document-store "$input_dir/documents/v1" \
     --score-cache "$worker_root/cache/reranker" \
     --output-dir "$worker_root/matrices" \
     --topic "$topic_id" \
@@ -189,7 +189,9 @@ listing="$worker_root/output-listing.json"
 "$venv_hf" buckets list "$output_prefix" --recursive --format json >"$listing"
 "$venv_python" - "$listing" <<'PY'
 import json, sys
-rows = json.load(open(sys.argv[1], encoding="utf-8"))
+with open(sys.argv[1], encoding="utf-8") as stream:
+    body = stream.read()
+rows = [] if not body.strip() else json.loads(body)
 if not isinstance(rows, list):
     raise SystemExit("output prefix listing is invalid")
 if any(isinstance(row, dict) and row.get("type") == "file" for row in rows):

@@ -2091,12 +2091,27 @@ contribute globally strong passages. The matrix artifact contains hashes, identi
 and scores but no document text. Its manifest and the run manifest record exact matrix counts,
 source-pool membership hashes, cutoff statistics, admission overlap, fallback use, and `k_t`.
 
-For an NVIDIA smoke, package each completed source topic with
-`trec_rag.competition_cache_bundle` and publish those immutable private bundles under one
-`.../trec_rag_2026/artifacts/<input-id>/<topic-id>` prefix. The checked-in
+For an NVIDIA smoke, build one immutable private input directory containing one or two topics:
+
+```bash
+.venv/bin/python -m trec_rag.retrieval_baseline_input_bundle build \
+  --source-dir outputs/facet-deepseek-b40-v3 \
+  --document-store cache/documents/v1 \
+  --score-cache cache/reranker \
+  --output-dir outputs/retrieval-baseline-input/<input-id> \
+  --topic rag2026-0 --topic rag2026-37
+
+.venv/bin/python -m trec_rag.retrieval_baseline_input_bundle verify \
+  outputs/retrieval-baseline-input/<input-id> \
+  --topic rag2026-0 --topic rag2026-37
+```
+
+The directory contains the authenticated source chain, exact content-addressed documents, and
+only the already-cached reranker rows needed by those topics. Publish it to one private
+`.../trec_rag_2026/artifacts/<input-id>` prefix. The checked-in
 `.dstack/rag26-retrieval-baseline-worker.yaml` runs only through a clean committed snapshot and
 invokes `code/tools/run_retrieval_baseline_worker.sh`. The worker accepts one or two topics,
-restores and verifies their bundles, scores sequentially on one 48 GB GPU, and round-trip
+restores and verifies the input, scores sequentially on one 48 GB GPU, and round-trip
 verifies its private output publication. It uploads only text-free matrices, run files,
 manifests, and receipts; document text and live caches remain inside the disposable worker.
 
@@ -2104,6 +2119,18 @@ Run its credential-free argument/source preflight before previewing offers:
 
 ```bash
 bash code/tools/run_retrieval_baseline_worker.sh --preflight \
+  --task-name smoke-0-37 \
+  --input-prefix hf://buckets/<private-bucket>/trec_rag_2026/artifacts/<input-id> \
+  --output-prefix hf://buckets/<private-bucket>/trec_rag_2026/experiments/<output-id> \
+  --topic rag2026-0 --topic rag2026-37
+```
+
+Preview dstack offers through the clean-snapshot launcher. Preview is the default and declines
+submission; `--launch` is the explicit detached paid-run mode:
+
+```bash
+bash code/tools/apply_retrieval_baseline_worker.sh --preview \
+  --name rag26-baseline-smoke-0-37 \
   --task-name smoke-0-37 \
   --input-prefix hf://buckets/<private-bucket>/trec_rag_2026/artifacts/<input-id> \
   --output-prefix hf://buckets/<private-bucket>/trec_rag_2026/experiments/<output-id> \

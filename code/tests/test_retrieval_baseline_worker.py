@@ -8,6 +8,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKER = REPO_ROOT / "code/tools/run_retrieval_baseline_worker.sh"
+LAUNCHER = REPO_ROOT / "code/tools/apply_retrieval_baseline_worker.sh"
 TEMPLATE = REPO_ROOT / ".dstack/rag26-retrieval-baseline-worker.yaml"
 
 
@@ -81,3 +82,14 @@ def test_dstack_template_is_pinned_private_and_gpu_bounded() -> None:
     assert value["spot_policy"] == "on-demand"
     assert value["idle_duration"] == "0s"
     assert value["max_price"] == 1.0
+
+
+def test_launcher_defaults_to_declined_preview_and_uses_clean_snapshot() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "mode=preview" in source
+    assert "printf 'n\\n'" in source
+    assert 'git clone --quiet --no-hardlinks "$REPO_ROOT" "$snapshot"' in source
+    assert '[[ -z $source_status ]]' in source
+    assert '"$dstack_bin" apply' in source
+    assert ' -y -d -- ' in source
