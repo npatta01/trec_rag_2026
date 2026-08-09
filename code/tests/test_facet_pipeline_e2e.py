@@ -100,11 +100,28 @@ def test_cli_passes_repeated_topics_to_run_official_in_argument_order(
     capsys,
 ) -> None:
     """Catches CLI selector reordering or loss before the retrieval run starts."""
-    calls: list[tuple[Path, tuple[str, ...] | None, Path | None, bool]] = []
+    calls: list[
+        tuple[Path, tuple[str, ...] | None, Path | None, bool, bool]
+    ] = []
     config_path = tmp_path / "competition.yaml"
 
-    def run(config, *, topic_ids, topic_subset, offline_cache_only):
-        calls.append((config, topic_ids, topic_subset, offline_cache_only))
+    def run(
+        config,
+        *,
+        topic_ids,
+        topic_subset,
+        offline_cache_only,
+        cached_upstream_rescore,
+    ):
+        calls.append(
+            (
+                config,
+                topic_ids,
+                topic_subset,
+                offline_cache_only,
+                cached_upstream_rescore,
+            )
+        )
         return SimpleNamespace(
             retrieval_export=SimpleNamespace(
                 manifest=tmp_path / "outputs" / "retrieval_export_manifest.json"
@@ -120,7 +137,9 @@ def test_cli_passes_repeated_topics_to_run_official_in_argument_order(
         == 0
     )
 
-    assert calls == [(config_path, ("rag2026-1", "rag2026-0"), None, False)]
+    assert calls == [
+        (config_path, ("rag2026-1", "rag2026-0"), None, False, False)
+    ]
     assert capsys.readouterr().out == f"output={tmp_path / 'outputs'}\n"
 
 
@@ -301,7 +320,9 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         *,
         config_sha256,
         expected_retriever_identity,
+        execution_policy,
     ):
+        assert execution_policy == "online"
         assert len(config_sha256) == 64
         calls.append(
             (topic, config, identity, dependencies, expected_retriever_identity)

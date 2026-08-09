@@ -525,7 +525,7 @@ def _run_merged_offline_replay(
         config_bytes=config_bytes,
         config_sha256=hashlib.sha256(config_bytes).hexdigest(),
         topic_root=(offline_config.output_dir / _TOPIC_ID).resolve(),
-        offline_cache_only=True,
+        execution_policy="offline-cache-only",
     )
     try:
         outcome = competition_retrieval._run_offline_topic_staged(

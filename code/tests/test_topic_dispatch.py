@@ -33,7 +33,7 @@ def _job(
         config_bytes=config_bytes,
         config_sha256=sha256(config_bytes).hexdigest(),
         topic_root=(root / run_id / topic_id).resolve(),
-        offline_cache_only=offline_cache_only,
+        execution_policy=("offline-cache-only" if offline_cache_only else "online"),
     )
 
 
@@ -142,6 +142,56 @@ def test_offline_dispatch_does_not_reuse_an_online_mode_receipt(tmp_path: Path) 
     assert calls == ["topic-a"]
     assert read_topic_receipt(online) == online_receipt
     assert read_topic_receipt(offline) == online_receipt
+
+
+@pytest.mark.parametrize(
+    ("policy", "filename"),
+    (
+        ("online", "topic-job-receipt.json"),
+        ("offline-cache-only", "topic-job-receipt.offline-cache-only.json"),
+        (
+            "cached-upstream-rescore",
+            "topic-job-receipt.cached-upstream-rescore.json",
+        ),
+    ),
+)
+def test_topic_job_policy_has_an_isolated_canonical_receipt(
+    tmp_path: Path,
+    policy: str,
+    filename: str,
+) -> None:
+    config_bytes = b"schema_version: test\n"
+    job = TopicJob(
+        topic_id="topic-a",
+        run_id="run-a",
+        config_path=(tmp_path / "config.yaml").resolve(),
+        config_bytes=config_bytes,
+        config_sha256=sha256(config_bytes).hexdigest(),
+        topic_root=(tmp_path / "run-a" / "topic-a").resolve(),
+        execution_policy=policy,
+    )
+    expected = _receipt(job, b"projection")
+
+    publish_topic_receipt(job, expected)
+
+    path = job.topic_root / filename
+    assert path.is_file()
+    assert json.loads(path.read_bytes())["mode"] == policy
+    assert read_topic_receipt(job) == expected
+
+
+def test_topic_job_rejects_unknown_execution_policy(tmp_path: Path) -> None:
+    config_bytes = b"schema_version: test\n"
+    with pytest.raises(ValueError, match="execution_policy"):
+        TopicJob(
+            topic_id="topic-a",
+            run_id="run-a",
+            config_path=(tmp_path / "config.yaml").resolve(),
+            config_bytes=config_bytes,
+            config_sha256=sha256(config_bytes).hexdigest(),
+            topic_root=(tmp_path / "run-a" / "topic-a").resolve(),
+            execution_policy="surprise",
+        )
 
 
 def test_topic_job_rejects_config_bytes_that_do_not_match_the_pinned_hash(

@@ -2426,7 +2426,7 @@ def _validate_extracted_offline_replay(
             config_bytes=config_bytes,
             config_sha256=hashlib.sha256(config_bytes).hexdigest(),
             topic_root=(replay_config.output_dir / topic_id).resolve(),
-            offline_cache_only=True,
+            execution_policy="offline-cache-only",
         )
         outcome = competition_retrieval._run_offline_topic_staged(
             job,
