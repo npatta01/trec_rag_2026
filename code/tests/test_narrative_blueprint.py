@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from hashlib import sha256
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +29,7 @@ from trec_rag.narrative_blueprint import (
 from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
     _bounded_record_draft_failure,
+    _bounded_rebind_candidate,
     _bounded_recovered_payload,
     _audit_card_docids,
     _digest_json,
@@ -415,6 +417,43 @@ def test_invalid_draft_failure_seals_without_repair_audit_or_revision(tmp_path) 
     assert state["stages"]["revision"] is False
     assert state["stages"]["final"] is False
     assert [item["role"] for item in state["sol_reservations"]] == ["draft"]
+
+
+def test_bounded_rebind_prunes_references_orphaned_by_splice_replacement() -> None:
+    topic = _topic_fixture()
+    candidate = {
+        "metadata": {
+            "team_id": "castorini",
+            "narrative_id": topic.topic_id,
+            "narrative": topic.narrative,
+            "run_id": "draft-run",
+            "run_desc": "bounded trial",
+        },
+        "references": ["DOCID_SENTINEL_ALPHA", "DOCID_SENTINEL_BETA"],
+        "answer": [
+            {
+                "text": "Only the second reference remains cited after replacement.",
+                "citations": [1],
+            }
+        ],
+    }
+
+    rebound = _bounded_rebind_candidate(
+        candidate,
+        topic=topic,
+        config=SimpleNamespace(team_id="castorini", run_desc="bounded trial"),
+        run_id="final-run",
+    )
+
+    assert rebound["references"] == ["DOCID_SENTINEL_BETA"]
+    assert rebound["answer"] == [
+        {
+            "text": "Only the second reference remains cited after replacement.",
+            "citations": [0],
+        }
+    ]
+    assert rebound["metadata"]["run_id"] == "final-run"
+    assert candidate["references"] == ["DOCID_SENTINEL_ALPHA", "DOCID_SENTINEL_BETA"]
 
 
 @pytest.mark.parametrize(

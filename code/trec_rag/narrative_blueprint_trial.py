@@ -75,7 +75,7 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
-TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v3_splice_citation_bound"
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v4_splice_reference_normalized"
 SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v2_citation_bound"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
@@ -1636,6 +1636,7 @@ def _bounded_rebind_candidate(
 ) -> dict[str, Any]:
     rebound = json.loads(json.dumps(record, ensure_ascii=False))
     rebound["metadata"]["run_id"] = run_id
+    rebound = normalize_generated_record(rebound)
     _validate_generated_submission_record(
         rebound,
         topic_id=topic.topic_id,
