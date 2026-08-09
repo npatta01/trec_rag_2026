@@ -243,3 +243,35 @@ def test_evaluation_overlay_rejects_manifest_replacement_between_snapshot_and_lo
     except EvaluationError:
         return
     assert overlay.manifest_sha256 == sha256(bundle.manifest_path.read_bytes()).hexdigest()
+
+
+def test_evaluation_overlay_rejects_aba_manifest_replacement_at_load_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trec_rag.competition_debug_bundle as debug_bundle
+
+    _fixture, bundle = _evaluation_fixture(tmp_path)
+    snapshot = bundle.manifest_path.read_bytes()
+    snapshot_manifest = json.loads(snapshot)
+    original_load_manifest = debug_bundle.load_manifest
+
+    def replace_and_restore(path: Path):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["retrieval"]["per_topic"]["alpha-topic"]["ndcg@10"] = 0.5
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        loaded = original_load_manifest(path)
+        path.write_bytes(snapshot)
+        return loaded
+
+    monkeypatch.setattr(debug_bundle, "load_manifest", replace_and_restore)
+    try:
+        overlay = debug_bundle.load_evaluation_overlay(
+            bundle.manifest_path, ("alpha-topic", "beta-topic")
+        )
+    except EvaluationError:
+        return
+    retrieval = overlay.families[0]
+    assert retrieval.per_topic["alpha-topic"]["ndcg@10"] == snapshot_manifest[
+        "metrics"
+    ]["retrieval"]["per_topic"]["alpha-topic"]["ndcg@10"]
+    assert overlay.manifest_sha256 == sha256(snapshot).hexdigest()

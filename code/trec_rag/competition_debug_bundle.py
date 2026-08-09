@@ -8,6 +8,7 @@ already validated offline-evaluation manifest into typed, read-only views.
 
 from __future__ import annotations
 
+import json
 import math
 import statistics
 from collections.abc import Mapping, Sequence
@@ -362,13 +363,17 @@ def load_evaluation_overlay(
     """Validate and project an offline-evaluation manifest into safe metric views."""
     path = Path(path)
     payload = path.read_bytes()
-    manifest = load_manifest(path)
     try:
-        current_payload = path.read_bytes()
-    except OSError as error:
+        snapshot_manifest = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvaluationError(f"{path}: manifest is not valid JSON") from error
+    try:
+        loaded_manifest = load_manifest(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise EvaluationError(f"{path}: manifest changed during load") from error
-    if current_payload != payload:
+    if loaded_manifest != snapshot_manifest:
         raise EvaluationError(f"{path}: manifest changed during load")
+    manifest = snapshot_manifest
     try:
         build_presentation(manifest)
     except EvaluationError:
