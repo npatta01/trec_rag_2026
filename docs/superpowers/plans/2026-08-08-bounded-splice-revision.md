@@ -8,6 +8,20 @@
 
 **Tech Stack:** Python 3.12, pytest, the existing strict OpenRouter JSON generator, existing generation handoff and organizer validators.
 
+## Current Status
+
+- Tasks 1 and 2 are complete at commits `94ad0e4`, `b1a84db`, and the provider-schema fix
+  `e0c368f`; 33 combined focused tests pass.
+- Task 3 ran topic `707` twice under separate private namespaces. Neither attempt produced a
+  draft-to-splice pair: the first hit a provider schema rejection and the second required its Sol
+  repair reservation for an over-limit initial draft.
+- The trial stopped after four Sol requests across the topic. No post-hoc pair evaluation was run.
+- Aggregate evidence and exact cost are in
+  `docs/superpowers/reports/2026-08-08-bounded-splice-revision-results.md`.
+- Next action: choose between one fresh topic under the corrected schema or a cheaper Luna-only
+  mechanical splice probe. Do not make another topic-707 Sol call without revisiting the user's
+  per-topic call limit.
+
 ## Global Constraints
 
 - Follow `docs/superpowers/specs/2026-08-08-bounded-splice-revision-design.md` exactly.
