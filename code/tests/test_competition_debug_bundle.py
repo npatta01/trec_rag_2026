@@ -695,6 +695,60 @@ def test_bundle_freezes_pages_before_late_pinned_validation(
     assert mutation_errors == [PermissionError]
 
 
+@pytest.mark.parametrize("mutation", ("addition", "replacement"))
+def test_bundle_freezes_root_during_final_pinned_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / f"frozen-final-root-{mutation}"
+    replacement = fixture.retrieval_output / "replacement-index.html"
+    replacement.write_text("foreign replacement", encoding="utf-8")
+    real_validate = bundle_module._validate_pinned_payload
+    real_open_directory = bundle_module._open_directory_fd
+    mutation_errors: list[type[BaseException]] = []
+    fresh_parent_opens = 0
+
+    def observed_open_directory(path: Path) -> int:
+        nonlocal fresh_parent_opens
+        if path == target.parent:
+            fresh_parent_opens += 1
+        return real_open_directory(path)
+
+    def mutate_root_during_pinned_sweep(*args: object, **kwargs: object) -> None:
+        guardian_fd = args[0]
+        payload_name = args[1]
+        payload = Path(os.readlink(f"/proc/self/fd/{guardian_fd}")) / str(payload_name)
+        assert fresh_parent_opens == 0
+        try:
+            if mutation == "addition":
+                (payload / "unlisted.txt").write_text("foreign", encoding="utf-8")
+            else:
+                os.replace(replacement, payload / "index.html")
+        except BaseException as error:  # pragma: no cover - assertion below records it
+            mutation_errors.append(type(error))
+        else:
+            raise AssertionError("final reconciliation mutated the frozen bundle root")
+        real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(bundle_module, "_open_directory_fd", observed_open_directory)
+    monkeypatch.setattr(
+        bundle_module,
+        "_validate_pinned_payload",
+        mutate_root_during_pinned_sweep,
+    )
+    receipt = debug_report.build_debug_report_bundle(
+        fixture.retrieval_config, output_dir=target
+    )
+
+    assert receipt.output_dir == target.resolve()
+    assert mutation_errors == [PermissionError]
+    assert fresh_parent_opens >= 1
+    assert replacement.read_text(encoding="utf-8") == "foreign replacement"
+    assert not (target / "unlisted.txt").exists()
+
+
 def test_bundle_freezes_pages_before_success_receipt_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -883,6 +937,8 @@ def test_bundle_publication_parent_fd_closes_on_libc_configuration_failure(
     fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
     target = fixture.retrieval_output / "parent-fd-libc-failure"
     real_cdll = bundle_module.ctypes.CDLL
+    real_cleanup = bundle_module._cleanup_staging
+    payload_modes_before_cleanup: list[int] = []
 
     def fail_cdll(*args: object, **kwargs: object):
         raise OSError("forced libc configuration failure")
@@ -898,11 +954,21 @@ def test_bundle_publication_parent_fd_closes_on_libc_configuration_failure(
                 values.add(value)
         return values
 
+    def observe_cleanup(state: object, cleanup_target: Path) -> None:
+        if state is not None:
+            payload_modes_before_cleanup.append(
+                stat.S_IMODE(os.fstat(state.payload_fd).st_mode)  # type: ignore[attr-defined]
+            )
+        monkeypatch.setattr(bundle_module.ctypes, "CDLL", real_cdll)
+        real_cleanup(state, cleanup_target)  # type: ignore[arg-type]
+
     monkeypatch.setattr(bundle_module.ctypes, "CDLL", fail_cdll)
+    monkeypatch.setattr(bundle_module, "_cleanup_staging", observe_cleanup)
     before = output_fds()
     with pytest.raises(OSError, match="forced libc configuration failure"):
         debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
     assert output_fds() == before
+    assert payload_modes_before_cleanup == [0o500]
     monkeypatch.setattr(bundle_module.ctypes, "CDLL", real_cdll)
 
 
@@ -968,7 +1034,9 @@ def test_bundle_rejects_a_late_empty_target_without_overwriting_it(
     fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
     target = fixture.retrieval_output / "late-target"
     real_rename = bundle_module._rename_noreplace_fds
+    real_cleanup = bundle_module._cleanup_staging
     injected = False
+    payload_modes_before_cleanup: list[int] = []
 
     def inject_target(
         old_dir_fd: int,
@@ -983,13 +1051,62 @@ def test_bundle_rejects_a_late_empty_target_without_overwriting_it(
             target.mkdir()
         real_rename(old_dir_fd, old_name, new_dir_fd, new_name, **kwargs)
 
+    def observe_cleanup(state: object, cleanup_target: Path) -> None:
+        if state is not None:
+            payload_modes_before_cleanup.append(
+                stat.S_IMODE(os.fstat(state.payload_fd).st_mode)  # type: ignore[attr-defined]
+            )
+        real_cleanup(state, cleanup_target)  # type: ignore[arg-type]
+
     monkeypatch.setattr(bundle_module, "_rename_noreplace_fds", inject_target)
+    monkeypatch.setattr(bundle_module, "_cleanup_staging", observe_cleanup)
     with pytest.raises(FileExistsError):
         debug_report.build_debug_report_bundle(fixture.retrieval_config, output_dir=target)
 
     assert target.is_dir()
     assert list(target.iterdir()) == []
+    assert payload_modes_before_cleanup == [0o500]
     assert list(fixture.retrieval_output.glob(".late-target.*.tmp")) == []
+
+
+def test_bundle_rename_failure_refreezes_staged_payload_before_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
+    target = fixture.retrieval_output / "injected-rename-failure"
+    real_cdll = bundle_module.ctypes.CDLL
+    real_cleanup = bundle_module._cleanup_staging
+    payload_modes_before_cleanup: list[int] = []
+
+    class FailingRenameAt2:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, *_args: object) -> int:
+            bundle_module.ctypes.set_errno(bundle_module.errno.EIO)
+            return -1
+
+    class FailingLibc:
+        renameat2 = FailingRenameAt2()
+
+    def observe_cleanup(state: object, cleanup_target: Path) -> None:
+        if state is not None:
+            payload_modes_before_cleanup.append(
+                stat.S_IMODE(os.fstat(state.payload_fd).st_mode)  # type: ignore[attr-defined]
+            )
+        monkeypatch.setattr(bundle_module.ctypes, "CDLL", real_cdll)
+        real_cleanup(state, cleanup_target)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(bundle_module.ctypes, "CDLL", lambda *_args, **_kwargs: FailingLibc())
+    monkeypatch.setattr(bundle_module, "_cleanup_staging", observe_cleanup)
+    with pytest.raises(OSError, match="Input/output error"):
+        debug_report.build_debug_report_bundle(
+            fixture.retrieval_config, output_dir=target
+        )
+
+    assert not target.exists()
+    assert payload_modes_before_cleanup == [0o500]
+    assert list(fixture.retrieval_output.glob(".injected-rename-failure.*.tmp")) == []
 
 
 def test_bundle_keeps_complete_target_when_post_rename_fsync_fails(

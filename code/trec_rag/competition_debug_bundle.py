@@ -1234,6 +1234,7 @@ def _rename_noreplace_fds(
     target_parent_path: Path | None = None,
     expected_target_parent_identity: _FileIdentity | None = None,
     approved_roots: Sequence[Path] = (),
+    payload_fd: int | None = None,
 ) -> int | None:
     """Atomically rename one descriptor-relative entry without replacing a target.
 
@@ -1243,6 +1244,36 @@ def _rename_noreplace_fds(
     the rename.  The fresh descriptor is closed after the syscall; the caller
     opens a separate fresh descriptor for the post-rename parent fsync.
     """
+    if expected_old_identity is not None:
+        try:
+            source_record = os.stat(
+                old_name, dir_fd=old_dir_fd, follow_symlinks=False
+            )
+        except OSError as error:
+            raise ValueError(
+                "bundle staging payload disappeared before publication"
+            ) from error
+        if stat.S_ISLNK(source_record.st_mode) or (
+            source_record.st_dev,
+            source_record.st_ino,
+        ) != expected_old_identity:
+            raise ValueError("bundle staging payload identity changed before publication")
+    if expected_file_identities is not None:
+        if (
+            expected_old_identity is None
+            or expected_receipts is None
+            or expected_topic_ids is None
+        ):
+            raise ValueError("bundle publication reconciliation inputs are incomplete")
+        _validate_pinned_payload(
+            old_dir_fd,
+            old_name,
+            expected_old_identity,
+            expected_file_identities,
+            expected_receipts,
+            expected_topic_ids,
+        )
+
     publication_parent_fd: int | None = None
     try:
         destination_fd = new_dir_fd
@@ -1270,69 +1301,109 @@ def _rename_noreplace_fds(
                 and parent_identity != expected_target_parent_identity
             ):
                 raise ValueError("bundle target parent identity changed before publication")
-        if expected_old_identity is not None:
-            try:
-                source_record = os.stat(
-                    old_name, dir_fd=old_dir_fd, follow_symlinks=False
-                )
-            except OSError as error:
-                raise ValueError(
-                    "bundle staging payload disappeared before publication"
-                ) from error
-            if stat.S_ISLNK(source_record.st_mode) or (
-                source_record.st_dev,
-                source_record.st_ino,
-            ) != expected_old_identity:
-                raise ValueError("bundle staging payload identity changed before publication")
-        if expected_file_identities is not None:
-            if (
-                expected_old_identity is None
-                or expected_receipts is None
-                or expected_topic_ids is None
-            ):
-                raise ValueError("bundle publication reconciliation inputs are incomplete")
-            _validate_pinned_payload(
-                old_dir_fd,
-                old_name,
-                expected_old_identity,
-                expected_file_identities,
-                expected_receipts,
-                expected_topic_ids,
-            )
         if sys.platform != "linux":
             raise OSError(
                 errno.ENOTSUP,
                 "atomic no-replace directory rename is unavailable on this platform",
             )
-        libc = ctypes.CDLL(None, use_errno=True)
-        renameat2 = getattr(libc, "renameat2", None)
-        if renameat2 is None:
-            raise OSError(
-                errno.ENOTSUP,
-                "atomic no-replace directory rename is unavailable",
+        if payload_fd is None:
+            _call_renameat2_noreplace(
+                old_dir_fd,
+                old_name,
+                destination_fd,
+                new_name,
             )
-        renameat2.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        renameat2.restype = ctypes.c_int
-        result = renameat2(
-            old_dir_fd,
-            os.fsencode(old_name),
-            destination_fd,
-            os.fsencode(new_name),
-            1,
-        )
-        if result != 0:
-            error_number = ctypes.get_errno()
-            raise OSError(error_number, os.strerror(error_number), new_name)
+        else:
+            _publish_frozen_payload(
+                old_dir_fd,
+                old_name,
+                destination_fd,
+                new_name,
+                payload_fd=payload_fd,
+                expected_payload_identity=expected_old_identity,
+            )
         return None
     finally:
         if publication_parent_fd is not None:
             os.close(publication_parent_fd)
+
+
+def _call_renameat2_noreplace(
+    old_dir_fd: int,
+    old_name: str,
+    new_dir_fd: int,
+    new_name: str,
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-replace directory rename is unavailable",
+        )
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        old_dir_fd,
+        os.fsencode(old_name),
+        new_dir_fd,
+        os.fsencode(new_name),
+        1,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), new_name)
+
+
+def _publish_frozen_payload(
+    old_dir_fd: int,
+    old_name: str,
+    new_dir_fd: int,
+    new_name: str,
+    *,
+    payload_fd: int,
+    expected_payload_identity: _FileIdentity | None,
+) -> None:
+    """Open only the syscall-boundary write window for a frozen payload."""
+    payload_record = os.fstat(payload_fd)
+    payload_identity = (payload_record.st_dev, payload_record.st_ino)
+    try:
+        source_record = os.stat(
+            old_name,
+            dir_fd=old_dir_fd,
+            follow_symlinks=False,
+        )
+    except OSError as error:
+        raise ValueError(
+            "bundle staging payload disappeared before publication"
+        ) from error
+    source_identity = (source_record.st_dev, source_record.st_ino)
+    if (
+        not stat.S_ISDIR(payload_record.st_mode)
+        or stat.S_ISLNK(source_record.st_mode)
+        or source_identity != payload_identity
+        or (
+            expected_payload_identity is not None
+            and payload_identity != expected_payload_identity
+        )
+    ):
+        raise ValueError("bundle staging payload identity changed before publication")
+    try:
+        os.fchmod(payload_fd, 0o700)
+        _call_renameat2_noreplace(
+            old_dir_fd,
+            old_name,
+            new_dir_fd,
+            new_name,
+        )
+    finally:
+        os.fchmod(payload_fd, 0o500)
 
 
 def _rename_noreplace(source: Path, destination: Path) -> None:
@@ -2177,11 +2248,7 @@ def build_bundle_from_data(
         _freeze_staging_tree(
             state.payload_fd,
             state.file_identities,
-            # Linux checks write permission on the directory being moved when
-            # renaming a directory.  The root is therefore frozen through its
-            # still-pinned descriptor immediately after the atomic move; files
-            # and the topics directory are already frozen for the scan.
-            freeze_payload=False,
+            freeze_payload=True,
         )
         _fsync_directory(topics_dir)
         _fsync_directory(payload)
@@ -2211,11 +2278,9 @@ def build_bundle_from_data(
             target_parent_path=target.parent,
             expected_target_parent_identity=target_parent_identity,
             approved_roots=approved_roots,
+            payload_fd=state.payload_fd,
         )
         state.payload_published = True
-        # Keep the published root read-only.  The descriptor still points at
-        # the renamed inode, so this cannot be redirected by a path swap.
-        os.fchmod(state.payload_fd, 0o500)
         _remove_guardian_path(guardian, guardian_identity)
         try:
             if publication_parent_fd is None:
