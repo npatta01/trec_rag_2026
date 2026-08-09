@@ -21,7 +21,7 @@ does not provision Runpod infrastructure.
 - model microbatch: 16 pairs
 - request ceiling: 256 passages and 6 MiB of canonical JSON
 - execution timeout: 900 seconds in the example runner's per-job policy
-- endpoint and volume data center: `US_NC_2`
+- endpoint and volume data center: `EU_RO_1`
 - model cache: `trec-rag-mixedbread-model-cache-v1`, mounted at
   `/runpod-volume`
 
@@ -53,7 +53,9 @@ uv run --no-project --with runpod-flash==1.19.0 flash build --no-deps
 The endpoint test substitutes a local decorator and fake bfloat16 model. It
 validates the real worker body without importing Flash or contacting Runpod.
 `flash build` validates Flash's generated worker artifact locally and does not
-deploy it. Its ignored `.flash/` output can be discarded after inspection.
+deploy it. The `--no-deps` validation artifact is not production-deployable;
+it intentionally omits transitive Python dependencies. Its ignored `.flash/`
+output can be discarded after inspection.
 
 ## Remote development after authorization
 
@@ -97,10 +99,17 @@ valid content/request identities; do not hand-author production requests.
 After the development endpoint passes a real external request, deploy it:
 
 ```bash
-flash deploy
+flash deploy --exclude nvidia --python-version 3.12
 flash env list
 flash env get <environment-name>
 ```
+
+The Flash worker image already supplies the pinned Torch/CUDA runtime. The
+production build therefore excludes only the redundant transitive `nvidia`
+wheel namespace while retaining SentenceTransformers, Transformers, `regex`,
+and the rest of their Python dependency graph. Without that exclusion the
+resolved archive exceeds Flash's 1,500 MB upload limit; deploying with
+`--no-deps` instead produces a runtime-incomplete worker.
 
 Put the resulting endpoint ID and API key only in the environment used by the
 ignored smoke config:

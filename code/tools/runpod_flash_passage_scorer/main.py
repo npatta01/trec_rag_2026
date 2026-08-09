@@ -6,7 +6,7 @@ from runpod_flash import DataCenter, Endpoint, GpuType, NetworkVolume
 model_cache = NetworkVolume(
     name="trec-rag-mixedbread-model-cache-v1",
     size=50,
-    datacenter=DataCenter.US_NC_2,
+    datacenter=DataCenter.EU_RO_1,
 )
 
 
@@ -18,7 +18,7 @@ model_cache = NetworkVolume(
     max_concurrency=1,
     flashboot=True,
     execution_timeout_ms=900_000,
-    datacenter=DataCenter.US_NC_2,
+    datacenter=DataCenter.EU_RO_1,
     volume=model_cache,
     env={
         "HF_HUB_CACHE": "/runpod-volume/huggingface",

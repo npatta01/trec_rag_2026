@@ -99,7 +99,7 @@ def endpoint_module(monkeypatch: pytest.MonkeyPatch):
             return function
 
     fake_flash = SimpleNamespace(
-        DataCenter=SimpleNamespace(US_NC_2="US_NC_2"),
+        DataCenter=SimpleNamespace(EU_RO_1="EU_RO_1", US_NC_2="US_NC_2"),
         Endpoint=FakeEndpoint,
         GpuType=SimpleNamespace(NVIDIA_GEFORCE_RTX_4090="RTX_4090"),
         NetworkVolume=FakeNetworkVolume,
@@ -129,7 +129,7 @@ def test_endpoint_configuration_scales_to_zero_and_persists_model_cache(
     assert endpoint["max_concurrency"] == 1
     assert endpoint["flashboot"] is True
     assert endpoint["execution_timeout_ms"] == 900_000
-    assert endpoint["datacenter"] == "US_NC_2"
+    assert endpoint["datacenter"] == "EU_RO_1"
     assert endpoint["env"] == {
         "HF_HUB_CACHE": "/runpod-volume/huggingface",
         "TOKENIZERS_PARALLELISM": "false",
@@ -137,7 +137,7 @@ def test_endpoint_configuration_scales_to_zero_and_persists_model_cache(
     assert captured["volume"] == {
         "name": "trec-rag-mixedbread-model-cache-v1",
         "size": 50,
-        "datacenter": "US_NC_2",
+        "datacenter": "EU_RO_1",
     }
 
 
