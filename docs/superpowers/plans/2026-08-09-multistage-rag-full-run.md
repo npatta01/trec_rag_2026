@@ -11,7 +11,9 @@
 ## Global Constraints
 
 - Reuse only `outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json`; never rerun retrieval.
-- Do not change `competition_rag.py`, frozen prompts, models, audit grouping, splice, Luna screen, retry, or repair behavior.
+- Do not change `competition_rag.py`, models, audit grouping, splice, or Luna screen behavior. The
+  post-review v6 patch may change only transport classification, receipt recovery matching, and
+  deterministic invalid-draft repair as recorded in Completion Evidence.
 - Keep the existing maximum of three Sol reservations per topic.
 - Keep single-pass and multi-stage run IDs, output directories, work state, and cached rows completely separate.
 - Reject `experiment.mode: overwrite`; create and resume are the only multi-stage modes.
@@ -33,7 +35,10 @@
 
 - [x] **Step 1: Write the failing successful-run integration test**
 
-Build a literal two-topic authenticated handoff fixture. The fake external topic runner writes a realistic v5 bounded state plus one registered `evaluation/final/submission.jsonl` for each topic. Call `run_multistage_generation` in create mode and assert:
+Build a literal two-topic authenticated handoff fixture. The fake external topic runner writes a
+bounded state using the imported current contract version plus one registered
+`evaluation/final/submission.jsonl` for each topic. Call `run_multistage_generation` in create mode
+and assert:
 
 ```python
 assert invoked == [("rag2026-0", "create"), ("rag2026-1", "create")]
@@ -300,14 +305,20 @@ Completed 2026-08-09 in linked worktree `hardened-splice-three-topic` on branch
 - Provider-free real dry run authenticated the v3 handoff and reported 119 topics, 691 groups,
   238 routine / 357 maximum Sol calls, 810 / 929 minimum/maximum Luna calls, and concurrency 4.
 - Static verification: Ruff passed for the new runner and tests; `git diff --check` passed.
-- Focused verification: 206 RAG, handoff, bounded-revision, and operation-screen tests passed.
-- Full verification: 2,787 tests passed, 19 skipped, and 60 subtests passed in 103.27 seconds.
+- Post-review focused verification: 227 RAG, handoff, bounded-revision, splice, and
+  operation-screen tests passed.
+- Post-review full verification: 2,790 tests passed, 19 skipped, and 60 subtests passed in 124.70
+  seconds.
 - A first full-suite attempt found six stale `/tmp/trec-rag-cache-shards/fixture-pytest-0-*`
   collisions. After deleting only those generated fixtures, the clean rerun passed completely;
   the regenerated disposable fixture and external temp directories were removed afterward.
-- Scope audit against pre-implementation commit `1e306fc8`: the single-pass runner and frozen
-  multi-stage prompt/state-machine module are unchanged. Only the new orchestrator, focused tests,
-  README/runbook, design, and plan are tracked.
+- Scope audit against pre-implementation commit `1e306fc8`: the single-pass runner is unchanged.
+  The promoted state machine was subsequently bumped to the v6 contract after independent review
+  found three resume/liveness defects; the fixes separate transient transport failures, bind crash
+  recovery to the exact receipt ordinal/stage, and spend the existing repair allowance on a
+  deterministically invalid initial draft before skipping later stages.
+- Independent Sol review and its follow-up re-check reported no Critical findings and approved the
+  v6 fixes with no remaining Important findings.
 - Privacy audit: all three local configs remain ignored; no output, private state, handoff content,
   or provider response was staged. No hosted model call was made during implementation or
   verification.

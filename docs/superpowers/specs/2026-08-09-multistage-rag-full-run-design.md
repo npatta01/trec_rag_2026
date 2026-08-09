@@ -2,14 +2,15 @@
 
 ## Decision
 
-Create a separate `trec_rag.competition_rag_multistage` runner around the frozen bounded-revision
-state machine. Keep `trec_rag.competition_rag` unchanged for the single-pass submission. Both runs
+Create a separate `trec_rag.competition_rag_multistage` runner around the bounded-revision state
+machine. Keep `trec_rag.competition_rag` unchanged for the single-pass submission. Both runs
 consume the same authenticated 119-topic `generation_handoff_manifest.json`, but use distinct
 experiment IDs, output directories, work directories, identities, and final JSONL files.
 
 Do not generalize the single-pass runner, shell-loop 119 one-topic configs, manually concatenate
-rows, mix single-pass fallback rows into the multi-stage run, or change any generation prompt,
-model, audit, splice, screen, retry, or repair policy.
+rows, or mix single-pass fallback rows into the multi-stage run. After independent review, the
+state machine may change only for the documented v6 resume/liveness fixes; prompts, models, audit
+grouping, splice, and screen policy otherwise remain frozen.
 
 ## Run Layout
 
@@ -62,6 +63,8 @@ JSONL until every selected topic has a validated final.
 
 The existing deterministic fallback remains authoritative: invalid screen output preserves the
 validated draft, and exhausted repair does not authorize a single-pass row or any new model call.
+An initial draft that fails deterministic validation may consume the one repair reservation; a
+valid repair is sealed immediately and skips audit, quality revision, and operation screening.
 
 ### Consolidation
 

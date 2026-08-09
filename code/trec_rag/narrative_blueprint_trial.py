@@ -83,7 +83,7 @@ advisory. Do not invent evidence, document identifiers, or claim identifiers; us
 provided local aliases. Return only the requested JSON object."""
 
 
-TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v5_operation_screen"
+TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v6_resume_liveness"
 SPLICE_PROMPT_CONTRACT_VERSION = "bounded_splice_revision_prompt_v2_citation_bound"
 LUNA_MODEL = "openai/gpt-5.6-luna"
 LUNA_REASONING_EFFORT = "medium"
@@ -1300,6 +1300,12 @@ def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
             except (OSError, UnicodeError, json.JSONDecodeError):
                 pass
         stage = str(reservation.get("stage") or reservation.get("role") or "")
+        ordinal = reservation.get("ordinal")
+        if receipt and (
+            receipt.get("stage") != stage
+            or receipt.get("reservation_ordinal") != ordinal
+        ):
+            receipt = {}
         if (
             receipt.get("outcome") == "semantic_success"
             and isinstance(receipt.get("accepted_payload"), dict)
@@ -1323,7 +1329,6 @@ def _bounded_recover_pending(root: Path, state: dict[str, Any]) -> None:
         else:
             reservation["status"] = "crash_consumed"
         if receipt:
-            ordinal = reservation.get("ordinal")
             if not any(
                 call.get("stage") == stage
                 and call.get("reservation_ordinal") == ordinal
@@ -1561,7 +1566,18 @@ async def _bounded_provider_call(
     except SemanticCompletionError as exc:
         raw_response = exc.raw_response
         error = f"{type(exc).__name__}: {exc}"
-        outcome = "semantic_error"
+        http_status = (
+            raw_response.get("http_status")
+            if isinstance(raw_response, dict)
+            else None
+        )
+        if isinstance(http_status, int) and (
+            http_status == 429 or 500 <= http_status < 600
+        ):
+            outcome = "terminal_transport_failure"
+            transport_outcome = "failure"
+        else:
+            outcome = "semantic_error"
     except RuntimeError as exc:
         error = f"{type(exc).__name__}: {exc}"
         if (
@@ -1913,6 +1929,32 @@ def _bounded_splice_repair_prompt(
     return context + "\n\n" + "\n".join(lines)
 
 
+def _bounded_draft_repair_prompt(
+    topic: GenerationTopic,
+    blueprint: NarrativeBlueprint,
+    projection: BlueprintProjection,
+    *,
+    invalid_candidate: dict[str, Any],
+    validation_errors: tuple[str, ...],
+) -> str:
+    """Render the one allowed full-answer repair after deterministic draft rejection."""
+
+    context = _render_hybrid_writer_prompt(topic, blueprint, projection)
+    return context + "\n\n" + "\n".join(
+        [
+            "DETERMINISTIC DRAFT VALIDATION REPAIR",
+            "Return the smallest complete-answer correction matching the supplied writer schema.",
+            "Do not discuss quality, coverage, scoring, gold data, or post-hoc metrics.",
+            "Change only what is required by these exact local validator errors.",
+            "A valid repair is sealed as final; no audit or quality-revision call follows.",
+            "INVALID FULL CANDIDATE:",
+            json.dumps(invalid_candidate, ensure_ascii=False, sort_keys=True),
+            "EXACT LOCAL VALIDATOR ERRORS:",
+            *validation_errors,
+        ]
+    )
+
+
 def _bounded_manifest(
     root: Path,
     state: dict[str, Any],
@@ -2109,6 +2151,7 @@ async def _run_bounded_revision(
     draft: dict[str, Any] | None = None
     draft_path = root / "draft.record.json"
     draft_errors: tuple[str, ...] = ()
+    invalid_draft_payload: dict[str, Any] | None = None
     if state["stages"].get("draft") and draft_path.is_file():
         draft = json.loads(draft_path.read_text(encoding="utf-8"))
     else:
@@ -2149,6 +2192,7 @@ async def _run_bounded_revision(
                 )
             except (ValueError, RuntimeError, TypeError) as exc:
                 draft_errors = (f"{type(exc).__name__}: {exc}",)
+                invalid_draft_payload = generated
         if draft is not None:
             _atomic_write_text(
                 draft_path,
@@ -2162,14 +2206,98 @@ async def _run_bounded_revision(
             _bounded_register_file(root, state, draft_output)
             _bounded_register_file(root, state, identity_path)
             state["stages"]["draft"] = True
+            state["failure"] = None
         _bounded_write_state(root, state)
 
-    if draft is None:
-        failure = (
-            "draft candidate failed deterministic validation"
-            if draft_errors
-            else "draft did not return an accepted semantic response"
+    if draft is None and draft_errors:
+        repair_prompt = _bounded_draft_repair_prompt(
+            topic,
+            blueprint,
+            projection,
+            invalid_candidate=invalid_draft_payload or {},
+            validation_errors=draft_errors,
         )
+        repair_schema = output_schema()
+        recovered, repaired = _bounded_recovered_payload(
+            state,
+            "repair",
+            expected_prompt_sha256=_digest_text(repair_prompt),
+            expected_schema_sha256=_digest_json(repair_schema),
+        )
+        if not recovered:
+            if _bounded_blocked_stage(state, stage="repair", luna=False):
+                repaired = None
+            else:
+                repair_ordinal = _bounded_reserve_sol(
+                    root,
+                    state,
+                    role="repair",
+                    receipt_name="repair",
+                    has_validation_errors=True,
+                )
+                with ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="bounded-sol",
+                ) as executor:
+                    repaired, repair_call = await _bounded_provider_call(
+                        sol,
+                        root=root,
+                        api_key=api_key,
+                        topic_id=topic.topic_id,
+                        stage="repair",
+                        model=config.model,
+                        reasoning_effort=config.reasoning_effort,
+                        system_prompt=SYSTEM_PROMPT,
+                        user_prompt=repair_prompt,
+                        response_schema=repair_schema,
+                        executor=executor,
+                        reservation_ordinal=repair_ordinal,
+                    )
+                state["calls"].append(repair_call)
+                _bounded_finish_sol(
+                    root,
+                    state,
+                    ordinal=repair_ordinal,
+                    status=(
+                        "semantic_returned"
+                        if repaired is not None
+                        else repair_call["outcome"]
+                    ),
+                )
+        final = None
+        if repaired is not None:
+            try:
+                final = _bounded_candidate(
+                    repaired,
+                    topic=topic,
+                    config=config,
+                    run_id=f"{config.run_id}-final",
+                )
+            except (ValueError, RuntimeError, TypeError):
+                final = None
+        if final is None:
+            failure = "no valid candidate after draft repair"
+            _bounded_record_draft_failure(root, state, topic, reason=failure)
+            raise RuntimeError(failure)
+        final_output = _bounded_write_candidate(root, "final", final)
+        final_identity = _bounded_write_identity(
+            root,
+            config=config,
+            handoff=handoff,
+            topic=topic,
+            arm="final",
+        )
+        _bounded_register_file(root, state, final_output)
+        _bounded_register_file(root, state, final_identity)
+        state["failure"] = None
+        state["stages"]["final"] = True
+        _bounded_write_state(root, state)
+        manifest = _bounded_manifest(root, state, topic=topic, draft=None, final=final)
+        _atomic_write_text(root / "manifest.json", json.dumps(manifest, indent=2) + "\n")
+        return root
+
+    if draft is None:
+        failure = "draft did not return an accepted semantic response"
         _bounded_record_draft_failure(root, state, topic, reason=failure)
         raise RuntimeError(failure)
 

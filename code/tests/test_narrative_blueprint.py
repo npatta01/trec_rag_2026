@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from hashlib import sha256
 import json
@@ -7,12 +9,17 @@ from types import SimpleNamespace
 
 import pytest
 
+import trec_rag.narrative_blueprint_trial as narrative_blueprint_trial
+from trec_rag.competition_rag import RagGenerationConfig, SemanticCompletionError
 from trec_rag.generation_handoff import (
+    SOURCE_CONTRACT,
     ClaimHint,
     EvidenceGroup,
     EvidencePassage,
     EvidenceSourceSpan,
+    GenerationHandoff,
     GenerationTopic,
+    HandoffProducer,
     SelectedCluster,
     TopicSourceReceipts,
 )
@@ -28,6 +35,8 @@ from trec_rag.narrative_blueprint import (
 )
 from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
+    _bounded_provider_call,
+    _bounded_recover_pending,
     _bounded_record_draft_failure,
     _bounded_rebind_candidate,
     _bounded_recovered_payload,
@@ -417,6 +426,189 @@ def test_invalid_draft_failure_seals_without_repair_audit_or_revision(tmp_path) 
     assert state["stages"]["revision"] is False
     assert state["stages"]["final"] is False
     assert [item["role"] for item in state["sol_reservations"]] == ["draft"]
+
+
+def test_retryable_http_status_is_transport_not_semantic_failure(tmp_path) -> None:
+    root = tmp_path / "bounded"
+    (root / "receipts").mkdir(parents=True)
+
+    class TransientHttpFailure:
+        def complete_json(self, **_kwargs):
+            raise SemanticCompletionError(
+                "OpenRouter HTTP 503; no repair call was made",
+                {"http_status": 503},
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        payload, call = asyncio.run(
+            _bounded_provider_call(
+                TransientHttpFailure(),
+                root=root,
+                api_key="fixture-key",
+                topic_id="rag2026-test",
+                stage="draft",
+                model="openai/gpt-5.6-sol",
+                reasoning_effort="medium",
+                system_prompt="system",
+                user_prompt="user",
+                response_schema={"type": "object"},
+                executor=executor,
+                reservation_ordinal=1,
+            )
+        )
+
+    assert payload is None
+    assert call["outcome"] == "terminal_transport_failure"
+    assert call["transport_outcome"] == "failure"
+
+
+def test_pending_reservation_ignores_a_stale_receipt_ordinal(tmp_path) -> None:
+    root = tmp_path / "bounded"
+    receipts = root / "receipts"
+    receipts.mkdir(parents=True)
+    (receipts / "draft.json").write_text(
+        json.dumps(
+            {
+                "stage": "draft",
+                "reservation_ordinal": 1,
+                "outcome": "terminal_transport_failure",
+                "transport_outcome": "failure",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = {
+        "trial_contract_version": TRIAL_CONTRACT_VERSION,
+        "luna_reservations": [],
+        "sol_reservations": [
+            {
+                "ordinal": 2,
+                "role": "draft",
+                "stage": "draft",
+                "status": "pending",
+                "receipt": "receipts/draft.json",
+            }
+        ],
+        "recovered_payloads": {},
+        "calls": [],
+    }
+
+    _bounded_recover_pending(root, state)
+
+    assert state["sol_reservations"][0]["status"] == "crash_consumed"
+    assert state["calls"] == []
+
+
+def test_invalid_initial_draft_uses_repair_then_skips_audit_and_revision(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    topic = _topic_fixture()
+    handoff = GenerationHandoff(
+        producer=HandoffProducer(
+            source_contract=SOURCE_CONTRACT,
+            retrieval_run_id="fixture-retrieval",
+            producer_revision="fixture-revision",
+        ),
+        topics=(topic,),
+    )
+    output_dir = tmp_path / "outputs/bounded-draft-repair"
+    config = RagGenerationConfig(
+        schema_version="competition_rag_config_v2",
+        handoff_manifest_path=tmp_path / "handoff.json",
+        output_path=output_dir / "rag_output_trec_rag_2026.jsonl",
+        work_dir=output_dir / "work",
+        team_id="castorini",
+        run_id="bounded-draft-repair",
+        run_desc="Bounded draft repair fixture.",
+        topic_ids=(topic.topic_id,),
+        concurrency=1,
+        resume=False,
+        overwrite=False,
+        provider="openrouter",
+        api_base="https://openrouter.invalid/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        structured_output="strict_schema",
+        temperature=None,
+        max_tokens=12000,
+        timeout_seconds=30.0,
+        transport_max_attempts=1,
+    )
+    invalid_draft = {
+        "references": [topic.citation_docids[0]],
+        "answer": [
+            {
+                "text": " ".join(["word"] * 1025),
+                "citations": [topic.citation_docids[0]],
+            }
+        ],
+    }
+    repaired_draft = {
+        "references": [topic.citation_docids[0]],
+        "answer": [
+            {
+                "text": "The repaired answer is locally valid.",
+                "citations": [topic.citation_docids[0]],
+            }
+        ],
+    }
+    payloads = {
+        "planner": _valid_payload(),
+        "draft": invalid_draft,
+        "repair": repaired_draft,
+    }
+    invoked: list[str] = []
+
+    async def fake_provider_call(_generator, **kwargs):
+        stage = kwargs["stage"]
+        invoked.append(stage)
+        payload = payloads[stage]
+        return payload, {
+            "stage": stage,
+            "model": kwargs["model"],
+            "reasoning_effort": kwargs["reasoning_effort"],
+            "prompt_sha256": _digest_text(kwargs["user_prompt"]),
+            "schema_sha256": _digest_json(kwargs["response_schema"]),
+            "reservation_ordinal": kwargs["reservation_ordinal"],
+            "outcome": "semantic_success",
+            "latency_seconds": 0.01,
+            "provider_cost": 0.0,
+            "usage": {},
+            "transport_outcome": "response",
+            "error": None,
+        }
+
+    monkeypatch.setattr(
+        narrative_blueprint_trial,
+        "_bounded_provider_call",
+        fake_provider_call,
+    )
+
+    root = asyncio.run(
+        narrative_blueprint_trial._run_bounded_revision(
+            config,
+            handoff,
+            topic,
+            api_key="fixture-key",
+            state_mode="create",
+        )
+    )
+
+    state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+    final = json.loads(
+        (root / "evaluation/final/submission.jsonl").read_text(encoding="utf-8")
+    )
+    assert invoked == ["planner", "draft", "repair"]
+    assert [item["role"] for item in state["sol_reservations"]] == [
+        "draft",
+        "repair",
+    ]
+    assert state["stages"]["audit_groups"] == []
+    assert state["stages"]["revision"] is False
+    assert state["stages"]["final"] is True
+    assert final["answer"][0]["text"] == "The repaired answer is locally valid."
 
 
 def test_bounded_rebind_prunes_references_orphaned_by_splice_replacement() -> None:

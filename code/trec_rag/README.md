@@ -929,6 +929,24 @@ configs/local/rag26-rag-multistage-sol-final-v1.yaml
 configs/local/rag26-rag-multistage-smoke-0-1-2.yaml
 ```
 
+These files are ignored and do not survive a branch merge or worktree removal. Recreate them
+after merging by copying the tracked Sol config, then assign the exact experiment IDs and matching
+output directories shown by the filenames above:
+
+```bash
+mkdir -p configs/local
+cp configs/rag26_competition_rag_gpt_sol_v2.yaml \
+  configs/local/rag26-rag-singlepass-sol-final-v1.yaml
+cp configs/rag26_competition_rag_gpt_sol_v2.yaml \
+  configs/local/rag26-rag-multistage-sol-final-v1.yaml
+cp configs/local/rag26-rag-multistage-sol-final-v1.yaml \
+  configs/local/rag26-rag-multistage-smoke-0-1-2.yaml
+```
+
+Keep `mode: create` and the v3 handoff path. In the smoke file add
+`topic_ids: [rag2026-0, rag2026-1, rag2026-2]` under `experiment` and set concurrency to 2. The
+single-pass and multi-stage full files omit `topic_ids` and keep concurrency 4.
+
 The retrieval result is reused through the sealed handoff. Generated answers are not shared
 between strategies: single pass caches one validated row per topic under `work/rows/`, while the
 multi-stage runner caches its bounded stage state under `work/bounded_revision/`. Resume is valid
@@ -2055,5 +2073,6 @@ Private state, call receipts, manifests, draft/final submissions, and arm-specif
 identities live under `config.resolved_work_dir/bounded_revision/<topic>`. The normal path uses
 one Luna planner, one Luna audit per authenticated group, at most one Luna operation screen, and
 two Sol reservations (draft and revision); one additional Sol reservation is permitted only for
-deterministic splice-patch validation repair. A draft that fails local validation seals a sanitized
-failure manifest and does not reserve repair, audit, revision, or screen calls.
+deterministic validation repair. If the initial draft fails local validation, that repair produces
+one corrected full candidate and then skips audit, revision, and screen calls. If a valid draft
+reaches revision, the repair can only correct the splice wrapper/subset and cannot rewrite prose.
