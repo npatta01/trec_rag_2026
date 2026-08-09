@@ -161,6 +161,21 @@ if any(isinstance(row, dict) and row.get("type") == "file" for row in rows):
 PY
 }
 
+require_archive_prefix() {
+  local prefix=$1
+  local receipt=$2
+  "$venv_hf" buckets list "$prefix" --recursive --format json >"$receipt"
+  "$venv_python" - "$receipt" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    body = stream.read()
+rows = [] if not body.strip() else json.loads(body)
+files = [row for row in rows if isinstance(row, dict) and row.get("type") == "file"]
+if len(files) != 1 or not str(files[0].get("path", "")).endswith("/input.tar.gz"):
+    raise SystemExit("input prefix must contain exactly input.tar.gz")
+PY
+}
+
 verify_checksum_closure() {
   local root=$1
   "$venv_python" - "$root" <<'PY'
@@ -199,15 +214,19 @@ if [[ $output_bucket != "$input_bucket" ]]; then
   require_private_bucket "$output_bucket" "$worker_root/output-bucket-info.json"
 fi
 require_empty_prefix "$output_prefix" "$worker_root/output-listing-before.json"
+require_archive_prefix "$input_prefix" "$worker_root/input-prefix-listing.json"
 
 input_dir="$worker_root/input/private"
 mkdir -m 700 "$input_dir"
-"$venv_hf" buckets sync "$input_prefix" "$input_dir" --no-delete
+input_archive="$worker_root/input/input.tar.gz"
+"$venv_hf" buckets cp "$input_prefix/input.tar.gz" "$input_archive"
 verify_args=()
 for topic_id in "${topic_ids[@]}"; do verify_args+=(--topic "$topic_id"); done
 input_verify_receipt="$worker_root/input-verify-receipt.json"
-"$venv_python" -m trec_rag.retrieval_baseline_input_bundle verify \
-  "$input_dir" "${verify_args[@]}" >"$input_verify_receipt"
+"$venv_python" -m trec_rag.retrieval_baseline_input_bundle extract-archive \
+  --archive "$input_archive" --output-dir "$input_dir" \
+  --input-manifest-sha256 "$input_manifest_sha256" \
+  "${verify_args[@]}" >"$input_verify_receipt"
 source_run_id=$("$venv_python" - "$input_verify_receipt" "$input_manifest_sha256" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as stream:

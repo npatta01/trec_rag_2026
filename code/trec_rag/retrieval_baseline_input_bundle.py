@@ -10,6 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import tarfile
 import tempfile
 from typing import Mapping, Sequence
 
@@ -24,6 +25,8 @@ _TOPIC_ID = re.compile(r"rag2026-[0-9]+\Z")
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ALLOWED_ROOTS = {"source", "documents", "portable-scores"}
+_MAX_ARCHIVE_MEMBERS = 200_000
+_MAX_ARCHIVE_BYTES = 5_000_000_000
 _SOURCE_RELATIVE_PATHS = (
     "topic-job-receipt.json",
     "decomposition.json",
@@ -510,6 +513,103 @@ def import_portable_score_file(
     }
 
 
+def _archive_relative(name: str) -> str | None:
+    pure = PurePosixPath(name)
+    if pure.is_absolute():
+        raise InputBundleError("input archive contains an absolute path")
+    parts = list(pure.parts)
+    while parts and parts[0] == ".":
+        parts.pop(0)
+    if not parts:
+        return None
+    if any(part in {"", ".", ".."} for part in parts):
+        raise InputBundleError("input archive member path is invalid")
+    relative = PurePosixPath(*parts).as_posix()
+    if relative != MANIFEST_NAME and parts[0] not in _ALLOWED_ROOTS:
+        raise InputBundleError("input archive member is outside the allowlist")
+    return relative
+
+
+def extract_input_archive(
+    archive: Path,
+    output_dir: Path,
+    *,
+    expected_manifest_sha256: str,
+    expected_topics: tuple[str, ...],
+) -> dict[str, object]:
+    """Safely extract a regular-file-only archive and verify its sealed input."""
+
+    archive = Path(archive)
+    output_dir = Path(output_dir)
+    if archive.is_symlink() or not archive.is_file():
+        raise InputBundleError("input archive must be a regular file")
+    if _SHA256.fullmatch(expected_manifest_sha256) is None:
+        raise InputBundleError("expected input manifest digest is invalid")
+    if output_dir.is_symlink() or (output_dir.exists() and not output_dir.is_dir()):
+        raise InputBundleError("archive output must be a regular directory")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if any(output_dir.iterdir()):
+        raise InputBundleError("archive output directory must be empty")
+
+    try:
+        with tarfile.open(archive, mode="r:gz") as stream:
+            members = stream.getmembers()
+            if not members or len(members) > _MAX_ARCHIVE_MEMBERS:
+                raise InputBundleError("input archive member count is invalid")
+            planned: list[tuple[tarfile.TarInfo, str]] = []
+            seen: set[str] = set()
+            total_size = 0
+            for member in members:
+                relative = _archive_relative(member.name)
+                if relative is None:
+                    if not member.isdir():
+                        raise InputBundleError("input archive root member is invalid")
+                    continue
+                if relative in seen:
+                    raise InputBundleError("input archive repeats a member path")
+                seen.add(relative)
+                if member.isdir():
+                    continue
+                if not member.isfile():
+                    raise InputBundleError("input archive may contain only regular files")
+                total_size += member.size
+                if total_size > _MAX_ARCHIVE_BYTES:
+                    raise InputBundleError("input archive expands beyond its size limit")
+                planned.append((member, relative))
+            if not planned:
+                raise InputBundleError("input archive contains no regular files")
+            for member, relative in planned:
+                destination = output_dir.joinpath(*PurePosixPath(relative).parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                source = stream.extractfile(member)
+                if source is None:
+                    raise InputBundleError("input archive member could not be read")
+                with source, destination.open("xb") as target:
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+                    target.flush()
+                    os.fsync(target.fileno())
+    except (tarfile.TarError, OSError) as exc:
+        raise InputBundleError("input archive is invalid or unreadable") from exc
+
+    verified = verify_input_directory(
+        output_dir,
+        expected_topics=expected_topics,
+    )
+    manifest_sha256 = sha256((output_dir / MANIFEST_NAME).read_bytes()).hexdigest()
+    if manifest_sha256 != expected_manifest_sha256:
+        raise InputBundleError("extracted input manifest digest differs from approved digest")
+    archive_size, archive_sha256 = _file_receipt(archive)
+    return {
+        "archive_byte_count": archive_size,
+        "archive_sha256": archive_sha256,
+        "cache_stats": verified["cache_stats"],
+        "manifest_sha256": manifest_sha256,
+        "member_count": verified["member_count"],
+        "source_run_id": verified["source_run_id"],
+        "topic_ids": verified["topic_ids"],
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -531,6 +631,11 @@ def _parser() -> argparse.ArgumentParser:
     import_cache = commands.add_parser("import-cache")
     import_cache.add_argument("--portable", type=Path, required=True)
     import_cache.add_argument("--score-cache", type=Path, required=True)
+    extract = commands.add_parser("extract-archive")
+    extract.add_argument("--archive", type=Path, required=True)
+    extract.add_argument("--output-dir", type=Path, required=True)
+    extract.add_argument("--input-manifest-sha256", required=True)
+    extract.add_argument("--topic", action="append", dest="topic_ids", required=True)
     return parser
 
 
@@ -562,8 +667,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         receipt = import_portable_scores(args.input_dir, args.score_cache)
     elif args.command == "export-cache":
         receipt = export_portable_score_cache(args.score_cache, args.output)
-    else:
+    elif args.command == "import-cache":
         receipt = import_portable_score_file(args.portable, args.score_cache)
+    else:
+        receipt = extract_input_archive(
+            args.archive,
+            args.output_dir,
+            expected_manifest_sha256=args.input_manifest_sha256,
+            expected_topics=tuple(args.topic_ids),
+        )
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return 0
 

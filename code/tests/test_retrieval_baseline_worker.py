@@ -115,4 +115,6 @@ def test_worker_checks_privacy_and_output_before_model_scoring() -> None:
     assert "--no-python-downloads" in source
     assert "--cache-only" in source
     assert "export-cache" in source
+    assert '"$input_prefix/input.tar.gz"' in source
+    assert "extract-archive" in source
     assert 'cmp -- "$publication/SHA256SUMS" "$roundtrip/SHA256SUMS"' in source

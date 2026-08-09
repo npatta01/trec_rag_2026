@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from pathlib import Path
+import tarfile
 
 import pytest
 
 from trec_rag.retrieval_baseline_input_bundle import (
     InputBundleError,
     export_portable_score_cache,
+    extract_input_archive,
     import_portable_score_file,
     seal_input_directory,
     verify_input_directory,
@@ -152,3 +154,49 @@ def test_export_and_import_complete_portable_score_cache(tmp_path: Path) -> None
         ) == [1.25, -0.5]
     finally:
         target.score_cache.close()
+
+
+def test_extract_input_archive_verifies_inner_manifest(tmp_path: Path) -> None:
+    root = _staging_fixture(tmp_path)
+    manifest = seal_input_directory(
+        root,
+        topic_ids=("rag2026-0",),
+        source_run_id="facet-deepseek-b40-v3",
+        cache_stats={"hits": 0, "misses": 1},
+    )
+    archive = tmp_path / "input.tar.gz"
+    with tarfile.open(archive, "w:gz") as stream:
+        for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+            if path.is_file():
+                stream.add(path, arcname=path.relative_to(root).as_posix())
+
+    receipt = extract_input_archive(
+        archive,
+        tmp_path / "extracted",
+        expected_manifest_sha256=sha256(manifest.read_bytes()).hexdigest(),
+        expected_topics=("rag2026-0",),
+    )
+
+    assert receipt["member_count"] == 3
+    assert receipt["topic_ids"] == ["rag2026-0"]
+    assert verify_input_directory(tmp_path / "extracted")["member_count"] == 3
+
+
+def test_extract_input_archive_rejects_links_and_wrong_manifest(tmp_path: Path) -> None:
+    archive = tmp_path / "malicious.tar.gz"
+    target = tmp_path / "target.txt"
+    target.write_text("outside", encoding="utf-8")
+    with tarfile.open(archive, "w:gz") as stream:
+        stream.add(target, arcname="source/file.txt")
+        link = tarfile.TarInfo("documents/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = str(target)
+        stream.addfile(link)
+
+    with pytest.raises(InputBundleError, match="regular files"):
+        extract_input_archive(
+            archive,
+            tmp_path / "bad-extract",
+            expected_manifest_sha256="a" * 64,
+            expected_topics=("rag2026-0",),
+        )

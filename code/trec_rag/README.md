@@ -2107,8 +2107,24 @@ For an NVIDIA smoke, build one immutable private input directory containing one 
 ```
 
 The directory contains the authenticated source chain, exact content-addressed documents, and
-only the already-cached reranker rows needed by those topics. Publish it to one private
-`.../trec_rag_2026/artifacts/<input-id>` prefix. The checked-in
+only the already-cached reranker rows needed by those topics. Package the verified directory as
+one archive to avoid per-file object-store throttling, then publish only `input.tar.gz` to one
+private `.../trec_rag_2026/artifacts/<input-id>` prefix:
+
+```bash
+mkdir -p outputs/retrieval-baseline-archives/<input-id>
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+  --pax-option=delete=atime,delete=ctime -C outputs/retrieval-baseline-input/<input-id> \
+  -cf - . | gzip -n >outputs/retrieval-baseline-archives/<input-id>/input.tar.gz
+
+.venv/bin/python -m trec_rag.retrieval_baseline_input_bundle extract-archive \
+  --archive outputs/retrieval-baseline-archives/<input-id>/input.tar.gz \
+  --output-dir outputs/retrieval-baseline-archive-check/<input-id> \
+  --input-manifest-sha256 <sha256-from-verify> \
+  --topic rag2026-0 --topic rag2026-37
+```
+
+The checked-in
 `.dstack/rag26-retrieval-baseline-worker.yaml` runs only through a clean committed snapshot and
 invokes `code/tools/run_retrieval_baseline_worker.sh`. The worker accepts one or two topics,
 restores and verifies the input against its locally approved manifest digest, scores sequentially
