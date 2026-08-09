@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import fields, replace
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -190,3 +191,55 @@ def test_evaluation_overlay_rejects_invalid_manifest_contract(
     path = _mutated_manifest(tmp_path, mutate)
     with pytest.raises(EvaluationError):
         load_evaluation_overlay(path, selected)
+
+
+def test_evaluation_overlay_rejects_missing_available_selected_metric_row(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import load_evaluation_overlay
+
+    path = _mutated_manifest(
+        tmp_path,
+        lambda payload: payload["metrics"]["retrieval"]["per_topic"].pop(
+            "beta-topic"
+        ),
+    )
+    with pytest.raises(EvaluationError):
+        load_evaluation_overlay(path, ("beta-topic",))
+
+
+def test_evaluation_overlay_rejects_incomplete_available_macro_metrics(
+    tmp_path: Path,
+) -> None:
+    from trec_rag.competition_debug_bundle import load_evaluation_overlay
+
+    path = _mutated_manifest(
+        tmp_path,
+        lambda payload: payload["metrics"]["retrieval"]["macro"].pop("ndcg@10"),
+    )
+    with pytest.raises(EvaluationError):
+        load_evaluation_overlay(path, ("alpha-topic", "beta-topic"))
+
+
+def test_evaluation_overlay_rejects_manifest_replacement_between_snapshot_and_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trec_rag.competition_debug_bundle as debug_bundle
+
+    _fixture, bundle = _evaluation_fixture(tmp_path)
+    original_load_manifest = debug_bundle.load_manifest
+
+    def replace_before_load(path: Path):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["retrieval"]["per_topic"]["alpha-topic"]["ndcg@10"] = 0.5
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return original_load_manifest(path)
+
+    monkeypatch.setattr(debug_bundle, "load_manifest", replace_before_load)
+    try:
+        overlay = debug_bundle.load_evaluation_overlay(
+            bundle.manifest_path, ("alpha-topic", "beta-topic")
+        )
+    except EvaluationError:
+        return
+    assert overlay.manifest_sha256 == sha256(bundle.manifest_path.read_bytes()).hexdigest()

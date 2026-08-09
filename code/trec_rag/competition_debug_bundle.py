@@ -79,6 +79,7 @@ _FAMILY_LABELS = (
     ("nugget_coverage", "Nugget or obligation coverage"),
     ("citation_support", "Answer and citation quality"),
 )
+_METRIC_BOOKKEEPING_FIELDS = frozenset({"topic_id", "run_id", "sentences"})
 
 
 def _mapping(value: object, *, label: str) -> Mapping[str, Any]:
@@ -198,7 +199,11 @@ def _availability(value: object, *, label: str) -> MetricAvailability:
 
 
 def _numeric_mapping(
-    value: object, *, label: str, allowed_names: set[str] | None = None
+    value: object,
+    *,
+    label: str,
+    allowed_names: set[str] | None = None,
+    ignored_names: frozenset[str] = frozenset(),
 ) -> Mapping[str, float]:
     raw = _mapping(value, label=label)
     projected: dict[str, float] = {}
@@ -210,7 +215,9 @@ def _numeric_mapping(
         # metric definitions are the explicit allowlist for what may cross
         # this seam; bookkeeping is discarded before it can reach the summary.
         if allowed_names is not None and name not in allowed_names:
-            continue
+            if name in ignored_names:
+                continue
+            raise EvaluationError(f"{label} has an unexpected metric {name!r}")
         if type(metric) not in (int, float) or not math.isfinite(metric):
             raise EvaluationError(f"{label}.{name} must be a finite number")
         # Keep the source number's value and precision. JSON metrics are ints or
@@ -237,6 +244,7 @@ def _project_metric_family(
     key: str,
     label: str,
     topic_ids: Sequence[str],
+    scope_topic_ids: Sequence[str],
     evaluation_topic_count: int,
 ) -> MetricFamilyOverlay:
     metrics_root = _mapping(manifest.get("metrics"), label="metrics")
@@ -259,28 +267,68 @@ def _project_metric_family(
     macro_availability = _availability(
         raw.get("macro_availability"), label=f"metrics.{key}.macro_availability"
     )
+    if macro_availability.available:
+        if not definitions:
+            raise EvaluationError(
+                f"metrics.{key}: available macro has no defined metrics"
+            )
+        if set(macro) != set(definitions):
+            raise EvaluationError(
+                f"metrics.{key}.macro is missing or has extra defined metrics"
+            )
     raw_per_topic = _mapping(raw.get("per_topic"), label=f"metrics.{key}.per_topic")
     raw_availability = _mapping(
         raw.get("per_topic_availability"),
         label=f"metrics.{key}.per_topic_availability",
     )
 
+    scope_ids = set(scope_topic_ids)
+    extra_metric_topics = set(raw_per_topic) - scope_ids
+    if extra_metric_topics:
+        raise EvaluationError(
+            f"metrics.{key}.per_topic contains topics outside the evaluation scope"
+        )
+    extra_availability_topics = set(raw_availability) - scope_ids
+    if extra_availability_topics:
+        raise EvaluationError(
+            f"metrics.{key}.per_topic_availability contains topics outside the evaluation scope"
+        )
+
     per_topic: dict[str, Mapping[str, float]] = {}
     per_topic_availability: dict[str, MetricAvailability] = {}
-    for topic_id in topic_ids:
+    selected_ids = set(topic_ids)
+    for topic_id in scope_topic_ids:
         if topic_id not in raw_availability:
             raise EvaluationError(
                 f"metrics.{key}.per_topic_availability is missing {topic_id}"
             )
-        per_topic_availability[topic_id] = _availability(
+        availability = _availability(
             raw_availability[topic_id],
             label=f"metrics.{key}.per_topic_availability.{topic_id}",
         )
+        if topic_id in selected_ids:
+            per_topic_availability[topic_id] = availability
         if topic_id in raw_per_topic:
-            per_topic[topic_id] = _numeric_mapping(
+            projected = _numeric_mapping(
                 raw_per_topic[topic_id],
                 label=f"metrics.{key}.per_topic.{topic_id}",
                 allowed_names=allowed_metric_names,
+                ignored_names=_METRIC_BOOKKEEPING_FIELDS,
+            )
+            if availability.available:
+                if not definitions:
+                    raise EvaluationError(
+                        f"metrics.{key}.{topic_id}: available cell has no defined metrics"
+                    )
+                if set(projected) != set(definitions):
+                    raise EvaluationError(
+                        f"metrics.{key}.{topic_id} is missing or has extra defined metrics"
+                    )
+            if topic_id in selected_ids:
+                per_topic[topic_id] = projected
+        elif availability.available:
+            raise EvaluationError(
+                f"metrics.{key}.{topic_id}: available cell is missing"
             )
 
     # A scope mismatch invalidates an otherwise available aggregate.  Preserve
@@ -316,6 +364,12 @@ def load_evaluation_overlay(
     payload = path.read_bytes()
     manifest = load_manifest(path)
     try:
+        current_payload = path.read_bytes()
+    except OSError as error:
+        raise EvaluationError(f"{path}: manifest changed during load") from error
+    if current_payload != payload:
+        raise EvaluationError(f"{path}: manifest changed during load")
+    try:
         build_presentation(manifest)
     except EvaluationError:
         raise
@@ -349,6 +403,7 @@ def load_evaluation_overlay(
             key=key,
             label=label,
             topic_ids=selected,
+            scope_topic_ids=scope,
             evaluation_topic_count=len(scope),
         )
         for key, label in _FAMILY_LABELS
