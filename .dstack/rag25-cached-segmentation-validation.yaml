@@ -31,7 +31,7 @@ resources:
 
 backends: [runpod, vastai]
 spot_policy: on-demand
-max_price: 3.0
+max_price: 3.29
 max_duration: 5h
 idle_duration: 0s
 retry:

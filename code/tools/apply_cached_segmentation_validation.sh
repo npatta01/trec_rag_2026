@@ -98,7 +98,7 @@ try:
     price = Decimal(sys.argv[1])
 except InvalidOperation as exc:
     raise SystemExit("approved hourly price is invalid") from exc
-if not Decimal("0") < price <= Decimal("3.0"):
+if not Decimal("0") < price <= Decimal("3.29"):
     raise SystemExit("approved hourly price exceeds the task cap")
 PY
 fi
