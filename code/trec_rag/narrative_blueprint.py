@@ -9,6 +9,7 @@ provider output never supplies an evidence or document identifier.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
@@ -434,6 +435,118 @@ def validate_blueprint(topic: GenerationTopic, payload: object) -> NarrativeBlue
     return NarrativeBlueprint(obligations=tuple(parsed))
 
 
+def recover_blueprint_for_deadline(
+    topic: GenerationTopic,
+    payload: object,
+) -> tuple[NarrativeBlueprint, tuple[str, ...]]:
+    """Normalize only the approved deadline cases, then validate strictly."""
+
+    if not isinstance(topic, GenerationTopic):
+        raise TypeError("topic must be GenerationTopic")
+    normalized = deepcopy(payload)
+    root = _require_mapping(normalized, "blueprint")
+    obligations = root.get("obligations")
+    if not isinstance(obligations, list):
+        return validate_blueprint(topic, normalized), ()
+
+    actions: list[str] = []
+    targets = [
+        row.get("target_words") if isinstance(row, Mapping) else None
+        for row in obligations
+    ]
+    if targets and all(
+        isinstance(target, int) and not isinstance(target, bool) and target > 0
+        for target in targets
+    ):
+        total_words = sum(targets)
+        if MAX_ALLOCATED_WORDS < total_words <= 1024:
+            scaled = [target * MAX_ALLOCATED_WORDS // total_words for target in targets]
+            if any(target <= 0 for target in scaled):
+                raise BlueprintValidationError(
+                    "deadline target-word normalization produced a non-positive allocation"
+                )
+            for index in range(MAX_ALLOCATED_WORDS - sum(scaled)):
+                scaled[index % len(scaled)] += 1
+            for row, target in zip(obligations, scaled, strict=True):
+                row["target_words"] = target
+            actions.append("target_words_scaled")
+
+    narrative_normalized = _normalized_text(topic.narrative)
+    replaced_spans = False
+    for row in obligations:
+        if not isinstance(row, Mapping):
+            continue
+        spans = row.get("narrative_spans")
+        if not isinstance(spans, list):
+            continue
+        for index, value in enumerate(spans):
+            if not isinstance(value, str) or not value.strip():
+                continue
+            span_normalized = _normalized_text(value)
+            if span_normalized and span_normalized not in narrative_normalized:
+                spans[index] = topic.narrative
+                replaced_spans = True
+    if replaced_spans:
+        actions.append("non_narrative_spans_replaced")
+
+    donor_spans: list[tuple[str, str]] = []
+    for row in obligations:
+        if not isinstance(row, Mapping):
+            continue
+        spans = row.get("narrative_spans")
+        if not isinstance(spans, list):
+            continue
+        for value in spans:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            span_normalized = _normalized_text(value)
+            if (
+                span_normalized
+                and span_normalized in narrative_normalized
+                and all(existing != span_normalized for existing, _ in donor_spans)
+            ):
+                donor_spans.append((span_normalized, value))
+
+    seen_span_sets: set[frozenset[str]] = set()
+    disambiguated = False
+    for row in obligations:
+        if not isinstance(row, Mapping):
+            continue
+        spans = row.get("narrative_spans")
+        if not isinstance(spans, list) or not all(
+            isinstance(value, str) and value.strip() for value in spans
+        ):
+            continue
+        normalized_spans = [_normalized_text(value) for value in spans]
+        span_set = frozenset(normalized_spans)
+        if span_set in seen_span_sets:
+            if len(spans) >= 4:
+                raise BlueprintValidationError(
+                    "deadline fallback cannot disambiguate a four-span obligation"
+                )
+            donor = next(
+                (
+                    value
+                    for donor_normalized, value in donor_spans
+                    if donor_normalized not in span_set
+                ),
+                None,
+            )
+            if donor is None:
+                raise BlueprintValidationError(
+                    "deadline fallback has no authenticated span for disambiguation"
+                )
+            spans.append(donor)
+            normalized_spans.append(_normalized_text(donor))
+            span_set = frozenset(normalized_spans)
+            disambiguated = True
+        seen_span_sets.add(span_set)
+    if disambiguated:
+        actions.append("duplicate_span_sets_disambiguated")
+
+    return validate_blueprint(topic, normalized), tuple(actions)
+
+
 def project_blueprint(
     topic: GenerationTopic, blueprint: NarrativeBlueprint
 ) -> BlueprintProjection:
@@ -725,6 +838,7 @@ __all__ = [
     "load_blueprint_state",
     "planner_response_schema",
     "project_blueprint",
+    "recover_blueprint_for_deadline",
     "render_blueprint_writer_context",
     "render_planner_prompt",
     "serialize_blueprint_state",

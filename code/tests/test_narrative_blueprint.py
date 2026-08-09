@@ -28,6 +28,7 @@ from trec_rag.narrative_blueprint import (
     load_blueprint_state,
     planner_response_schema,
     project_blueprint,
+    recover_blueprint_for_deadline,
     render_blueprint_writer_context,
     render_planner_prompt,
     serialize_blueprint_state,
@@ -826,6 +827,54 @@ def test_blueprint_rejects_duplicate_normalized_span_sets_and_aliases() -> None:
     payload["obligations"][0]["selected_claim_aliases"] = ["c001", "c001"]
     with pytest.raises(BlueprintValidationError, match="duplicate.*claim"):
         validate_blueprint(_topic_fixture(), payload)
+
+
+def test_recover_blueprint_for_deadline_scales_safe_overallocation() -> None:
+    payload = _valid_payload()
+    payload["obligations"][0]["target_words"] = 360
+    payload["obligations"][1]["target_words"] = 320
+    payload["obligations"][2]["target_words"] = 320
+
+    blueprint, actions = recover_blueprint_for_deadline(_topic_fixture(), payload)
+
+    assert [item.target_words for item in blueprint.obligations] == [342, 304, 304]
+    assert actions == ("target_words_scaled",)
+    assert validate_blueprint(
+        _topic_fixture(),
+        {"obligations": [item.to_payload() for item in blueprint.obligations]},
+    ) == blueprint
+
+
+def test_recover_blueprint_for_deadline_authenticates_and_disambiguates_spans() -> None:
+    topic = _topic_fixture()
+    payload = _valid_payload()
+    payload["obligations"][0]["narrative_spans"] = ["provider paraphrase"]
+    payload["obligations"][1]["narrative_spans"] = ["Recommend safeguards"]
+
+    blueprint, actions = recover_blueprint_for_deadline(topic, payload)
+
+    assert actions == (
+        "non_narrative_spans_replaced",
+        "duplicate_span_sets_disambiguated",
+    )
+    assert blueprint.obligations[0].narrative_spans == (topic.narrative,)
+    assert blueprint.obligations[2].narrative_spans == (
+        "Recommend safeguards",
+        topic.narrative,
+    )
+    assert validate_blueprint(
+        topic,
+        {"obligations": [item.to_payload() for item in blueprint.obligations]},
+    ) == blueprint
+
+
+def test_recover_blueprint_for_deadline_keeps_unrelated_errors_fail_closed() -> None:
+    payload = _valid_payload()
+    payload["obligations"][0]["narrative_spans"] = ["provider paraphrase"]
+    payload["obligations"][0]["selected_claim_aliases"] = ["c999"]
+
+    with pytest.raises(BlueprintValidationError, match="unknown claim alias"):
+        recover_blueprint_for_deadline(_topic_fixture(), payload)
 
 
 def test_must_widens_to_full_selected_groups_but_should_stays_claim_linked() -> None:
