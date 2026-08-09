@@ -1,7 +1,7 @@
 # Cached Segmentation Rescore and Validation
 
 Date: 2026-08-09
-Status: Approved in conversation; written review pending
+Status: Approved
 Scope: the 22 RAG 2025 development topics and the fixed/non-agentic retrieval pipeline
 
 ## Objective
