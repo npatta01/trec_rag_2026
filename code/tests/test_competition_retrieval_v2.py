@@ -29,7 +29,11 @@ from trec_rag.mixedbread_passage_scorer import (
     ScoredPassage as MixedbreadScoredPassage,
 )
 from trec_rag.rerank_score_cache import _choose_device
-from trec_rag.document_store import DocumentStore
+from trec_rag.document_store import (
+    DocumentStore,
+    DocumentStoreIntegrityError,
+    ReadOnlyDocumentStore,
+)
 from trec_rag.deepagent_budget import ResearchTaskContext
 from trec_rag.deepagent_research import ResearchTaskEnvelope, bind_research_task
 from trec_rag.deepagent_retrieval import DeepAgentRetriever
@@ -45,6 +49,7 @@ from trec_rag.topic_passage_search import (
 )
 from trec_rag.topic_records import FacetRecord, TopicRecords, TopicRecordsBuilder
 from trec_rag.competition_retrieval import (
+    CACHE_OPERATION_STAGE_NAMES,
     ValidatedDecomposition,
     ValidatedRetrievalAuditLane,
     _RuntimeDependencies,
@@ -52,6 +57,7 @@ from trec_rag.competition_retrieval import (
     _decode_passage_result,
     _build_topic_passage_search,
     _passage_result_json,
+    _publish_topic_cache_operation_receipt,
     _selection,
     _plan_payload,
     _topics_sha256,
@@ -72,6 +78,79 @@ from trec_rag.facet_retrieval import (
 
 ROOT = Path(__file__).resolve().parents[2]
 V2_CONFIG = ROOT / "configs" / "rag26_competition_retrieval_v2.yaml"
+
+
+def _zero_operation_stages() -> dict[str, dict[str, int]]:
+    return {
+        stage: {
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "network_calls": 0,
+            "provider_calls": 0,
+            "model_batches": 0,
+        }
+        for stage in CACHE_OPERATION_STAGE_NAMES
+    }
+
+
+@pytest.mark.parametrize("stage", ["planning", "retrieval", "passage_scores"])
+@pytest.mark.parametrize(
+    "counter",
+    ["cache_misses", "network_calls", "provider_calls", "model_batches"],
+)
+def test_cached_upstream_receipt_rejects_each_forbidden_work_counter(
+    tmp_path: Path,
+    stage: str,
+    counter: str,
+) -> None:
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(base, root_dir=tmp_path)
+    topic = Topic("topic-a", "", "narrative")
+    stages = _zero_operation_stages()
+    stages[stage][counter] = 1
+
+    with pytest.raises(ValueError, match="cached upstream operation"):
+        _publish_topic_cache_operation_receipt(
+            config=config,
+            topic=topic,
+            config_sha256="a" * 64,
+            projection_manifest_sha256="b" * 64,
+            mode="cached-upstream-rescore",
+            phases={
+                phase: {"resumed": False}
+                for phase in ("planning", "retrieval", "scoring", "canonical")
+            },
+            stages=stages,
+        )
+
+
+def test_cached_upstream_receipt_allows_downstream_rescoring_work(
+    tmp_path: Path,
+) -> None:
+    base = load_facet_pilot_config(V2_CONFIG)
+    config = replace(base, root_dir=tmp_path)
+    topic = Topic("topic-a", "", "narrative")
+    stages = _zero_operation_stages()
+    for stage in ("sentence_scores", "similarity", "canonicalization"):
+        stages[stage]["cache_misses"] = 1
+        stages[stage]["model_batches"] = 1
+
+    receipt = _publish_topic_cache_operation_receipt(
+        config=config,
+        topic=topic,
+        config_sha256="a" * 64,
+        projection_manifest_sha256="b" * 64,
+        mode="cached-upstream-rescore",
+        phases={
+            phase: {"resumed": False}
+            for phase in ("planning", "retrieval", "scoring", "canonical")
+        },
+        stages=stages,
+    )
+
+    assert receipt.path.name == (
+        "cache-operation-receipt.cached-upstream-rescore.json"
+    )
 
 
 def test_v2_config_pins_shared_passage_defaults() -> None:
@@ -269,6 +348,60 @@ def _offline_shared_scorer(tmp_path: Path):
             )
 
     return OfflineSharedScorer()
+
+
+def test_cached_upstream_missing_document_fails_before_passage_scoring(
+    tmp_path: Path,
+) -> None:
+    topic = Topic("topic-cached", "title", "find cached evidence")
+
+    class CachedRetriever:
+        identity = {"name": "cached", "type": "test", "hits": 1}
+
+        @staticmethod
+        def retrieve(query: QueryVariant):
+            return (
+                RetrievedCandidate(
+                    query.topic_id,
+                    query.variant_name,
+                    "cached",
+                    query.query_text,
+                    "doc-missing",
+                    1,
+                    2.0,
+                    "This exact source was not restored into the document cache.",
+                ),
+            )
+
+    scorer = _offline_shared_scorer(tmp_path)
+
+    def reject_scoring(*_args, **_kwargs):
+        pytest.fail("passage scoring must not run after a document-cache miss")
+
+    scorer.rank = reject_scoring
+    store_root = tmp_path / "missing-objects"
+    search = _build_topic_passage_search(
+        topic,
+        retriever=CachedRetriever(),
+        scorer=scorer,
+        document_store_root=store_root,
+        document_store=ReadOnlyDocumentStore(store_root),
+        retrieval_cache_dir=tmp_path / "retrieval-cache",
+        retrieval_index="climbmix-test",
+        corpus_epoch="test-epoch",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        retrieval_depth=1,
+        passages_per_query=1,
+        chunk_max_characters=3500,
+        chunk_overlap_characters=350,
+        cache_only=True,
+    )
+
+    with pytest.raises(DocumentStoreIntegrityError, match="unable to read"):
+        search.search(FocusedQuery("original", topic.narrative, "original"))
+
+    assert not store_root.exists()
 
 
 def test_passage_builder_accepts_external_one_argument_retriever(

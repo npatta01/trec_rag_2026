@@ -937,6 +937,66 @@ def load_completed_coverage_evaluation(
     )
 
 
+def seed_coverage_plan_from_completed_baseline(
+    *,
+    baseline_handoff_manifest_path: Path,
+    baseline_work_dir: Path,
+    candidate_handoff_manifest_path: Path,
+    candidate_work_dir: Path,
+    topic_id: str,
+) -> None:
+    """Seed one candidate arm with a fully validated baseline obligation plan.
+
+    Only the candidate input and the exact canonical baseline ``plan.json`` are
+    published. Baseline judgments, scores, reports, and manifests are never
+    copied, so resuming the candidate arm can reuse the planner stage but must
+    run its own judge stage.
+    """
+
+    baseline = load_completed_coverage_evaluation(
+        handoff_manifest_path=Path(baseline_handoff_manifest_path),
+        topic_id=topic_id,
+        work_dir=Path(baseline_work_dir),
+    )
+    candidate = coverage_input_from_handoff(
+        Path(candidate_handoff_manifest_path),
+        topic_id,
+    )
+    if (
+        candidate.topic_id != baseline.bound_input.topic_id
+        or candidate.narrative != baseline.bound_input.narrative
+        or candidate.narrative_sha256 != baseline.bound_input.narrative_sha256
+    ):
+        raise NuggetCoverageError(
+            "input",
+            "candidate narrative differs from the completed baseline plan",
+        )
+
+    destination = Path(candidate_work_dir)
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        raise NuggetCoverageError("persistence", "candidate work directory is invalid")
+    if destination.exists():
+        extras = {
+            path.name for path in destination.iterdir()
+        } - {"input.json", "plan.json"}
+        if extras:
+            raise NuggetCoverageError(
+                "persistence",
+                "candidate work directory contains post-plan artifacts",
+            )
+
+    plan_payload = _load_artifact(Path(baseline_work_dir) / "plan.json")
+    _publish_once(destination / "input.json", _input_payload(candidate))
+    _publish_once(destination / "plan.json", plan_payload)
+    if (destination / "plan.json").read_bytes() != (
+        Path(baseline_work_dir) / "plan.json"
+    ).read_bytes():
+        raise NuggetCoverageError(
+            "persistence",
+            "candidate plan bytes differ from the completed baseline plan",
+        )
+
+
 def _input_payload(bound: BoundCoverageInput) -> dict[str, object]:
     return {
         "schema_version": INPUT_ARTIFACT_SCHEMA_VERSION,
@@ -2217,6 +2277,7 @@ __all__ = [
     "coverage_input_from_handoff",
     "load_completed_coverage_evaluation",
     "run_coverage_evaluation",
+    "seed_coverage_plan_from_completed_baseline",
     "main",
     "render_judge_request",
     "render_planner_request",

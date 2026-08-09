@@ -11,12 +11,14 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any
+from typing import Any, Literal
 
 
-_SCHEMA_VERSION = "topic-job-receipt-v3"
+_SCHEMA_VERSION = "topic-job-receipt-v4"
+_LEGACY_SCHEMA_VERSION = "topic-job-receipt-v3"
 _RECEIPT_FILENAME = "topic-job-receipt.json"
 _OFFLINE_RECEIPT_FILENAME = "topic-job-receipt.offline-cache-only.json"
+_CACHED_RESCORE_RECEIPT_FILENAME = "topic-job-receipt.cached-upstream-rescore.json"
 _PROJECTION_MANIFEST = Path("canonical/retrieval-projection-manifest.json")
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -28,6 +30,14 @@ _INCOMPLETE_REASONS = {
     "no_evidence",
     "evidence_validation_failed",
 }
+ExecutionPolicy = Literal[
+    "online",
+    "offline-cache-only",
+    "cached-upstream-rescore",
+]
+_EXECUTION_POLICIES = frozenset(
+    {"online", "offline-cache-only", "cached-upstream-rescore"}
+)
 
 
 class TopicDispatchError(RuntimeError):
@@ -48,7 +58,7 @@ class TopicJob:
     config_bytes: bytes
     config_sha256: str
     topic_root: Path
-    offline_cache_only: bool = False
+    execution_policy: ExecutionPolicy = "online"
 
     def __post_init__(self) -> None:
         if not isinstance(self.topic_id, str) or not _SAFE_ID.fullmatch(self.topic_id):
@@ -67,8 +77,16 @@ class TopicJob:
             or sha256(self.config_bytes).hexdigest() != self.config_sha256
         ):
             raise ValueError("config_sha256 must bind the exact config_bytes")
-        if not isinstance(self.offline_cache_only, bool):
-            raise TypeError("offline_cache_only must be Boolean")
+        if (
+            not isinstance(self.execution_policy, str)
+            or self.execution_policy not in _EXECUTION_POLICIES
+        ):
+            raise ValueError("execution_policy is invalid")
+
+    @property
+    def offline_cache_only(self) -> bool:
+        """Compatibility predicate for the fully offline replay policy."""
+        return self.execution_policy == "offline-cache-only"
 
 
 @dataclass(frozen=True)
@@ -236,7 +254,11 @@ def read_topic_receipt(
         "stopping_reason",
     }:
         raise TopicDispatchIntegrityError("topic receipt fields changed")
-    if value.get("schema_version") != _SCHEMA_VERSION:
+    receipt_schema = value.get("schema_version")
+    if receipt_schema != _SCHEMA_VERSION and not (
+        receipt_schema == _LEGACY_SCHEMA_VERSION
+        and job.execution_policy in {"online", "offline-cache-only"}
+    ):
         raise TopicDispatchIntegrityError("topic receipt schema changed")
     if value.get("run_id") != job.run_id:
         raise TopicDispatchIntegrityError("topic receipt run identity changed")
@@ -255,7 +277,7 @@ def read_topic_receipt(
         )
     except (TypeError, ValueError) as exc:
         raise TopicDispatchIntegrityError("topic receipt values changed") from exc
-    if _receipt_bytes(job, receipt) != body:
+    if _receipt_bytes(job, receipt, schema_version=receipt_schema) != body:
         raise TopicDispatchIntegrityError("topic receipt is not canonical")
     _validate_projection_manifest(job, receipt)
     return receipt
@@ -298,18 +320,27 @@ def _validate_projection_manifest(job: TopicJob, receipt: TopicJobReceipt) -> No
 
 
 def _receipt_path(job: TopicJob) -> Path:
-    filename = _OFFLINE_RECEIPT_FILENAME if job.offline_cache_only else _RECEIPT_FILENAME
+    filename = {
+        "online": _RECEIPT_FILENAME,
+        "offline-cache-only": _OFFLINE_RECEIPT_FILENAME,
+        "cached-upstream-rescore": _CACHED_RESCORE_RECEIPT_FILENAME,
+    }[job.execution_policy]
     return job.topic_root / filename
 
 
 def _job_mode(job: TopicJob) -> str:
-    return "offline-cache-only" if job.offline_cache_only else "online"
+    return job.execution_policy
 
 
-def _receipt_bytes(job: TopicJob, receipt: TopicJobReceipt) -> bytes:
+def _receipt_bytes(
+    job: TopicJob,
+    receipt: TopicJobReceipt,
+    *,
+    schema_version: str = _SCHEMA_VERSION,
+) -> bytes:
     return json.dumps(
         {
-            "schema_version": _SCHEMA_VERSION,
+            "schema_version": schema_version,
             "run_id": job.run_id,
             "topic_id": receipt.topic_id,
             "config_sha256": job.config_sha256,
@@ -342,6 +373,7 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
+    "ExecutionPolicy",
     "TopicDispatchError",
     "TopicDispatchIntegrityError",
     "TopicJob",

@@ -49,7 +49,11 @@ def _config(tmp_path: Path):
     )
 
 
-def _job(config, *, offline_cache_only: bool = True) -> TopicJob:
+def _job(
+    config,
+    *,
+    execution_policy: str = "offline-cache-only",
+) -> TopicJob:
     config_bytes = V2_CONFIG.read_bytes()
     return TopicJob(
         topic_id="topic-a",
@@ -58,7 +62,7 @@ def _job(config, *, offline_cache_only: bool = True) -> TopicJob:
         config_bytes=config_bytes,
         config_sha256=sha256(config_bytes).hexdigest(),
         topic_root=(config.output_dir / "topic-a").resolve(),
-        offline_cache_only=offline_cache_only,
+        execution_policy=execution_policy,
     )
 
 
@@ -128,6 +132,37 @@ def test_cli_forwards_offline_cache_only(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out == "output=/tmp/out\n"
 
 
+def test_cli_forwards_cached_upstream_rescore(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(config, **kwargs):
+        captured.update(config=config, **kwargs)
+        return SimpleNamespace(
+            retrieval_export=SimpleNamespace(manifest=Path("/tmp/out/complete.json"))
+        )
+
+    monkeypatch.setattr(competition_retrieval, "run_official", fake_run)
+
+    assert (
+        competition_retrieval.main([str(V2_CONFIG), "--cached-upstream-rescore"])
+        == 0
+    )
+
+    assert captured["cached_upstream_rescore"] is True
+    assert capsys.readouterr().out == "output=/tmp/out\n"
+
+
+def test_cli_rejects_both_cache_execution_modes() -> None:
+    with pytest.raises(SystemExit):
+        competition_retrieval.main(
+            [
+                str(V2_CONFIG),
+                "--offline-cache-only",
+                "--cached-upstream-rescore",
+            ]
+        )
+
+
 def test_runner_refuses_incomplete_merge_before_dependency_construction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -160,14 +195,24 @@ def test_runner_refuses_incomplete_merge_before_dependency_construction(
         )
 
 
-def test_offline_production_worker_constructs_only_read_only_dependencies(
+@pytest.mark.parametrize(
+    ("execution_policy", "sentence_read_only", "similarity_cache_only"),
+    (
+        ("offline-cache-only", True, True),
+        ("cached-upstream-rescore", False, False),
+    ),
+)
+def test_cache_policy_production_worker_constructs_expected_dependencies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    execution_policy: str,
+    sentence_read_only: bool,
+    similarity_cache_only: bool,
 ) -> None:
-    """Catches any offline worker boundary silently constructing online adapters."""
+    """Catches a cache policy silently constructing a forbidden adapter."""
     config = _config(tmp_path)
     topic = Topic("topic-a", "", "cache replay narrative")
-    job = _job(config)
+    job = _job(config, execution_policy=execution_policy)
     calls: dict[str, object] = {"guards": 0}
     base_dependencies = competition_retrieval._RuntimeDependencies(
         code_commit="c" * 40,
@@ -187,10 +232,14 @@ def test_offline_production_worker_constructs_only_read_only_dependencies(
         "load_narrative_topics",
         lambda _path: (topic,),
     )
+    def production_dependencies(**kwargs):
+        calls["dependency_kwargs"] = kwargs
+        return base_dependencies
+
     monkeypatch.setattr(
         competition_retrieval,
         "_production_dependencies",
-        lambda **_kwargs: base_dependencies,
+        production_dependencies,
     )
 
     def guard(_cache_root):
@@ -265,12 +314,14 @@ def test_offline_production_worker_constructs_only_read_only_dependencies(
 
     def fake_run_topic(topic_arg, staged_config, _identity, dependencies, **kwargs):
         assert topic_arg == topic
-        assert staged_config.root_dir != config.root_dir
+        assert (staged_config.root_dir != config.root_dir) is (
+            execution_policy == "offline-cache-only"
+        )
         assert dependencies.retriever is retriever
         assert dependencies.document_scorer is passage
         assert dependencies.candidate_scorer is sentence
         assert dependencies.similarity is similarity
-        assert kwargs["offline_cache_only"] is True
+        assert kwargs["execution_policy"] == execution_policy
         body = b"offline projection"
         path = (
             staged_config.output_dir
@@ -301,8 +352,13 @@ def test_offline_production_worker_constructs_only_read_only_dependencies(
     assert calls["guards"] == 1
     assert calls["retriever"]["cache_only"] is True
     assert calls["passage"]["read_only"] is True
-    assert calls["sentence"]["read_only"] is True
-    assert calls["similarity"]["cache_only"] is True
+    assert calls["sentence"]["read_only"] is sentence_read_only
+    assert calls["similarity"]["cache_only"] is similarity_cache_only
+    assert calls["dependency_kwargs"] == (
+        {"load_environment": False}
+        if execution_policy == "offline-cache-only"
+        else {}
+    )
     assert calls["similarity"]["cache_root"] == tmp_path / "cache"
     assert (
         job.topic_root / "canonical" / "retrieval-projection-manifest.json"
@@ -726,7 +782,7 @@ def test_offline_stage_reopens_a_real_sealed_topic_tree(tmp_path: Path) -> None:
         config_bytes=config_bytes,
         config_sha256=config_sha256,
         topic_root=(config.output_dir / topic.id).resolve(),
-        offline_cache_only=True,
+        execution_policy="offline-cache-only",
     )
 
     outcome = competition_retrieval._run_offline_topic_staged(

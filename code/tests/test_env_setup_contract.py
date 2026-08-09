@@ -19,6 +19,7 @@ from contextlib import suppress
 from pathlib import Path
 import re
 import sys
+import tomllib
 import types
 
 import pytest
@@ -211,6 +212,12 @@ def test_setup_env_dispatches_to_both_hardware_scripts() -> None:
 def test_hardware_setup_scripts_are_executable() -> None:
     for script in (SETUP_ENV, SETUP_CUDA, VERIFY_TORCH_GROUPS):
         assert script.stat().st_mode & 0o111, f"{script} must be executable"
+
+
+def test_project_python_range_matches_the_pinned_spacy_wheel_support() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["requires-python"] == ">=3.11,<3.14"
 
 
 def test_cuda_group_pins_the_versions_the_rocm_group_resolves_to() -> None:

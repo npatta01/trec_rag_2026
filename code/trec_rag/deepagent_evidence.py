@@ -14,6 +14,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from pydantic import ConfigDict
 
+from trec_rag.chunking import sentence_segmenter
 from trec_rag.deepagent_snippets import SnippetPage
 
 if TYPE_CHECKING:
@@ -32,7 +33,6 @@ MAX_SENTENCE_CHARACTERS = 600
 # Sized against observed volume of roughly 21 nuggets per need, which gives
 # about 4:1 selection pressure and 20-35 drafted nuggets per topic.
 MAX_DRAFT_NUGGETS_PER_NEED = 5
-_SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?:\s+|$)")
 _CITATION = re.compile(r"^S(\d+)(?:\.(\d+)(?:-(\d+))?)?$")
 
 
@@ -64,51 +64,37 @@ def _sentence_spans(text: str) -> tuple[tuple[int, int], ...]:
 
     Splitting happens once, when a snippet is first observed. Citations resolve
     against the stored spans and never re-split, so a handle cannot drift.
+
+    Boundaries come from the shared segmenter, so this lane and competition
+    retrieval cut text the same way. A span that does not stand on its own - a
+    heading, a list caption, the "Plyler v." that once had a Supreme Court
+    holding cited to it - is joined to what follows rather than left citable.
     """
-    spans: list[tuple[int, int]] = []
-    start = 0
-    for match in _SENTENCE_END.finditer(text):
-        spans.extend(_capped_spans(text, start, match.end()))
-        start = match.end()
-    if start < len(text):
-        spans.extend(_capped_spans(text, start, len(text)))
-    return tuple(_merged_fragments(text, spans)) or ((0, len(text)),)
-
-
-def _merged_fragments(
-    text: str, spans: Sequence[tuple[int, int]]
-) -> list[tuple[int, int]]:
-    """Rejoin fragments the sentence regex split off a real sentence.
-
-    A period is not always a sentence end. The regex breaks on the "v." of a
-    case name and on numbered list markers, so a live run produced citable
-    spans reading "Plyler v.", "2." and "B." - and a researcher attached a
-    Supreme Court holding to the first of them.
-
-    Merging forward reconstructs the sentence ("Plyler v." + "Doe concerned
-    schooling.") rather than discarding the fragment, so no text becomes
-    uncitable. Only the split is repaired; nothing here touches a citation or
-    an identifier, which are never repaired.
-    """
+    sentences = sentence_segmenter().segment(text)
+    if not sentences:
+        return ((0, len(text)),)
     merged: list[tuple[int, int]] = []
-    for start, end in spans:
-        if merged and _content_word_count(text[merged[-1][0] : merged[-1][1]]) < (
-            _MIN_CITATION_CONTENT_WORDS
-        ):
-            previous_start, _ = merged.pop()
-            merged.append((previous_start, end))
+    pending: int | None = None
+    for row in sentences:
+        start = pending if pending is not None else row.start_char
+        if not row.is_complete:
+            pending = start
             continue
-        merged.append((start, end))
-    # A trailing fragment has nothing after it to merge into, so it folds back.
-    while (
-        len(merged) > 1
-        and _content_word_count(text[merged[-1][0] : merged[-1][1]])
-        < _MIN_CITATION_CONTENT_WORDS
-    ):
-        start, end = merged.pop()
-        previous_start, _ = merged.pop()
-        merged.append((previous_start, end))
-    return merged
+        merged.append((start, row.end_char))
+        pending = None
+    if pending is not None:
+        # A trailing fragment has nothing after it to join, so it folds back.
+        if merged:
+            previous_start, _ = merged.pop()
+            merged.append((previous_start, sentences[-1].end_char))
+        else:
+            merged.append((pending, sentences[-1].end_char))
+    spans: list[tuple[int, int]] = []
+    for start, end in merged:
+        spans.extend(_capped_spans(text, start, end))
+    return tuple(spans) or ((0, len(text)),)
+
+
 _DELTA_SECTIONS = (
     "add_needs",
     "add_facets",

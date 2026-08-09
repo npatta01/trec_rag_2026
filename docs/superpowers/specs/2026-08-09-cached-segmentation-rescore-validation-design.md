@@ -1,0 +1,251 @@
+# Cached Segmentation Rescore and Validation
+
+Date: 2026-08-09
+Status: Approved
+Scope: the 22 RAG 2025 development topics and the fixed/non-agentic retrieval pipeline
+
+## Objective
+
+Prove whether sentence-aware source segmentation improves selected evidence and
+canonical retrieval nuggets without paying for planning, document retrieval, or
+passage reranking again. Run the complete 22-topic validation on one dstack GPU
+machine, publish private immutable result artifacts, and promote the code only
+if the run passes both cache-safety and quality gates.
+
+The selected topics are:
+
+`14, 31, 37, 58, 72, 84, 144, 161, 200, 213, 219, 224, 225, 233, 273, 300,
+407, 477, 499, 515, 707, 897`.
+
+## Existing Evidence
+
+The old line-oriented splitter divides hard-wrapped sentences and headings into
+short candidate fragments. Across the old 22-topic p4 replay it produced
+383,078 candidates. Topic 407 had a median physical-line length of 11
+characters and 60.4% of physical lines were shorter than 40 characters.
+
+The private Hugging Face Bucket contains one verified portable cache bundle for
+each of the 22 topics. The archives total approximately 1.30 GiB compressed.
+The previous all-topic replay proved that these bundles can reconstruct a fresh
+cache and yield zero planning, retrieval, passage-scoring, similarity, and
+canonicalization work under the old segmentation identity.
+
+The sentence splitter changes candidate and downstream cache identities but
+does not change query, document-retrieval, or passage-score identities.
+Therefore a global offline replay cannot perform this validation: sentence
+scoring, similarity, and usually canonicalization must be recomputed.
+
+## Decisions
+
+### Fail-closed upstream reuse
+
+Add a distinct `cached-upstream-rescore` execution mode. It is not an alias for
+online mode or global offline mode.
+
+In this mode:
+
+| Stage | Policy | Permitted work |
+| --- | --- | --- |
+| Planning | cache-only | cache reads only; a miss aborts before a provider call |
+| Document retrieval | cache-only | cache reads only; a miss aborts before a network request |
+| Document materialization | cache-only | restored document bytes only; a miss aborts |
+| Passage scoring | read-only | restored scores only; a miss aborts before model inference |
+| Sentence segmentation | recompute | local CPU/spaCy work |
+| Sentence scoring | writable | local GPU inference and cache writes |
+| Similarity/MMR features | writable | local inference and cache writes |
+| Canonicalization | cache-backed online | cached responses may be reused; new selected groups may make hosted calls |
+
+The mode must be represented in topic jobs and operation receipts rather than
+inferred from credentials. A deliberately invalid API token is not a safety
+mechanism because it still permits an attempted retrieval request.
+
+Every completed topic must report zero planning misses/provider calls, zero
+retrieval misses/network calls, and zero passage-score misses/model batches.
+Any nonzero value fails the task before its result can be promoted or
+published as valid.
+
+### One machine, fastest useful GPU
+
+Use one on-demand dstack machine so repository setup, bundle download, cache
+merge, and model downloads are paid once. Preview live offers immediately
+before launch and select the fastest available H200/H100 offer the user
+approves. Bind the submitted backend, region, instance type, GPU, and hourly
+price cap to those approved axes so a second marketplace resolution cannot
+silently substitute another offer class.
+
+The task remains single-GPU. Sentence-scoring workers share that GPU; they do
+not use distributed training or multiple machines.
+
+### Bounded multi-topic concurrency
+
+Run exactly twenty topic workers on the same GPU host in one full wave. This
+choice follows the live H100 evidence: one topic
+kept one CPU core busy while GPU utilization was sparse, used about 6.7 GiB of
+host RSS and 2.32 GiB of VRAM, and took more than fifty minutes downstream.
+The task therefore requires at least 24 CPU cores and 192 GB host RAM.
+
+A same-machine, fifteen-minute two-worker probe runs in isolated cache/output
+roots and records GPU identity, elapsed time, idle VRAM, and peak VRAM. Its
+expected timeout is success; every other nonzero status fails. Twenty workers
+are admitted only when the exact linear
+projection `idle + 10 * (peak - idle)` stays at or below 90% of device memory.
+The probe must also observe at least 4096 MiB above idle, and its exact
+900-second duration plus exit status are bound into the verified decision; an
+idle-only or short timed probe cannot become promotable.
+The result verifier binds the decision to the config and export and accepts
+exactly twenty workers. Topic 407's known structural canary thresholds are
+enforced after the full wave, before semantic judging or promotion. The wrapper
+fails rather than silently reducing
+concurrency, weakening validation, or restarting retrieval after an
+out-of-memory error.
+
+The outer task gives the wrapper 160m, then reserves ten minutes for its
+marker-last diagnostic path before dstack's 170m hard cap. At $3.29/hour the
+maximum task exposure is about $9.32.
+
+## Remote Data Flow
+
+1. Transport a clean, committed-only source snapshot through the existing
+   dstack launcher pattern.
+2. Verify required secret presence without printing values and confirm the
+   configured Hugging Face Bucket is private.
+3. Require the new result and non-promotable diagnostic prefixes to be empty.
+4. Download exactly the 22 existing archive/marker pairs from the pinned
+   private source prefix.
+5. Verify each archive and merge all bundles into fresh production and isolated
+   probe caches.
+   Never copy a live SQLite database between machines.
+6. Run the bounded two-topic probe and project its peak to twenty workers.
+7. Run all 22 topics in one twenty-worker wave and apply Topic 407 plus full gates.
+8. Validate all topic receipts and the aggregate retrieval export/handoff.
+9. Produce a private before/after validation report.
+10. Pack, locally verify, upload, download, byte-compare, and semantically
+    reverify the new immutable result bundle. Upload its completion marker last.
+11. On any nonzero exit after destination authentication, package the available
+    completed checkpoint phases, comparison pairs, frozen-plan judgments, and a
+    canonical stage/exit receipt into a distinct diagnostic bundle. Upload and
+    round-trip verify its completion marker last while preserving the original
+    failure status.
+
+The destination is a new run-specific private prefix beneath
+`trec_rag_2026/experiments/`. Existing bundles are never deleted or
+overwritten.
+
+## Quality Validation
+
+### Deterministic structural comparison
+
+Compare old and fixed artifacts for the same 22 narratives and the same
+upstream query, document, and passage identities. Report per-topic and macro
+values for:
+
+- candidate count, median character length, and fraction shorter than 40
+  characters;
+- selected-evidence count, median character length, and fragment proxy rate
+  (`length < 40` or lacking terminal sentence punctuation);
+- heading-only selected evidence;
+- selected group provenance, full-passage containment, selection budget, and
+  extractive-fallback rate;
+- canonical nugget count, median length, empty/fallback rate, and source-group
+  coverage.
+
+Topic 407 must improve from the known 11-character median and 60.4% sub-40
+baseline. Across all 22 topics, the fixed run must materially reduce candidate
+fragmentation and must not worsen selected-evidence fragmentation or invalidate
+any authority/provenance check.
+
+### Paired semantic nugget comparison
+
+Structural improvements alone do not prove better information coverage. Use a
+paired evaluation for each topic:
+
+1. derive or reuse one frozen answer-obligation plan from the unchanged
+   narrative;
+2. judge the old canonical retrieval nuggets against that plan;
+3. judge the fixed canonical retrieval nuggets against the exact same plan and
+   judge contract;
+4. record required coverage, strict-full rate, obligation labels, regressions,
+   and newly covered obligations.
+
+The comparison must verify identical narrative and plan hashes before scoring.
+It must use the same pinned model and prompt identities for both arms. This is a
+planner-derived diagnostic, not organizer ground truth, and the report must say
+so. Organizer gold nuggets and qrels remain outside the retrieval/generation
+runner; a separate read-only development diagnostic may be added only if its
+input and interpretation are explicit.
+
+The 22 independent candidate judge calls may use eight threads. Every topic has
+a disjoint frozen-plan work directory, results are restored to requested topic
+order, and only the production backend may be parallelized; injected shared
+test backends remain single-worker.
+
+The fixed arm passes the semantic gate only when topic-macro, every topic, and
+every obligation do not regress. A gain elsewhere never compensates a local
+loss. The report must show either a positive semantic change or an explicit
+fixed-output readability improvement at equal coverage; any loss blocks
+automatic promotion and is preserved for inspection.
+
+## Promotion Gate
+
+Promote only when all of the following are true:
+
+- all 22 topics complete on one dstack machine with twenty probe-gated workers;
+- every upstream no-work counter is exactly zero;
+- all checkpoint, provenance, handoff, archive, and round-trip validators pass;
+- deterministic fragmentation metrics improve and selected evidence does not
+  regress;
+- paired semantic nugget coverage is better or equal under an identical plan;
+- the tracked worktree is clean apart from the intended commits;
+- targeted and full relevant tests pass.
+
+Promotion means pushing `codex/fix-sentence-segmentation` and opening a draft
+pull request. It does not mean merging to the default branch or publishing any
+private output.
+
+## Cost and Call Disclosure
+
+Before launch, report the exact 22 topics, 1.30 GiB source-bundle download,
+chosen GPU offer, hourly price, maximum duration/exposure, worker count, and
+private output prefix.
+
+Expected remote/hosted work is:
+
+- planning: 0 provider calls;
+- document retrieval: 0 network calls;
+- passage scoring: 0 model batches;
+- sentence scoring and similarity: local GPU work;
+- canonicalization: cache hits plus bounded hosted calls for changed groups;
+- paired nugget validation: one frozen-plan call and two judge calls per topic
+  when no compatible plan cache exists, at most 66 hosted calls across 22
+  topics.
+
+Provider responses, caches, selected evidence, canonical nuggets, and reports
+remain private and outside git.
+
+## Failure Handling
+
+- Missing or invalid source bundle: stop before GPU scoring.
+- Any upstream cache miss: stop before the forbidden provider/network/model
+  operation and preserve a private diagnostic receipt.
+- Topic 407 quality gate failure: stop before the remaining 21 topics.
+- Worker/OOM failure: preserve completed topic artifacts; diagnose on the same
+  lease if possible, then resume only incomplete topics at lower concurrency.
+- Canonicalization/provider failure: retain resumable state and do not label the
+  topic complete.
+- Remote publication mismatch: stop; never overwrite the destination prefix.
+- Semantic regression: preserve the paired evidence for inspection and do not
+  promote the branch.
+
+Failure bundles use a separate `diagnostic` kind with
+`promotion_eligible: false`; the successful-result verifier must reject them.
+They exclude secrets, model caches, raw provider responses, qrels, gold
+nuggets, and unrelated task-local files.
+
+## Non-goals
+
+- No RAG answer generation.
+- No new BM25/Pyserini retrieval.
+- No passage reranking.
+- No Modal implementation or execution.
+- No public artifact or service.
+- No merge to the default branch.

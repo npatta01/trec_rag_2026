@@ -30,6 +30,7 @@ from trec_rag.facet_pilot_config import (
 )
 from trec_rag.evidence_store import CandidateArtifacts, select_evidence_artifacts
 from trec_rag.facet_evidence import (
+    SENTENCE_SPLITTER_VERSION,
     CandidateSubnarrative,
     ExtractiveCandidate,
     ExtractiveCandidateRequest,
@@ -437,7 +438,7 @@ def _write_evidence_artifacts(
         "source_file": "candidate-requests.jsonl",
         "source_sha256": sha256(request_bytes).hexdigest(),
         "scorer": scorer_identity,
-        "sentence_splitter_version": "exact_rules_v1",
+        "sentence_splitter_version": SENTENCE_SPLITTER_VERSION,
         "scoring_normalization_version": "trec_rag_whitespace_v1",
     }
     topic_root = canonical.parent
@@ -1572,7 +1573,7 @@ def test_export_fails_closed_on_topic_records_integrity_failures(
                 "sentence_max_length": 512,
                 "input_policy": "trec_rag_whitespace_v1",
             },
-            "sentence_splitter_version": "exact_rules_v1",
+            "sentence_splitter_version": SENTENCE_SPLITTER_VERSION,
             "scoring_normalization_version": "trec_rag_whitespace_v1",
         })
         shutil.copy2(wrong_root / "records.sqlite3", records_path)

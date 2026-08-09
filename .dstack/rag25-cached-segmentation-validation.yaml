@@ -1,0 +1,40 @@
+type: task
+name: rag25-cached-segmentation-validation
+
+image: huggingface/trl@sha256:4de10fa68e4f4e060cb41885044208e2a44715fc0d52ce83bb071b1fc6d63db1
+entrypoint: /bin/bash -c
+shell: bash
+working_dir: /dstack/run/trec_rag_2026
+
+repos:
+  - local_path: /dev/null/trec-rag-cached-segmentation-requires-launcher
+    path: /dstack/run/trec_rag_2026
+    if_exists: error
+
+env:
+  - HF_TOKEN=${{ secrets.hf_token }}
+  - INDEX_URL=${{ secrets.INDEX_URL }}
+  - PYSERINI_API_TOKEN=${{ secrets.PYSERINI_API_TOKEN }}
+  - OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+  - HF_CLI_MODE=direct
+
+commands:
+  - 'timeout --signal=TERM --kill-after=10m 160m bash code/tools/run_cached_segmentation_validation.sh ${{ run.args }}'
+
+resources:
+  cpu: 24..
+  gpu:
+    name: [H200, H100]
+    count: 1
+    memory: 80GB..
+  memory: 192GB..
+  disk: 100GB
+
+backends: [runpod, vastai]
+spot_policy: on-demand
+max_price: 3.29
+max_duration: 170m
+idle_duration: 0s
+retry:
+  on_events: [no-capacity]
+  duration: 30m

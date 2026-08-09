@@ -2426,7 +2426,7 @@ def _validate_extracted_offline_replay(
             config_bytes=config_bytes,
             config_sha256=hashlib.sha256(config_bytes).hexdigest(),
             topic_root=(replay_config.output_dir / topic_id).resolve(),
-            offline_cache_only=True,
+            execution_policy="offline-cache-only",
         )
         outcome = competition_retrieval._run_offline_topic_staged(
             job,
@@ -2463,7 +2463,10 @@ def _validate_extracted_semantics(
     experiment_id: str,
     members: Sequence[BundleMember],
 ) -> None:
-    config, config_bytes = _staged_config(extraction_root, experiment_id=experiment_id)
+    config, config_bytes = _staged_config(
+        extraction_root,
+        experiment_id=experiment_id,
+    )
     _validate_extracted_cache(
         extraction_root,
         config=config,
@@ -2486,9 +2489,46 @@ def _validate_extracted_semantics(
     )
 
 
+def _validate_extracted_rescore_source_semantics(
+    extraction_root: Path,
+    *,
+    topic_id: str,
+    experiment_id: str,
+    members: Sequence[BundleMember],
+) -> None:
+    """Authenticate a historical source without replaying changed downstream work.
+
+    Cached-upstream rescore deliberately changes candidate segmentation and
+    therefore invalidates sentence-score, similarity, and canonical caches.  A
+    full historical offline replay under current code would test those obsolete
+    downstream identities.  This profile retains exact archive, cache-closure,
+    and checkpoint authentication; the subsequent cached-upstream run proves
+    planning, retrieval, document, and passage-score completeness fail-closed.
+    """
+    config, config_bytes = _staged_config(
+        extraction_root,
+        experiment_id=experiment_id,
+    )
+    _validate_extracted_cache(
+        extraction_root,
+        config=config,
+        topic_id=topic_id,
+        members=members,
+    )
+    _validate_extracted_checkpoint(
+        extraction_root,
+        config=config,
+        config_bytes=config_bytes,
+        topic_id=topic_id,
+        members=members,
+    )
+
+
 def _verify_receipted_archive(
     archive_path: Path,
     receipt: BundleReceipt,
+    *,
+    semantic_validator: Callable[..., None] = _validate_extracted_semantics,
 ) -> tuple[str, str, tuple[BundleMember, ...]]:
     """Run both hostile-stream passes and the isolated semantic replay."""
     experiment_id, source_config_sha256, members = _verify_archive(
@@ -2510,7 +2550,7 @@ def _verify_receipted_archive(
             raise CacheBundleIntegrityError(
                 "bundle changed between structural and semantic verification"
             )
-        _validate_extracted_semantics(
+        semantic_validator(
             extraction_root,
             topic_id=receipt.topic_id,
             experiment_id=experiment_id,
@@ -2519,8 +2559,11 @@ def _verify_receipted_archive(
     return experiment_id, source_config_sha256, members
 
 
-def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
-    """Authenticate structurally, then semantically stage in isolation."""
+def _verify_bundle(
+    bundle_dir: str | Path,
+    *,
+    semantic_validator: Callable[..., None],
+) -> VerifiedBundle:
     root = Path(bundle_dir)
     if root.is_symlink() or not root.is_dir():
         raise CacheBundleIntegrityError("bundle directory is missing or unsafe")
@@ -2535,6 +2578,7 @@ def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
     experiment_id, source_config_sha256, members = _verify_receipted_archive(
         root / BUNDLE_ARCHIVE_NAME,
         receipt,
+        semantic_validator=semantic_validator,
     )
     return VerifiedBundle(
         bundle_dir=root.resolve(),
@@ -2545,6 +2589,22 @@ def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
         manifest_sha256=receipt.manifest_sha256,
         source_config_sha256=source_config_sha256,
         members=members,
+    )
+
+
+def verify_bundle(bundle_dir: str | Path) -> VerifiedBundle:
+    """Authenticate structurally, then prove a full offline replay in isolation."""
+    return _verify_bundle(
+        bundle_dir,
+        semantic_validator=_validate_extracted_semantics,
+    )
+
+
+def verify_rescore_source_bundle(bundle_dir: str | Path) -> VerifiedBundle:
+    """Authenticate a source for a fail-closed cached-upstream rescore."""
+    return _verify_bundle(
+        bundle_dir,
+        semantic_validator=_validate_extracted_rescore_source_semantics,
     )
 
 
@@ -3546,6 +3606,45 @@ def merge_bundles(
     score_conflicts: str = "strict",
     publication_hook: Callable[[str], None] | None = None,
 ) -> MergeReceipt:
+    """Fully replay, then converge bundle files under durable merge state."""
+    return _merge_bundles_with_verifier(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=bundle_dirs,
+        score_conflicts=score_conflicts,
+        publication_hook=publication_hook,
+        verifier=verify_bundle,
+    )
+
+
+def merge_rescore_source_bundles(
+    *,
+    cache_root: str | Path,
+    outputs_root: str | Path,
+    bundle_dirs: Sequence[str | Path],
+    score_conflicts: str = "strict",
+    publication_hook: Callable[[str], None] | None = None,
+) -> MergeReceipt:
+    """Authenticate historical inputs, then converge them for cached rescore."""
+    return _merge_bundles_with_verifier(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=bundle_dirs,
+        score_conflicts=score_conflicts,
+        publication_hook=publication_hook,
+        verifier=verify_rescore_source_bundle,
+    )
+
+
+def _merge_bundles_with_verifier(
+    *,
+    cache_root: str | Path,
+    outputs_root: str | Path,
+    bundle_dirs: Sequence[str | Path],
+    score_conflicts: str,
+    publication_hook: Callable[[str], None] | None,
+    verifier: Callable[[str | Path], VerifiedBundle],
+) -> MergeReceipt:
     """Serialize and converge verified bundle files under durable merge state."""
     if score_conflicts not in {"strict", "keep-existing"}:
         raise ValueError("score_conflicts must be strict or keep-existing")
@@ -3562,7 +3661,7 @@ def merge_bundles(
     # same archive bytes under the lock to close the mutation window.
     unique: dict[str, VerifiedBundle] = {}
     for raw_bundle in bundle_dirs:
-        verified = verify_bundle(raw_bundle)
+        verified = verifier(raw_bundle)
         prior = unique.get(verified.archive_sha256)
         if prior is not None and prior != verified:
             raise CacheBundleIntegrityError(
@@ -3907,6 +4006,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pack.add_argument("--destination", type=Path, required=True)
     verify = commands.add_parser("verify")
     verify.add_argument("bundle_dir", type=Path)
+    verify_rescore = commands.add_parser("verify-rescore-source")
+    verify_rescore.add_argument("bundle_dir", type=Path)
     merge = commands.add_parser("merge")
     merge.add_argument("--cache-root", type=Path, required=True)
     merge.add_argument("--outputs-root", type=Path, required=True)
@@ -3916,6 +4017,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="strict",
     )
     merge.add_argument("bundle_dirs", nargs="+", type=Path)
+    merge_rescore = commands.add_parser("merge-rescore-source")
+    merge_rescore.add_argument("--cache-root", type=Path, required=True)
+    merge_rescore.add_argument("--outputs-root", type=Path, required=True)
+    merge_rescore.add_argument(
+        "--score-conflicts",
+        choices=("strict", "keep-existing"),
+        default="strict",
+    )
+    merge_rescore.add_argument("bundle_dirs", nargs="+", type=Path)
     return parser
 
 
@@ -3929,7 +4039,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         verified = verify_bundle(args.bundle_dir)
         print(f"archive_sha256={verified.archive_sha256}")
         return 0
-    receipt = merge_bundles(
+    if args.command == "verify-rescore-source":
+        verified = verify_rescore_source_bundle(args.bundle_dir)
+        print(f"archive_sha256={verified.archive_sha256}")
+        return 0
+    merge_function = (
+        merge_rescore_source_bundles
+        if args.command == "merge-rescore-source"
+        else merge_bundles
+    )
+    receipt = merge_function(
         cache_root=args.cache_root,
         outputs_root=args.outputs_root,
         bundle_dirs=args.bundle_dirs,

@@ -611,6 +611,88 @@ def test_pack_is_byte_reproducible_and_verify_is_manifest_driven(
     }
 
 
+def test_rescore_source_verifier_keeps_semantics_but_skips_downstream_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        bundle_module,
+        "_validate_extracted_cache",
+        lambda *_args, **_kwargs: calls.append("cache"),
+    )
+    monkeypatch.setattr(
+        bundle_module,
+        "_validate_extracted_checkpoint",
+        lambda *_args, **_kwargs: calls.append("checkpoint"),
+    )
+
+    def reject_downstream(*_args, **_kwargs) -> None:
+        calls.append("downstream")
+        raise CacheBundleIntegrityError("downstream replay is incompatible")
+
+    monkeypatch.setattr(
+        bundle_module,
+        "_validate_extracted_offline_replay",
+        reject_downstream,
+    )
+
+    verified = bundle_module.verify_rescore_source_bundle(bundle)
+
+    assert verified.topic_id == "rag2026-0"
+    assert calls == ["cache", "checkpoint"]
+    with pytest.raises(CacheBundleIntegrityError, match="downstream replay"):
+        verify_bundle(bundle)
+
+
+def test_rescore_source_merge_uses_the_narrow_rescore_verifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+
+    def reject_full_verifier(*_args, **_kwargs):
+        raise AssertionError("full downstream verifier must not run")
+
+    monkeypatch.setattr(bundle_module, "verify_bundle", reject_full_verifier)
+
+    receipt = bundle_module.merge_rescore_source_bundles(
+        cache_root=(tmp_path / "merged-cache").resolve(),
+        outputs_root=(tmp_path / "merged-outputs").resolve(),
+        bundle_dirs=(bundle,),
+    )
+
+    assert receipt.completion_path.is_file()
+
+
+def test_rescore_source_verifier_rejects_tampered_checkpoint_receipt(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    operation_source = (
+        config.parent / "outputs/shard-fixture/rag2026-0/cache-operation-receipt.json"
+    )
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    _rewrite_bundle_member(
+        bundle,
+        path="outputs/shard-fixture/rag2026-0/cache-operation-receipt.json",
+        body=_tampered_cache_operation_receipt(
+            operation_source.read_bytes(),
+            "mode",
+        ),
+    )
+
+    with pytest.raises(CacheBundleIntegrityError, match="cache operation receipt"):
+        bundle_module.verify_rescore_source_bundle(bundle)
+
+
 def test_pack_publishes_nothing_when_offline_replay_validation_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

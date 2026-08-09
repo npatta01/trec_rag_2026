@@ -18,6 +18,7 @@ from trec_rag.evidence_store import (
     load_validated_candidate_artifacts,
 )
 from trec_rag.facet_evidence import (
+    SENTENCE_SPLITTER_VERSION,
     BudgetSnapshot,
     CandidateSubnarrative,
     EvidenceMember,
@@ -174,7 +175,7 @@ def _fixture(tmp_path: Path, *, original_narrative_fallback: bool = False):
                 "sentence_max_length": 512,
                 "input_policy": "trec_rag_whitespace_v1",
             },
-            "sentence_splitter_version": "exact_rules_v1",
+            "sentence_splitter_version": SENTENCE_SPLITTER_VERSION,
             "scoring_normalization_version": "trec_rag_whitespace_v1",
         }
     )
