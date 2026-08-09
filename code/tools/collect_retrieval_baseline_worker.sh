@@ -65,6 +65,7 @@ paths_overlap() {
   local first second
   first=$(realpath -m -- "$1") || return 1
   second=$(realpath -m -- "$2") || return 1
+  [[ $first == / || $second == / ]] && return 0
   [[ $first == "$second" || $first == "$second/"* || $second == "$first/"* ]]
 }
 

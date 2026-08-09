@@ -174,6 +174,7 @@ def test_collection_wrapper_is_private_explicit_and_merges_only_after_download()
     assert "--no-delete" in source
     assert "publication-manifest.json" in source
     assert "realpath -m" in source
+    assert '[[ $first == / || $second == / ]] && return 0' in source
 
 
 @pytest.mark.parametrize(
