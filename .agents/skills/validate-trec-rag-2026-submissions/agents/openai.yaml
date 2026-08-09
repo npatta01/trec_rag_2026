@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validate TREC RAG 2026"
+  short_description: "Validate Retrieval TSV and RAG JSONL submissions"
+  default_prompt: "Use $validate-trec-rag-2026-submissions to validate my TREC RAG 2026 Retrieval and RAG submission files."
