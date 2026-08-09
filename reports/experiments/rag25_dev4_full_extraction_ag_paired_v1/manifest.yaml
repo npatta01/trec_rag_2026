@@ -1,0 +1,95 @@
+experiment:
+  id: rag25_dev4_full_extraction_ag_paired_v1
+  runtime_id: windows_openrouter_paired_v1
+  run_date: 2026-08-08
+  split: development
+  status: pilot_complete_expand_before_production_decision
+  issue: https://github.com/npatta01/trec_rag_2026/issues/52
+  description: >-
+    Four-topic paired answer-generation pilot comparing the frozen selected-evidence
+    baseline with one bounded coverage-aware strategy.
+
+code:
+  branch: codex/issue-52-coverage-aware-ag
+  base_commit: 35affe29dd2fe405416c9865cc588850085246e7
+  ragdoll_submodule: 1f0671908ab6dc581a61648463e3566ba413b480
+  data_submodule: a6255c10119a2984a874f46172d94045168ab1f3
+  skills_submodule: f281e88f61252662033c681df8b1ed2d0ceda97e
+  python: 3.12.13
+  node: 24.19.0
+  pi: 0.73.1
+
+config:
+  retriever: authenticated_selected_evidence_handoff
+  index: climbmix-400b
+  query_source: narrative_groups_selected_passages_and_advisory_claim_hints
+  ranking: fixed_upstream_handoff
+  generator_model: openai/gpt-5.6-sol
+  generator_reasoning_effort: medium
+  baseline_strategy: baseline
+  treatment_strategy: coverage_aware
+  judge_model: openrouter/deepseek/deepseek-v4-flash
+  judge_thinking: minimal
+  nugget_assign_mode: support-grade-3
+  nugget_window_size: 10
+
+scope:
+  topic_count: 4
+  topic_ids: ["31", "72", "200", "225"]
+  phase: issue_52_phase_1
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 4
+  authenticated_handoff: outputs/nonagentic-rag25-dev-all22-replay-p4-20260807/generation_handoff_manifest.json
+  handoff_manifest_file_sha256: 6b2cdd576282cf28779bdd6e97d6f333ec2b98d815fb440ed4df06d3c607227b
+  handoff_authenticated_digest: 451bd0478f5419e0f5471b170757fb641195ef42d3fde771914260077d03c7ad
+  gold_nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  gold_nuggets_sha256: cbcdbea534f3d8aa1cebdfbb1e112df32146afe5599246a6f5fe4704d9fc8183
+  gold_nugget_count_per_arm: 256
+  vital_nugget_count_per_arm: 191
+
+counts:
+  rag_rows: 8
+  baseline_answer_objects: 108
+  coverage_aware_answer_objects: 160
+  baseline_support_tasks: 116
+  coverage_aware_support_tasks: 160
+  nugget_assignments_per_arm: 256
+
+metrics:
+  ndcg_at_10: null
+  recall_at_100: null
+  baseline_strict_vital: 0.395432
+  coverage_aware_strict_vital: 0.423685
+  strict_vital_delta: 0.028253
+  baseline_weighted_citation_precision_first: 0.907738
+  coverage_aware_weighted_citation_precision_first: 0.929098
+  weighted_citation_precision_first_delta: 0.021360
+  baseline_hard_citation_precision: 0.830952
+  coverage_aware_hard_citation_precision: 0.897409
+  hard_citation_precision_delta: 0.066457
+
+private_artifact_receipts:
+  baseline_output_sha256: b2437bd34974040b55ac04923792b34dd1b78cc6aa7766f9bbe394375ade9f15
+  baseline_identity_sha256: 2c1175d2728056cc3dcd9535eb9f810074f2eb6d2729439b4dcdbcbb62a5c1f0
+  coverage_aware_output_sha256: fd74d51556282ae96791ab92084bb5db107407f399da93d29f61a1c54ceadda8
+  coverage_aware_identity_sha256: 78e093b0942f3d8d027b90a0b8f22ceb0be7bc0acf76fe6160a5321242d70b19
+
+tracked_record_files:
+  metrics: metrics.json
+  run_table: system_scores.csv
+  topic_table: topic_system_scores.csv
+  notes: notes.md
+
+local_artifacts:
+  output_dir: outputs/rag25_dev4_full_extraction_ag_{baseline,coverage}_v1
+  cache_dir: cache/ragdoll/issue52
+  committed_answers: false
+  committed_passages: false
+  committed_provider_responses: false
+
+notes: >-
+  Directional Phase 1 evidence: coverage-aware generation improves all aggregate
+  nugget metrics and mean citation support, but the support gain is dominated by
+  Topic 72. Expand to the remaining eight matched topics before a production choice.

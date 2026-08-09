@@ -508,18 +508,11 @@ def validate_support_judgments(
     if not expected:
         raise ValueError(f"{support_input_path}: no support tasks")
 
-    seen: set[str] = set()
+    completed: dict[str, dict[str, object]] = {}
     for row in _read_jsonl(judgments_path):
         task_id = row.get("task_id")
         if not isinstance(task_id, str) or task_id not in expected:
             raise ValueError(f"{judgments_path}: unexpected task {task_id}")
-        if task_id in seen:
-            raise ValueError(f"{judgments_path}: duplicate task {task_id}")
-        seen.add(task_id)
-        if row.get("status") != "completed":
-            raise ValueError(f"{task_id}: judgment is not completed")
-        if row.get("support_label") not in SUPPORT_LABELS:
-            raise ValueError(f"{task_id}: invalid support_label {row.get('support_label')!r}")
 
         expected_row = expected[task_id]
         if row.get("statement") != expected_row["statement"]:
@@ -539,13 +532,26 @@ def validate_support_judgments(
             if metadata.get(field) != expected_row[field]:
                 raise ValueError(f"{task_id}: metadata.{field} differs from support input")
 
-    missing = sorted(set(expected) - seen)
+        status = row.get("status")
+        if status == "failed":
+            if row.get("support_label") is not None:
+                raise ValueError(f"{task_id}: failed judgment carries a support_label")
+            continue
+        if status != "completed":
+            raise ValueError(f"{task_id}: invalid judgment status {status!r}")
+        if row.get("support_label") not in SUPPORT_LABELS:
+            raise ValueError(f"{task_id}: invalid support_label {row.get('support_label')!r}")
+        if task_id in completed:
+            raise ValueError(f"{judgments_path}: duplicate completed task {task_id}")
+        completed[task_id] = row
+
+    missing = sorted(set(expected) - set(completed))
     if missing:
         raise ValueError(
             f"{judgments_path}: missing {len(missing)} expected task(s): "
             f"{', '.join(missing[:3])}"
         )
-    return len(seen)
+    return len(completed)
 
 
 def assert_join(answers: Sequence[AnswerRow], nuggets: Sequence[dict[str, object]]) -> set[str]:

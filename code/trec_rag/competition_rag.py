@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -42,12 +43,17 @@ _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"
 # strict_schema pins provider selection to schema-capable endpoints; json_object is the
 # portable fallback; none sends no response_format at all.
 STRUCTURED_OUTPUT_MODES = frozenset({"strict_schema", "json_object", "none"})
+GENERATION_STRATEGIES = frozenset({"baseline", "coverage_aware", "priority_aware"})
 # The organizer answer cap. Kept here so validation, trimming, and post-run reporting all
 # read one contract value instead of repeating the literal.
 ANSWER_WORD_LIMIT = 1024
 _MAX_REDACTION_NORMALIZATION_ROUNDS = 32
 MAX_SEMANTIC_ATTEMPTS = 2
 _CITATION_VALIDATION_CONTRACT_VERSION = "exact_hint_linked_docids_v1"
+_CALL_TELEMETRY_CONTRACT_VERSION = "generation_call_telemetry_v1"
+_PRIORITY_PLAN_CONTRACT_VERSION = "priority_plan_v1"
+_PRIORITY_LEVELS = ("essential", "important", "optional")
+MAX_PLAN_SEMANTIC_ATTEMPTS = 2
 
 SYSTEM_PROMPT = """You are a selected-evidence RAG answer-generation agent. Use only the
 provided selected passages and the user's task instructions. Treat claim hints as advisory.
@@ -73,6 +79,76 @@ Return one JSON object with exactly references and answer; no Markdown.
 Restating the output contract: one JSON object with exactly references and answer; each answer
 object is one self-contained sentence with one claim and one to three unique raw ClimbMix
 docids in citations, never numeric indexes; never exceed 1,024 words."""
+
+COVERAGE_AWARE_INSTRUCTION = """Use the ordered answer checklist below as a coverage
+control. Address every checklist item with distinct, supported answer objects before adding
+optional synthesis. The checklist is routing guidance, not factual authority: verify every
+claim against the selected passages in that item's evidence group, and treat its claim hints
+as advisory.
+
+Aim for roughly 900 to 1,000 answer words when the selected evidence supports that much useful
+content, but never add filler or weakly supported claims to reach the target. Prefer the single
+strongest supporting document for each object; add another citation only when it independently
+supports the complete object.
+
+Before returning JSON, perform exactly one private audit: check every checklist item for a
+supported answer object, add any material supported omission, and remove or narrow any claim
+whose citations do not fully support it. Do not output the checklist or audit.
+
+{checklist}"""
+
+PRIORITY_PLANNER_SYSTEM_PROMPT = """You are a selected-evidence answer planner. Use only
+the authenticated selected passages, official narrative, and evidence-group text provided by
+the user. Claim hints are advisory. Do not use outside knowledge, gold nuggets, qrels, or
+evaluation feedback."""
+
+PRIORITY_PLANNER_INSTRUCTION = """Create a bounded claim plan for the official narrative
+using only the frozen selected evidence below.
+
+For every evidence group, select between {min_claims_per_group} and {max_claims_per_group}
+distinct answer-relevant claims, while keeping the complete plan at or below {max_claims}
+claims. Every claims item must contain exactly these four fields: group_id, priority, claim,
+and evidence_ids. Set group_id to the exact evidence-group ID. Set priority to exactly one of:
+- essential: directly answers a central requirement of the official narrative or group text;
+- important: adds a material mechanism, consequence, quantitative detail, tradeoff, or action;
+- optional: useful context that should be omitted before any essential or important claim.
+
+Deduplicate the same proposition across groups. Prefer specific, strongly supported claims over
+broad restatements. Exclude operational trivia, weak implications, and details that are merely
+available rather than important to the narrative. Each claim must be atomic and must name one
+to three exact evidence_id values from its own group whose passage text fully supports it.
+
+Return one JSON object with exactly one key, claims. Each claims item must use this exact shape:
+{{"group_id":"<exact group ID>","priority":"essential|important|optional",
+"claim":"<one atomic claim>","evidence_ids":["<same-group evidence ID>"]}}.
+Do not rename priority to classification and do not omit group_id. Sort claims by priority
+(essential, important, optional), then by the evidence-group order below. Do not return prose
+or Markdown.
+
+{checklist}
+
+{evidence}"""
+
+PRIORITY_PLAN_RETRY_INSTRUCTION = """
+
+Previous plan failed local validation. Return a fresh plan satisfying the exact JSON contract,
+group quotas, priority order, deduplication rule, and same-group evidence_id constraints. Do
+not describe or repair the previous plan."""
+
+PRIORITY_WRITER_INSTRUCTION = """Use the validated priority plan below as answer routing.
+The plan remains advisory: verify every claim against its linked selected passages, which are
+the only factual authority.
+
+Write essential claims first, then important claims. Include optional claims only after every
+supported essential and important claim is covered and only when they add material value.
+Merge or omit semantic duplicates, and omit any planned claim that its linked evidence does
+not fully support. Do not replace a higher-priority claim with lower-priority operational
+detail. Aim for {target_min_words} to {target_max_words} answer words when the evidence supports
+that much useful content, while never exceeding 1,024 words and never adding padding.
+
+Do not output the plan or an audit.
+
+{plan}"""
 
 SEMANTIC_RETRY_INSTRUCTION = """
 
@@ -113,6 +189,20 @@ _UniqueKeySafeLoader.add_constructor(
 
 
 @dataclass(frozen=True)
+class PriorityAwareConfig:
+    planner_model: str
+    planner_reasoning_effort: str
+    planner_structured_output: str
+    planner_temperature: float | None
+    planner_max_tokens: int
+    min_claims_per_group: int
+    max_claims_per_group: int
+    max_claims: int
+    target_min_words: int
+    target_max_words: int
+
+
+@dataclass(frozen=True)
 class RagGenerationConfig:
     schema_version: str
     handoff_manifest_path: Path
@@ -130,6 +220,8 @@ class RagGenerationConfig:
     api_key_env: str
     model: str
     reasoning_effort: str
+    strategy: str
+    priority_aware: PriorityAwareConfig | None
     structured_output: str
     temperature: float | None
     max_tokens: int
@@ -189,6 +281,8 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             "api_key_env",
             "model",
             "reasoning_effort",
+            "strategy",
+            "priority_aware",
             "structured_output",
             "temperature",
             "max_tokens",
@@ -219,6 +313,10 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     )
     if structured_output not in STRUCTURED_OUTPUT_MODES:
         raise ValueError("generation.structured_output is unsupported")
+    strategy = _optional_text(generation, "strategy", "generation") or "baseline"
+    if strategy not in GENERATION_STRATEGIES:
+        raise ValueError("generation.strategy is unsupported")
+    priority_aware = _load_priority_aware_config(generation, strategy=strategy)
 
     return RagGenerationConfig(
         schema_version=_SCHEMA_VERSION,
@@ -239,6 +337,8 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         api_key_env=_text(generation, "api_key_env", "generation"),
         model=_text(generation, "model", "generation"),
         reasoning_effort=reasoning_effort,
+        strategy=strategy,
+        priority_aware=priority_aware,
         structured_output=structured_output,
         temperature=_optional_finite_float(generation, "temperature", "generation"),
         max_tokens=_positive_int(generation, "max_tokens", "generation"),
@@ -349,6 +449,96 @@ def _optional_finite_float(mapping: dict[str, Any], key: str, owner: str) -> flo
     if not math.isfinite(parsed):
         raise ValueError(f"{owner}.{key} must be a finite number or null")
     return parsed
+
+
+def _load_priority_aware_config(
+    generation: dict[str, Any], *, strategy: str
+) -> PriorityAwareConfig | None:
+    raw = generation.get("priority_aware")
+    if strategy != "priority_aware":
+        if raw is not None:
+            raise ValueError(
+                "generation.priority_aware is only valid when strategy is priority_aware"
+            )
+        return None
+    if raw is None:
+        raise ValueError(
+            "generation.priority_aware is required when strategy is priority_aware"
+        )
+    allowed = {
+        "planner_model",
+        "planner_reasoning_effort",
+        "planner_structured_output",
+        "planner_temperature",
+        "planner_max_tokens",
+        "min_claims_per_group",
+        "max_claims_per_group",
+        "max_claims",
+        "target_min_words",
+        "target_max_words",
+    }
+    section = _mapping(raw, "generation.priority_aware")
+    _reject_unknown(section, allowed, "generation.priority_aware")
+    _require_fields(section, allowed, "generation.priority_aware")
+    reasoning_effort = _text(
+        section, "planner_reasoning_effort", "generation.priority_aware"
+    ).lower()
+    if reasoning_effort not in _REASONING_EFFORTS:
+        raise ValueError(
+            "generation.priority_aware.planner_reasoning_effort is unsupported"
+        )
+    structured_output = _text(
+        section, "planner_structured_output", "generation.priority_aware"
+    ).lower()
+    if structured_output not in STRUCTURED_OUTPUT_MODES:
+        raise ValueError(
+            "generation.priority_aware.planner_structured_output is unsupported"
+        )
+    minimum = _positive_int(
+        section, "min_claims_per_group", "generation.priority_aware"
+    )
+    maximum = _positive_int(
+        section, "max_claims_per_group", "generation.priority_aware"
+    )
+    max_claims = _positive_int(section, "max_claims", "generation.priority_aware")
+    target_min_words = _positive_int(
+        section, "target_min_words", "generation.priority_aware"
+    )
+    target_max_words = _positive_int(
+        section, "target_max_words", "generation.priority_aware"
+    )
+    if maximum < minimum:
+        raise ValueError(
+            "generation.priority_aware.max_claims_per_group must be at least "
+            "min_claims_per_group"
+        )
+    if max_claims < minimum:
+        raise ValueError(
+            "generation.priority_aware.max_claims must be at least min_claims_per_group"
+        )
+    if target_max_words < target_min_words or target_max_words > ANSWER_WORD_LIMIT:
+        raise ValueError(
+            "generation.priority_aware target word range must be ordered and no greater "
+            f"than {ANSWER_WORD_LIMIT}"
+        )
+    return PriorityAwareConfig(
+        planner_model=_text(
+            section, "planner_model", "generation.priority_aware"
+        ),
+        planner_reasoning_effort=reasoning_effort,
+        planner_structured_output=structured_output,
+        planner_temperature=_optional_finite_float(
+            section, "planner_temperature", "generation.priority_aware"
+        ),
+        planner_max_tokens=_positive_int(
+            section, "planner_max_tokens", "generation.priority_aware"
+        ),
+        min_claims_per_group=minimum,
+        max_claims_per_group=maximum,
+        max_claims=max_claims,
+        target_min_words=target_min_words,
+        target_max_words=target_max_words,
+    )
 
 
 def _input_path(root_dir: Path, value: str) -> Path:
@@ -517,7 +707,8 @@ class OpenRouterJsonGenerator:
             "max_tokens": self.max_tokens,
         }
         extra_body: dict[str, Any] = {
-            "reasoning": {"effort": self.reasoning_effort, "exclude": True}
+            "reasoning": {"effort": self.reasoning_effort, "exclude": True},
+            "usage": {"include": True},
         }
         if self.structured_output == "strict_schema":
             # require_parameters excludes any provider that cannot honour the schema. For some
@@ -537,6 +728,7 @@ class OpenRouterJsonGenerator:
             request_body["response_format"] = {"type": "json_object"}
         if self.temperature is not None:
             request_body["temperature"] = self.temperature
+        started = time.perf_counter()
         try:
             raw_response = self._client.chat.completions.with_raw_response.create(
                 **request_body,
@@ -544,16 +736,41 @@ class OpenRouterJsonGenerator:
             )
         except APIStatusError as exc:
             _, _, safe_response = _safe_http_response(exc.response, self._api_key)
+            safe_response = _with_call_telemetry(
+                safe_response,
+                response=exc.response,
+                elapsed_seconds=time.perf_counter() - started,
+                model=self.model,
+                transport_max_attempts=self.transport_max_attempts,
+            )
             raise SemanticCompletionError(
                 f"OpenRouter HTTP {exc.status_code}; no repair call was made",
                 safe_response,
             ) from exc
         except APIConnectionError as exc:
-            raise RuntimeError("OpenRouter generation transport failed") from exc
+            safe_response = _with_call_telemetry(
+                {},
+                response=None,
+                elapsed_seconds=time.perf_counter() - started,
+                model=self.model,
+                transport_max_attempts=self.transport_max_attempts,
+                transport_attempts=self.transport_max_attempts,
+            )
+            raise SemanticCompletionError(
+                "OpenRouter generation transport failed after transport retries",
+                safe_response,
+            ) from exc
 
         response = raw_response.http_response
         response_is_json, envelope, safe_response = _safe_http_response(
             response, self._api_key
+        )
+        safe_response = _with_call_telemetry(
+            safe_response,
+            response=response,
+            elapsed_seconds=time.perf_counter() - started,
+            model=self.model,
+            transport_max_attempts=self.transport_max_attempts,
         )
         if not response_is_json:
             raise SemanticCompletionError(
@@ -630,6 +847,231 @@ def _safe_http_response(
         }
     return True, envelope, safe_envelope
 
+
+def _with_call_telemetry(
+    safe_response: object,
+    *,
+    response: httpx.Response | None,
+    elapsed_seconds: float,
+    model: str,
+    transport_max_attempts: int,
+    transport_attempts: int | None = None,
+) -> dict[str, Any]:
+    """Attach non-secret execution accounting to one persisted provider attempt."""
+    if transport_attempts is None:
+        retry_state = response.extensions.get("retry") if response is not None else None
+        retries = getattr(retry_state, "attempts_made", 0)
+        transport_attempts = int(retries) + 1
+    transport_attempts = max(1, int(transport_attempts))
+    telemetry: dict[str, Any] = {
+        "schema_version": _CALL_TELEMETRY_CONTRACT_VERSION,
+        "provider": "openrouter",
+        "model": model,
+        "latency_ms": round(max(0.0, elapsed_seconds) * 1000.0, 3),
+        "transport_attempts": transport_attempts,
+        "transport_retries": transport_attempts - 1,
+        "transport_max_attempts": transport_max_attempts,
+    }
+    if isinstance(safe_response, dict) and isinstance(safe_response.get("usage"), dict):
+        telemetry["usage"] = safe_response["usage"]
+    if isinstance(safe_response, dict):
+        return {**safe_response, "_trec_rag_call": telemetry}
+    return {"provider_response": safe_response, "_trec_rag_call": telemetry}
+
+
+def priority_plan_schema(
+    topic: GenerationTopic, config: PriorityAwareConfig
+) -> dict[str, Any]:
+    """Return the bounded planner schema for one authenticated topic."""
+    _validate_priority_capacity(topic, config)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["claims"],
+        "properties": {
+            "claims": {
+                "type": "array",
+                "minItems": len(topic.groups) * config.min_claims_per_group,
+                "maxItems": config.max_claims,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["group_id", "priority", "claim", "evidence_ids"],
+                    "properties": {
+                        "group_id": {
+                            "type": "string",
+                            "enum": [group.group_id for group in topic.groups],
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": list(_PRIORITY_LEVELS),
+                        },
+                        "claim": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 600,
+                        },
+                        "evidence_ids": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 3,
+                            "items": {
+                                "type": "string",
+                                "enum": [row.evidence_id for row in topic.evidence],
+                            },
+                        },
+                    },
+                },
+            }
+        },
+    }
+
+
+def _validate_priority_capacity(
+    topic: GenerationTopic, config: PriorityAwareConfig
+) -> None:
+    required = len(topic.groups) * config.min_claims_per_group
+    if required > config.max_claims:
+        raise ValueError(
+            f"{topic.topic_id}: priority plan requires at least {required} claims for "
+            f"{len(topic.groups)} groups, exceeding max_claims={config.max_claims}"
+        )
+
+
+def validate_priority_plan(
+    value: object,
+    *,
+    topic: GenerationTopic,
+    config: PriorityAwareConfig,
+) -> dict[str, Any]:
+    """Validate and normalize one planner response without adding factual content."""
+    _validate_priority_capacity(topic, config)
+    if not isinstance(value, dict) or set(value) != {"claims"}:
+        raise ValueError(f"{topic.topic_id}: priority plan must contain exactly claims")
+    claims = value.get("claims")
+    minimum_total = len(topic.groups) * config.min_claims_per_group
+    if not isinstance(claims, list) or len(claims) < minimum_total:
+        raise ValueError(
+            f"{topic.topic_id}: priority plan must contain at least "
+            f"{minimum_total} claims"
+        )
+
+    groups = {group.group_id: group for group in topic.groups}
+    group_ordinals = {
+        group.group_id: ordinal for ordinal, group in enumerate(topic.groups)
+    }
+    evidence = {row.evidence_id: row for row in topic.evidence}
+    priority_ordinals = {name: ordinal for ordinal, name in enumerate(_PRIORITY_LEVELS)}
+    normalized_claims: list[dict[str, Any]] = []
+
+    for ordinal, item in enumerate(claims):
+        label = f"{topic.topic_id}: priority plan claims[{ordinal}]"
+        if not isinstance(item, dict) or set(item) != {
+            "group_id",
+            "priority",
+            "claim",
+            "evidence_ids",
+        }:
+            raise ValueError(f"{label} has invalid fields")
+        group_id = item.get("group_id")
+        priority = item.get("priority")
+        claim = item.get("claim")
+        evidence_ids = item.get("evidence_ids")
+        if not isinstance(group_id, str) or group_id not in groups:
+            raise ValueError(f"{label} has an unknown group_id")
+        if not isinstance(priority, str) or priority not in priority_ordinals:
+            raise ValueError(f"{label} has an invalid priority")
+        if not isinstance(claim, str) or not claim.strip() or len(claim.strip()) > 600:
+            raise ValueError(f"{label} claim must be 1 to 600 characters")
+        if (
+            not isinstance(evidence_ids, list)
+            or not 1 <= len(evidence_ids) <= 3
+            or any(not isinstance(value, str) for value in evidence_ids)
+            or len(set(evidence_ids)) != len(evidence_ids)
+        ):
+            raise ValueError(f"{label} evidence_ids must contain 1 to 3 unique strings")
+        for evidence_id in evidence_ids:
+            row = evidence.get(evidence_id)
+            if row is None:
+                raise ValueError(f"{label} references unknown evidence_id {evidence_id!r}")
+            if row.group_id != group_id:
+                raise ValueError(f"{label} references evidence from another group")
+
+        clean_claim = " ".join(claim.split())
+        normalized_claims.append(
+            {
+                "group_id": group_id,
+                "priority": priority,
+                "claim": clean_claim,
+                "evidence_ids": list(evidence_ids),
+            }
+        )
+
+    normalized_claims.sort(
+        key=lambda item: (
+            priority_ordinals[item["priority"]],
+            group_ordinals[item["group_id"]],
+        )
+    )
+    deduplicated_claims: list[dict[str, Any]] = []
+    seen_claims: set[str] = set()
+    for item in normalized_claims:
+        duplicate_key = re.sub(
+            r"[^a-z0-9]+", " ", item["claim"].casefold()
+        ).strip()
+        if duplicate_key in seen_claims:
+            continue
+        seen_claims.add(duplicate_key)
+        deduplicated_claims.append(item)
+
+    grouped_claims = {group.group_id: [] for group in topic.groups}
+    for item in deduplicated_claims:
+        group_claims = grouped_claims[item["group_id"]]
+        if len(group_claims) < config.max_claims_per_group:
+            group_claims.append(item)
+
+    for group_id, group_claims in grouped_claims.items():
+        if len(group_claims) < config.min_claims_per_group:
+            raise ValueError(
+                f"{topic.topic_id}: group {group_id} must retain at least "
+                f"{config.min_claims_per_group} claims after deduplication"
+            )
+
+    selected_claims: list[dict[str, Any]] = []
+    extra_claims: list[dict[str, Any]] = []
+    for group in topic.groups:
+        group_claims = grouped_claims[group.group_id]
+        selected_claims.extend(group_claims[: config.min_claims_per_group])
+        extra_claims.extend(group_claims[config.min_claims_per_group :])
+    extra_claims.sort(
+        key=lambda item: (
+            priority_ordinals[item["priority"]],
+            group_ordinals[item["group_id"]],
+        )
+    )
+    selected_claims.extend(
+        extra_claims[: config.max_claims - len(selected_claims)]
+    )
+    selected_claims.sort(
+        key=lambda item: (
+            priority_ordinals[item["priority"]],
+            group_ordinals[item["group_id"]],
+        )
+    )
+
+    for group_id in grouped_claims:
+        if not any(
+            item["group_id"] == group_id and item["priority"] != "optional"
+            for item in selected_claims
+        ):
+            raise ValueError(
+                f"{topic.topic_id}: group {group_id} needs an essential or important claim"
+            )
+    if not any(item["priority"] == "essential" for item in selected_claims):
+        raise ValueError(f"{topic.topic_id}: priority plan needs an essential claim")
+    return {"claims": selected_claims}
+
+
 def _message_text(content: object) -> str:
     if isinstance(content, str) and content.strip():
         return content.strip()
@@ -646,13 +1088,112 @@ def _message_text(content: object) -> str:
     raise ValueError("completion content is not nonempty text")
 
 
-def render_prompt(topic: GenerationTopic) -> str:
-    """Render the one pinned writer prompt from a validated evidence topic."""
+def render_answer_checklist(topic: GenerationTopic) -> str:
+    """Render compact coverage controls from authenticated handoff fields only."""
     if not isinstance(topic, GenerationTopic):
         raise TypeError("topic must be GenerationTopic")
-    return SELECTED_EVIDENCE_USER_PROMPT.format(
+    hint_counts: dict[str, int] = {}
+    evidence_counts: dict[str, int] = {}
+    for hint in topic.claim_hints:
+        hint_counts[hint.group_id] = hint_counts.get(hint.group_id, 0) + 1
+    for evidence in topic.evidence:
+        evidence_counts[evidence.group_id] = evidence_counts.get(evidence.group_id, 0) + 1
+    lines = ["Ordered answer checklist:"]
+    for ordinal, group in enumerate(topic.groups, start=1):
+        text = " ".join(group.text.split())
+        lines.append(
+            f"{ordinal}. [{group.group_id}] {text} "
+            f"(selected passages: {evidence_counts.get(group.group_id, 0)}; "
+            f"advisory claim hints: {hint_counts.get(group.group_id, 0)})"
+        )
+    return "\n".join(lines)
+
+
+def render_priority_planner_prompt(
+    topic: GenerationTopic, config: PriorityAwareConfig
+) -> str:
+    """Render the evidence-grounded first-stage planning request."""
+    priority_plan_schema(topic, config)
+    return PRIORITY_PLANNER_INSTRUCTION.format(
+        min_claims_per_group=config.min_claims_per_group,
+        max_claims_per_group=config.max_claims_per_group,
+        max_claims=config.max_claims,
+        checklist=render_answer_checklist(topic),
+        evidence=render_generation_evidence(topic),
+    )
+
+
+def render_priority_plan(plan: dict[str, Any], topic: GenerationTopic) -> str:
+    """Render a validated plan with exact evidence and document routing."""
+    evidence = {row.evidence_id: row for row in topic.evidence}
+    lines = [
+        "VALIDATED PRIORITY PLAN",
+        "Selected passages remain factual authority; this plan is routing only.",
+    ]
+    for ordinal, item in enumerate(plan["claims"], start=1):
+        evidence_ids = item["evidence_ids"]
+        docids = [evidence[evidence_id].docid for evidence_id in evidence_ids]
+        lines.append(
+            f"{ordinal}. priority={item['priority']} group_id={item['group_id']} "
+            f"evidence_ids={','.join(evidence_ids)} docids={','.join(docids)}: "
+            f"{item['claim']}"
+        )
+    return "\n".join(lines)
+
+
+def render_priority_writer_prompt(
+    topic: GenerationTopic,
+    plan: dict[str, Any],
+    config: PriorityAwareConfig,
+) -> str:
+    """Render the second-stage answer request from one locally validated plan."""
+    validated = validate_priority_plan(plan, topic=topic, config=config)
+    instruction = PRIORITY_WRITER_INSTRUCTION.format(
+        target_min_words=config.target_min_words,
+        target_max_words=config.target_max_words,
+        plan=render_priority_plan(validated, topic),
+    )
+    answer_prompt = SELECTED_EVIDENCE_USER_PROMPT.format(
         evidence=render_generation_evidence(topic)
     )
+    return f"{instruction}\n\n{answer_prompt}"
+
+
+def render_prompt(topic: GenerationTopic, *, strategy: str = "baseline") -> str:
+    """Render one strategy-bound writer prompt from a validated evidence topic."""
+    if not isinstance(topic, GenerationTopic):
+        raise TypeError("topic must be GenerationTopic")
+    if strategy not in GENERATION_STRATEGIES:
+        raise ValueError(f"unsupported generation strategy: {strategy}")
+    if strategy == "priority_aware":
+        raise ValueError(
+            "priority_aware requires render_priority_planner_prompt or "
+            "render_priority_writer_prompt"
+        )
+    prompt = SELECTED_EVIDENCE_USER_PROMPT.format(
+        evidence=render_generation_evidence(topic)
+    )
+    if strategy == "baseline":
+        return prompt
+    coverage_instruction = COVERAGE_AWARE_INSTRUCTION.format(
+        checklist=render_answer_checklist(topic)
+    )
+    return f"{coverage_instruction}\n\n{prompt}"
+
+
+def _render_configured_prompt(
+    topic: GenerationTopic,
+    config: RagGenerationConfig,
+) -> str:
+    if config.strategy == "baseline":
+        # Preserve the historical one-argument call path so the frozen baseline prompt is
+        # byte-identical and existing prompt-identity tests remain meaningful.
+        return render_prompt(topic)
+    if config.strategy == "priority_aware":
+        if config.priority_aware is None:
+            raise ValueError("priority_aware strategy is missing planner configuration")
+        return render_priority_planner_prompt(topic, config.priority_aware)
+    return render_prompt(topic, strategy=config.strategy)
 
 
 def parse_generated_json(text: str) -> dict[str, Any]:
@@ -1095,6 +1636,10 @@ def _decode_unicode_escapes(value: str) -> str:
 
 
 def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        # Windows rejects directory handles from os.open. File contents are still fsynced
+        # before the atomic replacement; only the POSIX parent-directory flush is skipped.
+        return
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     descriptor = os.open(path, flags)
     try:
@@ -1174,10 +1719,179 @@ def _next_raw_attempt_number(raw_dir: Path, topic_name: str) -> int:
     return highest + 1
 
 
+def _next_plan_attempt_number(raw_dir: Path, topic_name: str) -> int:
+    if not raw_dir.exists():
+        return 1
+    pattern = re.compile(
+        rf"^{re.escape(topic_name)}\.plan-attempt-(?P<number>[1-9][0-9]*)"
+        rf"(?:\.failed)?\.json$"
+    )
+    highest = 0
+    for path in raw_dir.iterdir():
+        match = pattern.fullmatch(path.name)
+        if match is not None:
+            highest = max(highest, int(match.group("number")))
+    return highest + 1
+
+
+async def _complete_json_async(
+    *,
+    generator: JsonGenerator,
+    topic_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_schema: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+    executor: ThreadPoolExecutor,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    async with semaphore:
+        completion = executor.submit(
+            partial(
+                generator.complete_json,
+                topic_id=topic_id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_schema=response_schema,
+            )
+        )
+        while not completion.done():
+            await asyncio.sleep(0.01)
+        return completion.result()
+
+
+def _saved_priority_plan(
+    path: Path,
+    *,
+    topic: GenerationTopic,
+    config: PriorityAwareConfig,
+) -> dict[str, Any] | None:
+    try:
+        return validate_priority_plan(
+            json.loads(path.read_text(encoding="utf-8")),
+            topic=topic,
+            config=config,
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _saved_priority_plan_from_raw(
+    raw_dir: Path,
+    *,
+    topic_name: str,
+    topic: GenerationTopic,
+    config: PriorityAwareConfig,
+) -> dict[str, Any] | None:
+    """Recover the newest locally valid completed plan response during resume."""
+    pattern = re.compile(
+        rf"^{re.escape(topic_name)}\.plan-attempt-(?P<number>[1-9][0-9]*)\.json$"
+    )
+    candidates: list[tuple[int, Path]] = []
+    for path in raw_dir.glob(f"{topic_name}.plan-attempt-*.json"):
+        match = pattern.fullmatch(path.name)
+        if match is not None:
+            candidates.append((int(match.group("number")), path))
+    for _, path in sorted(candidates, reverse=True):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            choices = raw["choices"]
+            if choices[0].get("finish_reason") != "stop":
+                continue
+            value = parse_generated_json(
+                _message_text(choices[0]["message"].get("content"))
+            )
+            return validate_priority_plan(value, topic=topic, config=config)
+        except (KeyError, IndexError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    return None
+
+
+async def _prepare_priority_plan(
+    *,
+    topic: GenerationTopic,
+    planner: JsonGenerator,
+    config: RagGenerationConfig,
+    semaphore: asyncio.Semaphore,
+    executor: ThreadPoolExecutor,
+) -> dict[str, Any]:
+    settings = config.priority_aware
+    if settings is None:
+        raise ValueError("priority_aware strategy is missing planner configuration")
+    work_dir = config.resolved_work_dir
+    topic_name = _safe_topic_name(topic.topic_id)
+    plan_path = work_dir / "plans" / f"{topic_name}.json"
+    raw_dir = work_dir / "raw"
+    if config.resume:
+        saved = _saved_priority_plan(plan_path, topic=topic, config=settings)
+        if saved is None:
+            saved = _saved_priority_plan_from_raw(
+                raw_dir,
+                topic_name=topic_name,
+                topic=topic,
+                config=settings,
+            )
+            if saved is not None:
+                _write_json(plan_path, saved, compact=True)
+        if saved is not None:
+            return saved
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    secrets = (os.environ.get(config.api_key_env, ""),)
+    next_attempt = _next_plan_attempt_number(raw_dir, topic_name)
+    last_error: str | None = None
+    for semantic_attempt in range(MAX_PLAN_SEMANTIC_ATTEMPTS):
+        attempt_number = next_attempt + semantic_attempt
+        raw_path = raw_dir / f"{topic_name}.plan-attempt-{attempt_number}.json"
+        failed_path = raw_dir / (
+            f"{topic_name}.plan-attempt-{attempt_number}.failed.json"
+        )
+        raw_written = False
+        try:
+            user_prompt = render_priority_planner_prompt(topic, settings)
+            if semantic_attempt:
+                user_prompt += PRIORITY_PLAN_RETRY_INSTRUCTION
+            planned, raw_response = await _complete_json_async(
+                generator=planner,
+                topic_id=topic.topic_id,
+                system_prompt=PRIORITY_PLANNER_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_schema=priority_plan_schema(topic, settings),
+                semaphore=semaphore,
+                executor=executor,
+            )
+            _write_json(raw_path, _redact(raw_response, secrets))
+            raw_written = True
+            validated = validate_priority_plan(
+                planned,
+                topic=topic,
+                config=settings,
+            )
+            _write_json(plan_path, validated, compact=True)
+            return validated
+        except SemanticCompletionError as exc:
+            _write_json(failed_path, _redact(exc.raw_response, secrets))
+            last_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+            if not exc.retryable:
+                break
+        except ValueError as exc:
+            last_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+            if not raw_written:
+                _write_json(failed_path, {"error": last_error})
+        except Exception as exc:
+            last_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+            if not raw_written:
+                _write_json(failed_path, {"error": last_error})
+            break
+    raise ValueError(
+        last_error or "priority planner semantic attempt budget must be positive"
+    )
+
+
 async def _generate_topic(
     *,
     topic: GenerationTopic,
     generator: JsonGenerator,
+    planner: JsonGenerator | None,
     config: RagGenerationConfig,
     semaphore: asyncio.Semaphore,
     executor: ThreadPoolExecutor,
@@ -1188,6 +1902,28 @@ async def _generate_topic(
     raw_dir = work_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     secrets = (os.environ.get(config.api_key_env, ""),)
+    priority_plan: dict[str, Any] | None = None
+    if config.strategy == "priority_aware":
+        if planner is None:
+            last_error = "ValueError: priority_aware strategy requires a planner generator"
+            _atomic_write_text(
+                work_dir / "errors" / f"{topic_name}.txt", f"{last_error}\n"
+            )
+            return topic_id, last_error
+        try:
+            priority_plan = await _prepare_priority_plan(
+                topic=topic,
+                planner=planner,
+                config=config,
+                semaphore=semaphore,
+                executor=executor,
+            )
+        except Exception as exc:
+            last_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+            _atomic_write_text(
+                work_dir / "errors" / f"{topic_name}.txt", f"{last_error}\n"
+            )
+            return topic_id, last_error
     next_attempt = _next_raw_attempt_number(raw_dir, topic_name)
     last_error: str | None = None
     for semantic_attempt in range(MAX_SEMANTIC_ATTEMPTS):
@@ -1196,24 +1932,27 @@ async def _generate_topic(
         failed_path = raw_dir / f"{topic_name}.attempt-{attempt_number}.failed.json"
         raw_written = False
         try:
-            user_prompt = render_prompt(topic)
+            if priority_plan is not None:
+                if config.priority_aware is None:
+                    raise ValueError(
+                        "priority_aware strategy is missing planner configuration"
+                    )
+                user_prompt = render_priority_writer_prompt(
+                    topic, priority_plan, config.priority_aware
+                )
+            else:
+                user_prompt = _render_configured_prompt(topic, config)
             if semantic_attempt:
                 user_prompt += SEMANTIC_RETRY_INSTRUCTION
-            async with semaphore:
-                completion = executor.submit(
-                    partial(
-                        generator.complete_json,
-                        topic_id=topic_id,
-                        system_prompt=SYSTEM_PROMPT,
-                        user_prompt=user_prompt,
-                        response_schema=output_schema(),
-                    )
-                )
-                # Polling avoids relying on the event loop's cross-thread wakeup descriptor,
-                # which is unavailable in some constrained runner environments.
-                while not completion.done():
-                    await asyncio.sleep(0.01)
-                generated, raw_response = completion.result()
+            generated, raw_response = await _complete_json_async(
+                generator=generator,
+                topic_id=topic_id,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_schema=output_schema(),
+                semaphore=semaphore,
+                executor=executor,
+            )
             _write_json(raw_path, _redact(raw_response, secrets))
             raw_written = True
             record = normalize_generated_record(
@@ -1325,15 +2064,28 @@ def _generation_identity(
     create and resume cannot silently mix answers grounded in different contexts.
     """
     return {
-        # Version 6 also binds deterministic claim-hint citation validation.
-        "identity_version": 6,
+        # Version 8 binds the optional planner contract and both stage settings.
+        "identity_version": 8,
         "handoff_schema_version": handoff.schema_version,
         "handoff_manifest_sha256": handoff.manifest_sha256,
         "selected_topics": [
             {
                 "topic_id": topic.topic_id,
                 "context_sha256": topic.context_sha256,
-                "prompt_sha256": sha256(render_prompt(topic).encode("utf-8")).hexdigest(),
+                "prompt_sha256": sha256(
+                    _render_configured_prompt(topic, config).encode("utf-8")
+                ).hexdigest(),
+                "priority_plan_schema_sha256": (
+                    sha256(
+                        json.dumps(
+                            priority_plan_schema(topic, config.priority_aware),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    if config.priority_aware is not None
+                    else None
+                ),
             }
             for topic in topics
         ],
@@ -1350,6 +2102,18 @@ def _generation_identity(
             ).hexdigest(),
         },
         "citation_validation_contract_version": _CITATION_VALIDATION_CONTRACT_VERSION,
+        "call_telemetry_contract_version": _CALL_TELEMETRY_CONTRACT_VERSION,
+        "priority_plan_contract_version": _PRIORITY_PLAN_CONTRACT_VERSION,
+        "priority_planner_system_prompt_sha256": (
+            sha256(PRIORITY_PLANNER_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+            if config.priority_aware is not None
+            else None
+        ),
+        "priority_writer_instruction_sha256": (
+            sha256(PRIORITY_WRITER_INSTRUCTION.encode("utf-8")).hexdigest()
+            if config.priority_aware is not None
+            else None
+        ),
         "team_id": config.team_id,
         "run_id": config.run_id,
         "run_desc": config.run_desc,
@@ -1358,6 +2122,28 @@ def _generation_identity(
         "api_base": config.api_base,
         "api_key_env": config.api_key_env,
         "reasoning_effort": config.reasoning_effort,
+        "strategy": config.strategy,
+        "priority_aware": (
+            {
+                "planner_model": config.priority_aware.planner_model,
+                "planner_reasoning_effort": (
+                    config.priority_aware.planner_reasoning_effort
+                ),
+                "planner_structured_output": (
+                    config.priority_aware.planner_structured_output
+                ),
+                "planner_temperature": config.priority_aware.planner_temperature,
+                "planner_max_tokens": config.priority_aware.planner_max_tokens,
+                "min_claims_per_group": config.priority_aware.min_claims_per_group,
+                "max_claims_per_group": config.priority_aware.max_claims_per_group,
+                "max_claims": config.priority_aware.max_claims,
+                "target_min_words": config.priority_aware.target_min_words,
+                "target_max_words": config.priority_aware.target_max_words,
+                "max_semantic_attempts": MAX_PLAN_SEMANTIC_ATTEMPTS,
+            }
+            if config.priority_aware is not None
+            else None
+        ),
         "structured_output": config.structured_output,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
@@ -1411,6 +2197,7 @@ def _enforce_generation_identity(
 async def _run_generation_locked(
     config: RagGenerationConfig,
     generator: JsonGenerator,
+    planner: JsonGenerator | None,
     handoff: GenerationHandoff,
     topics: Sequence[GenerationTopic],
 ) -> None:
@@ -1454,6 +2241,7 @@ async def _run_generation_locked(
                 _generate_topic(
                     topic=topic,
                     generator=generator,
+                    planner=planner,
                     config=config,
                     semaphore=semaphore,
                     executor=executor,
@@ -1491,10 +2279,15 @@ async def run_generation(
     config: RagGenerationConfig,
     generator: JsonGenerator,
     *,
+    planner: JsonGenerator | None = None,
     handoff: GenerationHandoff | None = None,
 ) -> None:
     """Generate missing topic rows and atomically publish the organizer JSONL."""
     _validate_artifact_paths(config)
+    if config.strategy == "priority_aware" and planner is None:
+        raise ValueError("priority_aware strategy requires a planner generator")
+    if config.strategy != "priority_aware" and planner is not None:
+        raise ValueError("planner generator is only valid for priority_aware strategy")
     if handoff is None:
         handoff = load_generation_handoff(config.handoff_manifest_path)
     topics = select_generation_topics(handoff, config.topic_ids)
@@ -1502,7 +2295,7 @@ async def run_generation(
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with FileLock(lock_path, timeout=0):
-            await _run_generation_locked(config, generator, handoff, topics)
+            await _run_generation_locked(config, generator, planner, handoff, topics)
     except FileLockTimeout as exc:
         raise RuntimeError(
             f"generation is already active for {config.output_path}"
@@ -1533,7 +2326,20 @@ def main() -> None:
             timeout_seconds=config.timeout_seconds,
             transport_max_attempts=config.transport_max_attempts,
         )
-        asyncio.run(run_generation(config, generator, handoff=handoff))
+        planner: JsonGenerator | None = None
+        if config.priority_aware is not None:
+            planner = OpenRouterJsonGenerator(
+                api_base=config.api_base,
+                api_key=os.environ.get(config.api_key_env, ""),
+                model=config.priority_aware.planner_model,
+                reasoning_effort=config.priority_aware.planner_reasoning_effort,
+                structured_output=config.priority_aware.planner_structured_output,
+                temperature=config.priority_aware.planner_temperature,
+                max_tokens=config.priority_aware.planner_max_tokens,
+                timeout_seconds=config.timeout_seconds,
+                transport_max_attempts=config.transport_max_attempts,
+            )
+        asyncio.run(run_generation(config, generator, planner=planner, handoff=handoff))
     except KeyboardInterrupt:
         raise SystemExit(130)
     except Exception as exc:

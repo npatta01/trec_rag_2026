@@ -1053,6 +1053,37 @@ inputs:
   handoff_manifest: outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
 ```
 
+`generation.strategy` is optional and defaults to `baseline`, preserving the
+checked-in prompt byte for byte. Development experiments may set it to
+`coverage_aware`. That strategy prepends an ordered checklist derived only from
+the authenticated handoff's evidence groups, selected-passage counts, and
+advisory-claim counts. It asks the same single completion to perform one private
+pre-emission coverage/support audit. It does not open evaluator plans, gold
+nuggets, qrels, retrieval candidates, the organizer run, or the full-text ZIP.
+The strategy is included in the generation identity, so rows cannot be resumed
+across strategies.
+
+The checked-in multi-stage config is
+`configs/rag26_competition_rag_priority_aware_v3.yaml`. It sets
+`generation.strategy: priority_aware` and makes two hosted calls for each newly
+generated topic:
+
+1. A planner reads only the authenticated handoff and returns a bounded list of
+   atomic claims classified as `essential`, `important`, or `optional`, with
+   one to three exact same-group evidence IDs per claim.
+2. The writer receives the locally validated plan plus the same selected
+   evidence. It covers essential claims before important claims and uses
+   optional claims only when the word budget remains.
+
+The runner rejects plans with foreign or cross-group evidence IDs, exact claim
+duplicates, invalid priority order, missing group quotas, too many claims, or a
+group containing only optional material. Valid plans are stored privately under
+the run's `work/plans/` directory and reused on resume when the final answer is
+missing. Planner model and token settings, claim quotas, writer word targets,
+both prompt contracts, and the topic-specific plan schema are bound into the
+generation identity. Planning never opens evaluator plans, gold nuggets, qrels,
+retrieval candidates, the organizer run, or the full-text ZIP.
+
 Generation validates the complete handoff before mutating generation state.
 The model must cite raw ClimbMix document IDs from the current topic's sealed
 domain; code validates those IDs and deterministically converts them to the
@@ -1131,7 +1162,10 @@ removes or rewrites retrieval artifacts or the handoff.
 
 Each topic gets at most two semantic attempts. Parsed provider responses are
 stored only after recursive secret redaction. Opaque non-JSON bodies are stored
-as status, byte length, and SHA-256, never verbatim. Run the offline contract
+as status, byte length, and SHA-256, never verbatim. Private provider records
+also include `_trec_rag_call` telemetry with wall latency, actual
+transport attempts/retries, the configured retry ceiling, model identity, and
+the provider's token/cost usage object when returned. Run the offline contract
 tests with:
 
 ```bash

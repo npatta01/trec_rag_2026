@@ -20,6 +20,7 @@ import pytest
 import trec_rag.competition_rag as competition_rag
 from trec_rag.competition_rag import (
     OpenRouterJsonGenerator,
+    PriorityAwareConfig,
     RagGenerationConfig,
     arguments,
     build_submission_record,
@@ -78,6 +79,22 @@ inputs:
 {root_extra}"""
 
 
+def _priority_generation_extra() -> str:
+    return """  strategy: priority_aware
+  priority_aware:
+    planner_model: deepseek/deepseek-v4-flash
+    planner_reasoning_effort: minimal
+    planner_structured_output: json_object
+    planner_temperature: 0
+    planner_max_tokens: 4000
+    min_claims_per_group: 1
+    max_claims_per_group: 4
+    max_claims: 24
+    target_min_words: 700
+    target_max_words: 900
+"""
+
+
 def _write_config(tmp_path: Path, content: str) -> Path:
     path = tmp_path / "competition-rag.yaml"
     path.write_text(content, encoding="utf-8")
@@ -95,6 +112,7 @@ def test_loads_strict_generation_config_and_resolves_inputs_from_checkout(
         / "outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json"
     )
     assert config.topic_ids is None
+    assert config.strategy == "baseline"
     assert config.output_path == (
         tmp_path / "outputs/rag26_competition_rag_gpt_sol_v2/rag_output_trec_rag_2026.jsonl"
     )
@@ -172,6 +190,67 @@ def test_config_rejects_old_retrieval_and_prompt_profile_sections(
             _write_config(
                 tmp_path,
                 _config_text(generation_extra="  prompt_profile: focused_citations_tail\n"),
+        )
+    )
+
+
+def test_config_loads_coverage_aware_generation_strategy(tmp_path: Path) -> None:
+    config = load_rag_generation_config(
+        _write_config(
+            tmp_path,
+            _config_text(generation_extra="  strategy: coverage_aware\n"),
+        )
+    )
+
+    assert config.strategy == "coverage_aware"
+
+
+def test_config_loads_priority_aware_generation_strategy(tmp_path: Path) -> None:
+    config = load_rag_generation_config(
+        _write_config(
+            tmp_path,
+            _config_text(generation_extra=_priority_generation_extra()),
+        )
+    )
+
+    assert config.strategy == "priority_aware"
+    assert config.priority_aware == PriorityAwareConfig(
+        planner_model="deepseek/deepseek-v4-flash",
+        planner_reasoning_effort="minimal",
+        planner_structured_output="json_object",
+        planner_temperature=0.0,
+        planner_max_tokens=4000,
+        min_claims_per_group=1,
+        max_claims_per_group=4,
+        max_claims=24,
+        target_min_words=700,
+        target_max_words=900,
+    )
+
+
+def test_config_requires_priority_settings_only_for_priority_strategy(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="priority_aware is required"):
+        load_rag_generation_config(
+            _write_config(
+                tmp_path,
+                _config_text(generation_extra="  strategy: priority_aware\n"),
+            )
+        )
+    nested = _priority_generation_extra().replace("  strategy: priority_aware\n", "")
+    with pytest.raises(ValueError, match="only valid"):
+        load_rag_generation_config(
+            _write_config(tmp_path, _config_text(generation_extra=nested))
+        )
+
+
+def test_config_rejects_unknown_generation_strategy(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="generation.strategy is unsupported"):
+        load_rag_generation_config(
+            _write_config(
+                tmp_path,
+                _config_text(generation_extra="  strategy: open_ended_agent\n"),
             )
         )
 
@@ -204,12 +283,31 @@ def test_checked_in_competition_configs_use_only_the_full_handoff(
     )
 
     assert config.topic_ids is None
+    assert config.strategy == "baseline"
     assert config.handoff_manifest_path == (
         retrieval.output_dir / "generation_handoff_manifest.json"
     )
     assert not hasattr(config, "queries_path")
     assert not hasattr(config, "run_path")
     assert not hasattr(config, "documents_path")
+
+
+def test_checked_in_priority_config_is_full_handoff_and_two_stage() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    config = load_rag_generation_config(
+        repo_root / "configs/rag26_competition_rag_priority_aware_v3.yaml"
+    )
+    retrieval = load_facet_pilot_config(
+        repo_root / "configs/rag26_competition_retrieval_v2.yaml"
+    )
+
+    assert config.topic_ids is None
+    assert config.strategy == "priority_aware"
+    assert config.priority_aware is not None
+    assert config.priority_aware.planner_model == "deepseek/deepseek-v4-flash"
+    assert config.handoff_manifest_path == (
+        retrieval.output_dir / "generation_handoff_manifest.json"
+    )
 
 
 def _generated_record() -> dict[str, Any]:
@@ -247,6 +345,147 @@ def test_v2_provider_schema_and_prompt_require_raw_docids() -> None:
     prompt = competition_rag.render_prompt(topic)
     assert "raw ClimbMix docid" in prompt
     assert "do not use numeric citation indexes" in prompt.lower()
+
+
+def test_coverage_aware_prompt_adds_handoff_only_checklist_and_one_audit() -> None:
+    topic = _generation_topic(
+        "rag2026-0",
+        "What does the evidence show?",
+        [
+            ("climbmix-a", "First selected passage."),
+            ("climbmix-b", "Second selected passage."),
+        ],
+    )
+
+    baseline = competition_rag.render_prompt(topic)
+    coverage = competition_rag.render_prompt(topic, strategy="coverage_aware")
+
+    assert "Ordered answer checklist:" not in baseline
+    assert "Ordered answer checklist:" in coverage
+    assert "[rag2026-0-g1] Selected evidence for rag2026-0." in coverage
+    assert "selected passages: 2; advisory claim hints: 1" in coverage
+    assert "perform exactly one private audit" in coverage
+    assert "roughly 900 to 1,000 answer words" in coverage
+    assert "First selected passage." in coverage
+    assert "Second selected passage." in coverage
+    assert "gold nugget" not in coverage.lower()
+    assert "qrels" not in coverage.lower()
+
+
+def test_priority_planner_prompt_and_schema_use_only_authenticated_handoff() -> None:
+    topic = _two_group_generation_topic("rag2026-0")
+    settings = _priority_settings()
+
+    prompt = competition_rag.render_priority_planner_prompt(topic, settings)
+    schema = competition_rag.priority_plan_schema(topic, settings)
+
+    assert topic.narrative in prompt
+    assert "First group evidence." in prompt
+    assert "Second group evidence." in prompt
+    assert "essential" in prompt
+    assert "operational trivia" in prompt
+    assert "exactly these four fields: group_id, priority, claim" in prompt
+    assert "Do not rename priority to classification" in prompt
+    assert "gold nugget" not in prompt.lower()
+    assert "Do not use outside knowledge" in competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
+    assert "gold nuggets" in competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
+    assert schema["properties"]["claims"]["minItems"] == 2
+    assert schema["properties"]["claims"]["maxItems"] == 24
+
+
+def test_priority_plan_validation_normalizes_order_and_enforces_group_ownership() -> None:
+    topic = _two_group_generation_topic("rag2026-0")
+    settings = _priority_settings()
+    valid = {
+        "claims": [
+            {
+                "group_id": "rag2026-0-g1",
+                "priority": "essential",
+                "claim": "The first evidence supports a central claim.",
+                "evidence_ids": ["rag2026-0-e1"],
+            },
+            {
+                "group_id": "rag2026-0-g2",
+                "priority": "important",
+                "claim": "The second evidence adds a distinct consequence.",
+                "evidence_ids": ["rag2026-0-e2"],
+            },
+        ]
+    }
+
+    assert competition_rag.validate_priority_plan(
+        valid, topic=topic, config=settings
+    ) == valid
+
+    cross_group = copy.deepcopy(valid)
+    cross_group["claims"][1]["evidence_ids"] = ["rag2026-0-e1"]
+    with pytest.raises(ValueError, match="another group"):
+        competition_rag.validate_priority_plan(
+            cross_group, topic=topic, config=settings
+        )
+
+    duplicate_without_spare = copy.deepcopy(valid)
+    duplicate_without_spare["claims"][1]["claim"] = duplicate_without_spare[
+        "claims"
+    ][0]["claim"]
+    with pytest.raises(ValueError, match="must retain at least"):
+        competition_rag.validate_priority_plan(
+            duplicate_without_spare, topic=topic, config=settings
+        )
+
+    duplicate_with_spare = copy.deepcopy(duplicate_without_spare)
+    duplicate_with_spare["claims"].append(
+        {
+            "group_id": "rag2026-0-g2",
+            "priority": "important",
+            "claim": "The second evidence adds a distinct consequence.",
+            "evidence_ids": ["rag2026-0-e2"],
+        }
+    )
+    deduplicated = competition_rag.validate_priority_plan(
+        duplicate_with_spare, topic=topic, config=settings
+    )
+    assert len(deduplicated["claims"]) == 2
+    assert [item["group_id"] for item in deduplicated["claims"]] == [
+        "rag2026-0-g1",
+        "rag2026-0-g2",
+    ]
+
+    overlong = copy.deepcopy(valid)
+    for ordinal in range(1, 6):
+        overlong["claims"].append(
+            {
+                "group_id": "rag2026-0-g1",
+                "priority": "important",
+                "claim": f"Distinct supported detail {ordinal} from the first evidence.",
+                "evidence_ids": ["rag2026-0-e1"],
+            }
+        )
+    bounded = competition_rag.validate_priority_plan(
+        overlong,
+        topic=topic,
+        config=replace(settings, max_claims=3),
+    )
+    assert len(bounded["claims"]) == 3
+    assert {item["group_id"] for item in bounded["claims"]} == {
+        "rag2026-0-g1",
+        "rag2026-0-g2",
+    }
+
+    misordered = copy.deepcopy(valid)
+    misordered["claims"][0]["priority"] = "important"
+    misordered["claims"][1]["priority"] = "essential"
+    normalized = competition_rag.validate_priority_plan(
+        misordered, topic=topic, config=settings
+    )
+    assert [item["priority"] for item in normalized["claims"]] == [
+        "essential",
+        "important",
+    ]
+    assert [item["claim"] for item in normalized["claims"]] == [
+        "The second evidence adds a distinct consequence.",
+        "The first evidence supports a central claim.",
+    ]
 
 
 def _submission_record() -> dict[str, Any]:
@@ -809,6 +1048,248 @@ def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     topic_one_prompt = next(call["user_prompt"] for call in generator.calls if call["topic_id"] == "rag2026-1")
     assert "docid=climbmix-a" in topic_one_prompt
     assert "docid=climbmix-b" in topic_one_prompt
+
+
+def _priority_settings() -> PriorityAwareConfig:
+    return PriorityAwareConfig(
+        planner_model="deepseek/deepseek-v4-flash",
+        planner_reasoning_effort="minimal",
+        planner_structured_output="json_object",
+        planner_temperature=0.0,
+        planner_max_tokens=4000,
+        min_claims_per_group=1,
+        max_claims_per_group=4,
+        max_claims=24,
+        target_min_words=700,
+        target_max_words=900,
+    )
+
+
+def _two_group_generation_topic(topic_id: str) -> GenerationTopic:
+    topic = _generation_topic(
+        topic_id,
+        "Explain both selected facets.",
+        [
+            ("climbmix-a", "First group evidence."),
+            ("climbmix-b", "Second group evidence."),
+        ],
+    )
+    second_group_id = f"{topic_id}-g2"
+    second_evidence = replace(
+        topic.evidence[1], group_id=second_group_id, cluster_ordinal=1
+    )
+    return GenerationTopic(
+        topic_id=topic.topic_id,
+        narrative=topic.narrative,
+        groups=(
+            replace(
+                topic.groups[0],
+                selected_clusters=(topic.groups[0].selected_clusters[0],),
+            ),
+            EvidenceGroup(
+                group_id=second_group_id,
+                kind="generated_subnarrative",
+                text="Second selected facet.",
+                selected_clusters=(
+                    replace(topic.groups[0].selected_clusters[1], ordinal=1),
+                ),
+            ),
+        ),
+        evidence=(topic.evidence[0], second_evidence),
+        claim_hints=(
+            topic.claim_hints[0],
+            ClaimHint(
+                claim_id=f"{topic_id}-claim-2",
+                group_id=second_group_id,
+                kind="canonical",
+                text="The second group adds another supported point.",
+                evidence_ids=(second_evidence.evidence_id,),
+            ),
+        ),
+        source_receipts=topic.source_receipts,
+    )
+
+
+def test_coverage_aware_generation_is_one_hosted_completion_per_topic(
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="coverage_aware",
+    )
+    generator = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["climbmix-a"],
+                "The selected evidence supports the answer.",
+            )
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    assert len(generator.calls) == 1
+    assert "Ordered answer checklist:" in generator.calls[0]["user_prompt"]
+    assert "perform exactly one private audit" in generator.calls[0]["user_prompt"]
+
+
+def test_priority_aware_generation_plans_then_writes_once(tmp_path: Path) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+    planner = FakeGenerator(
+        {
+            "rag2026-1": {
+                "claims": [
+                    {
+                        "group_id": "rag2026-1-g1",
+                        "priority": "essential",
+                        "claim": "Evidence A supports the central answer.",
+                        "evidence_ids": ["rag2026-1-e1"],
+                    }
+                ]
+            }
+        }
+    )
+    writer = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["climbmix-a"], "Evidence A supports the central answer."
+            )
+        }
+    )
+
+    asyncio.run(run_generation(config, writer, planner=planner))
+
+    assert len(planner.calls) == 1
+    assert len(writer.calls) == 1
+    assert planner.calls[0]["system_prompt"] == (
+        competition_rag.PRIORITY_PLANNER_SYSTEM_PROMPT
+    )
+    assert "VALIDATED PRIORITY PLAN" in writer.calls[0]["user_prompt"]
+    assert "priority=essential" in writer.calls[0]["user_prompt"]
+    assert "750" not in writer.calls[0]["user_prompt"]
+    assert "700 to 900 answer words" in writer.calls[0]["user_prompt"]
+    plan_path = next((config.work_dir / "plans").glob("*.json"))
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan == planner.outputs["rag2026-1"]
+    assert len(list((config.work_dir / "raw").glob("*.plan-attempt-*.json"))) == 1
+
+
+def test_priority_aware_requires_a_separate_planner_generator(tmp_path: Path) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+
+    with pytest.raises(ValueError, match="requires a planner generator"):
+        asyncio.run(run_generation(config, FakeGenerator({})))
+    assert not config.work_dir.exists()
+
+
+def test_priority_aware_resume_reuses_a_valid_plan(tmp_path: Path) -> None:
+    config = replace(
+        _pipeline_config(tmp_path),
+        topic_ids=("rag2026-1",),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+    planner = FakeGenerator(
+        {
+            "rag2026-1": {
+                "claims": [
+                    {
+                        "group_id": "rag2026-1-g1",
+                        "priority": "essential",
+                        "claim": "Evidence A supports the central answer.",
+                        "evidence_ids": ["rag2026-1-e1"],
+                    }
+                ]
+            }
+        }
+    )
+    invalid_writer = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["outside-handoff"], "An invalid answer."
+            )
+        }
+    )
+
+    with pytest.raises(RuntimeError, match=r"1 topic\(s\) failed"):
+        asyncio.run(run_generation(config, invalid_writer, planner=planner))
+    assert len(planner.calls) == 1
+
+    resumed_planner = FakeGenerator({})
+    resumed_writer = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(
+                ["climbmix-a"], "Evidence A supports the central answer."
+            )
+        }
+    )
+    asyncio.run(
+        run_generation(
+            replace(config, resume=True),
+            resumed_writer,
+            planner=resumed_planner,
+        )
+    )
+
+    assert resumed_planner.calls == []
+    assert len(resumed_writer.calls) == 1
+
+
+def test_priority_aware_resume_recovers_a_valid_completed_raw_plan(
+    tmp_path: Path,
+) -> None:
+    topic = _generation_topic(
+        "rag2026-1", "Question one", [("climbmix-a", "Evidence A.")]
+    )
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    raw_plan = {
+        "claims": [
+            {
+                "group_id": "rag2026-1-g1",
+                "priority": "essential",
+                "claim": "Evidence A supports the central answer.",
+                "evidence_ids": ["rag2026-1-e1"],
+            }
+        ]
+    }
+    (raw_dir / "rag2026-1-deadbeef.plan-attempt-10.json").write_text(
+        json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps(raw_plan)},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (raw_dir / "rag2026-1-deadbeef.plan-attempt-9.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+
+    recovered = competition_rag._saved_priority_plan_from_raw(
+        raw_dir,
+        topic_name="rag2026-1-deadbeef",
+        topic=topic,
+        config=_priority_settings(),
+    )
+
+    assert recovered == raw_plan
 
 
 def test_generation_trims_an_over_limit_completion_before_validation(
@@ -1473,7 +1954,10 @@ def test_atomic_publication_fsyncs_file_and_parent_directory(
     asyncio.run(run_generation(config, generator))
 
     assert "file" in synced_kinds
-    assert "directory" in synced_kinds
+    if os.name == "nt":
+        assert "directory" not in synced_kinds
+    else:
+        assert "directory" in synced_kinds
 
 
 def test_second_process_cannot_mutate_same_generation_artifacts(tmp_path: Path) -> None:
@@ -1828,6 +2312,7 @@ def test_generation_identity_covers_every_request_setting(tmp_path: Path) -> Non
         ("api_base", "https://elsewhere.test"),
         ("structured_output", "json_object"),
         ("reasoning_effort", "high"),
+        ("strategy", "coverage_aware"),
         ("provider", "other-provider"),
         ("model", "other/model"),
     ]:
@@ -1839,10 +2324,45 @@ def test_generation_identity_covers_every_request_setting(tmp_path: Path) -> Non
         assert changed != base, f"{field} does not invalidate the identity"
 
 
-def test_identity_version_rejects_rows_written_before_citation_validation(
+def test_generation_identity_covers_every_priority_planner_setting(
     tmp_path: Path,
 ) -> None:
-    """Version 5 rows did not bind exact-hint citation validation."""
+    config = replace(
+        _pipeline_config(tmp_path),
+        strategy="priority_aware",
+        priority_aware=_priority_settings(),
+    )
+    handoff = load_generation_handoff(config.handoff_manifest_path)
+    topics = select_generation_topics(handoff, config.topic_ids)
+    base = competition_rag._generation_identity(config, handoff, topics)
+    assert config.priority_aware is not None
+
+    for field, value in [
+        ("planner_model", "other/planner"),
+        ("planner_reasoning_effort", "low"),
+        ("planner_structured_output", "strict_schema"),
+        ("planner_temperature", 0.2),
+        ("planner_max_tokens", 5000),
+        ("min_claims_per_group", 2),
+        ("max_claims_per_group", 5),
+        ("max_claims", 30),
+        ("target_min_words", 750),
+        ("target_max_words", 950),
+    ]:
+        changed_config = replace(
+            config,
+            priority_aware=replace(config.priority_aware, **{field: value}),
+        )
+        changed = competition_rag._generation_identity(
+            changed_config, handoff, topics
+        )
+        assert changed != base, f"priority_aware.{field} does not invalidate identity"
+
+
+def test_identity_version_rejects_rows_written_before_priority_planning(
+    tmp_path: Path,
+) -> None:
+    """Version 7 rows did not bind the two-stage planner contract."""
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
     generated = {
         "references": ["climbmix-a"],
@@ -1851,11 +2371,15 @@ def test_identity_version_rejects_rows_written_before_citation_validation(
     asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
     path = config.work_dir / "generation_identity.json"
     recorded = json.loads(path.read_text())
-    assert recorded["identity_version"] == 6
+    assert recorded["identity_version"] == 8
     assert recorded["citation_validation_contract_version"] == (
         "exact_hint_linked_docids_v1"
     )
-    recorded["identity_version"] = 5
+    assert recorded["call_telemetry_contract_version"] == (
+        "generation_call_telemetry_v1"
+    )
+    assert recorded["priority_plan_contract_version"] == "priority_plan_v1"
+    recorded["identity_version"] = 7
     path.write_text(json.dumps(recorded), encoding="utf-8")
 
     with pytest.raises(ValueError, match="older revision"):
@@ -2062,6 +2586,17 @@ class FakeHttpResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+def _without_call_telemetry(raw: dict[str, Any]) -> dict[str, Any]:
+    cleaned = copy.deepcopy(raw)
+    telemetry = cleaned.pop("_trec_rag_call")
+    assert telemetry["schema_version"] == "generation_call_telemetry_v1"
+    assert telemetry["provider"] == "openrouter"
+    assert telemetry["latency_ms"] >= 0
+    assert telemetry["transport_attempts"] >= 1
+    assert telemetry["transport_retries"] == telemetry["transport_attempts"] - 1
+    return cleaned
+
+
 def _mock_http_transport(post: Any) -> httpx.MockTransport:
     def handle(request: httpx.Request) -> httpx.Response:
         response = post(
@@ -2149,9 +2684,13 @@ def test_openrouter_uses_an_openai_compatible_http_transport() -> None:
     assert captured["url"] == "https://openrouter.example/v1/chat/completions"
     assert captured["authorization"] == "Bearer secret"
     assert captured["body"]["reasoning"] == {"effort": "medium", "exclude": True}
+    assert captured["body"]["usage"] == {"include": True}
     assert captured["body"]["provider"] == {"require_parameters": True}
     assert generated["answer"][0]["citations"] == ["climbmix-a"]
     assert raw["id"] == "response-1"
+    assert raw["_trec_rag_call"]["transport_attempts"] == 1
+    assert raw["_trec_rag_call"]["transport_retries"] == 0
+    assert raw["_trec_rag_call"]["latency_ms"] >= 0
 
 
 def test_openrouter_honors_an_http_date_retry_after(
@@ -2162,7 +2701,7 @@ def test_openrouter_honors_an_http_date_retry_after(
     sleeps: list[float] = []
     monkeypatch.setattr(httpx_retry_module.time, "sleep", sleeps.append)
 
-    _openrouter_generator(
+    _, raw = _openrouter_generator(
         lambda *args, **kwargs: responses.pop(0), timeout_seconds=900
     ).complete_json(
         topic_id="rag2026-1",
@@ -2172,6 +2711,8 @@ def test_openrouter_honors_an_http_date_retry_after(
     )
 
     assert sleeps == [900.0]
+    assert raw["_trec_rag_call"]["transport_attempts"] == 2
+    assert raw["_trec_rag_call"]["transport_retries"] == 1
 
 
 def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
@@ -2189,6 +2730,7 @@ def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
 
     assert captured["url"] == "https://openrouter.example/v1/chat/completions"
     assert captured["json"]["reasoning"] == {"effort": "medium", "exclude": True}
+    assert captured["json"]["usage"] == {"include": True}
     assert captured["json"]["provider"] == {"require_parameters": True}
     assert captured["json"]["response_format"]["type"] == "json_schema"
     assert captured["json"]["response_format"]["json_schema"]["strict"] is True
@@ -2482,7 +3024,7 @@ def test_http_json_failure_omits_body_with_decodable_escaped_api_key(
 
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     raw = json.loads(failed_raw.read_text(encoding="utf-8"))
-    assert raw == {
+    assert _without_call_telemetry(raw) == {
         "http_status": 400,
         "envelope": {"error": {"message": "rejected bearer [REDACTED]"}},
     }
@@ -2521,7 +3063,7 @@ def test_http_non_json_failure_omits_body_and_keeps_non_reversible_diagnostics(
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     raw = json.loads(failed_raw.read_text(encoding="utf-8"))
     body_bytes = body_text.encode("utf-8")
-    assert raw == {
+    assert _without_call_telemetry(raw) == {
         "http_status": 400,
         "body_omitted": True,
         "body_utf8_byte_length": len(body_bytes),
@@ -2561,7 +3103,7 @@ def test_http_non_json_failure_omits_plain_body_and_keeps_non_reversible_diagnos
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     persisted = failed_raw.read_text(encoding="utf-8")
     body_bytes = body_text.encode("utf-8")
-    assert json.loads(persisted) == {
+    assert _without_call_telemetry(json.loads(persisted)) == {
         "http_status": 400,
         "body_omitted": True,
         "body_utf8_byte_length": len(body_bytes),
@@ -2601,7 +3143,7 @@ def test_http_non_json_success_never_persists_nested_decodable_api_key(
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     persisted = failed_raw.read_text(encoding="utf-8")
     body_bytes = body_text.encode("utf-8")
-    assert json.loads(persisted) == {
+    assert _without_call_telemetry(json.loads(persisted)) == {
         "http_status": 200,
         "body_omitted": True,
         "body_utf8_byte_length": len(body_bytes),
