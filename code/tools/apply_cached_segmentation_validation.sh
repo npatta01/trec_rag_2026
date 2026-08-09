@@ -12,6 +12,11 @@ mode=""
 run_name=""
 run_args=()
 transport_tmp=""
+approved_backend=""
+approved_region=""
+approved_instance_type=""
+approved_gpu=""
+approved_hourly_price=""
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -40,6 +45,17 @@ while (($#)); do
       run_name=$2
       shift 2
       ;;
+    --approved-backend|--approved-region|--approved-instance-type|--approved-gpu|--approved-hourly-price)
+      (($# >= 2)) || die "$1 needs a value"
+      case "$1" in
+        --approved-backend) approved_backend=$2 ;;
+        --approved-region) approved_region=$2 ;;
+        --approved-instance-type) approved_instance_type=$2 ;;
+        --approved-gpu) approved_gpu=$2 ;;
+        --approved-hourly-price) approved_hourly_price=$2 ;;
+      esac
+      shift 2
+      ;;
     --)
       shift
       run_args=("$@")
@@ -52,6 +68,32 @@ done
 [[ $mode == preview || $mode == launch ]] || die "choose --preview or --launch"
 [[ $run_name =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "--name is unsafe"
 ((${#run_args[@]})) || die "wrapper arguments are required after --"
+approval_values=(
+  "$approved_backend" "$approved_region" "$approved_instance_type"
+  "$approved_gpu" "$approved_hourly_price"
+)
+if [[ $mode == preview ]]; then
+  [[ -z ${approval_values[*]} ]] || die "approved offer fields are launch-only"
+else
+  [[ $approved_backend =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] \
+    || die "--approved-backend is unsafe"
+  [[ $approved_region =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
+    || die "--approved-region is unsafe"
+  [[ $approved_instance_type =~ ^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}$ ]] \
+    || die "--approved-instance-type is unsafe"
+  [[ $approved_gpu == H200 || $approved_gpu == H100 ]] \
+    || die "--approved-gpu must be H200 or H100"
+  "$REPO_ROOT/.venv/bin/python" - "$approved_hourly_price" <<'PY'
+from decimal import Decimal, InvalidOperation
+import sys
+try:
+    price = Decimal(sys.argv[1])
+except InvalidOperation as exc:
+    raise SystemExit("approved hourly price is invalid") from exc
+if not Decimal("0") < price <= Decimal("3.0"):
+    raise SystemExit("approved hourly price exceeds the task cap")
+PY
+fi
 
 cd "$REPO_ROOT"
 [[ $(git rev-parse --show-toplevel) == "$REPO_ROOT" ]] || die "unexpected Git root"
@@ -133,7 +175,34 @@ if [[ $mode == preview ]]; then
   printf 'n\n' | "$dstack_bin" apply -f "$task_config" -n "$run_name" -- "${run_args[@]}"
   status=${PIPESTATUS[1]}
 else
-  "$dstack_bin" apply -f "$task_config" -n "$run_name" -y -d -- "${run_args[@]}"
+  exact_offer_args=(
+    "--backend" "$approved_backend"
+    "--region" "$approved_region"
+    "--instance-type" "$approved_instance_type"
+    "--gpu" "${approved_gpu}:1"
+    "--max-price" "$approved_hourly_price"
+  )
+  printf '%s\n' \
+    "approved_backend=$approved_backend" \
+    "approved_region=$approved_region" \
+    "approved_instance_type=$approved_instance_type" \
+    "approved_gpu=$approved_gpu" \
+    "approved_hourly_price=$approved_hourly_price" \
+    "approved_5h_exposure=$("$project_python" - "$approved_hourly_price" <<'PY'
+from decimal import Decimal
+import sys
+print(Decimal(sys.argv[1]) * 5)
+PY
+)"
+  # Re-plan the exact approved offer class immediately before submission. The
+  # detached apply below repeats the same backend/region/instance/GPU/price
+  # constraints, so marketplace churn cannot substitute another approved axis.
+  printf 'n\n' | "$dstack_bin" apply -f "$task_config" -n "$run_name" \
+    --max-offers 1 "${exact_offer_args[@]}" -- "${run_args[@]}"
+  preview_status=${PIPESTATUS[1]}
+  [[ $preview_status == 0 ]] || die "approved offer is no longer plannable"
+  "$dstack_bin" apply -f "$task_config" -n "$run_name" \
+    "${exact_offer_args[@]}" -y -d -- "${run_args[@]}"
   status=$?
 fi
 set -e

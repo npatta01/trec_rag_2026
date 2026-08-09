@@ -2078,12 +2078,17 @@ receipt rejects any upstream cache miss, network/provider call, or model batch.
 
 `cached_segmentation_validation structural` compares an old and fixed run only
 after authenticating their decomposition, retrieval audit, selected-document
-receipts, generation handoffs, fixed TopicRecords database, and exact CAS
-sources. It reports old physical-line units, fixed production segmentation
-units, fixed candidates, selected evidence, representatives, and claim hints.
-The aggregate gate requires less fragmentation without any upstream identity
-change; topic 407 additionally must beat the measured old median of 11
-characters and 60.4% sub-40 rate. Keep its JSON and manifest private.
+receipts, generation handoffs, both byte-sealed candidate databases, exact CAS
+sources, and byte-identical candidate requests. Its legacy reader validates old
+candidate source spans without pretending they use the current splitter; the
+fixed database also passes the full current `TopicRecords` validator. It reports
+old physical-line units and fixed production segmentation over the exact
+candidate-request population, then directly compares old/fixed candidates,
+selected evidence, representatives, and claim hints. Candidate, evidence, and
+punctuation-fragment rates may not worsen, and at least one fixed-output
+readability metric must improve. Topic 407's fixed segmentation units must
+additionally beat the measured old median of 11 characters and 60.4% sub-40 rate. Keep its
+JSON and manifest private.
 
 `cached_segmentation_validation semantic` validates each completed baseline
 `retrieval_nugget_coverage_v2/<topic>` bundle, copies only its authenticated
@@ -2091,7 +2096,8 @@ frozen plan into the candidate arm, and runs exactly one candidate judge stage.
 It never reruns the planner and refuses narrative, evaluator-identity, or plan
 drift before judging. The private comparison records paired obligation labels,
 artifact hashes, improvements and regressions, plus topic-macro required
-coverage and strict-full rate. Its gate permits neither macro metric to regress.
+coverage and strict-full rate. Its gate rejects macro, per-topic, and individual
+obligation regressions, so an unrelated gain cannot compensate a local loss.
 This is a planner-derived diagnostic, not organizer ground truth; it does not
 open qrels or gold nuggets. Completed candidate judge stages resume without a
 new hosted call and reproduce the same comparison bytes.
@@ -2099,13 +2105,25 @@ new hosted call and reproduce the same comparison bytes.
 The full RAG25 validation is launched only through
 `apply_cached_segmentation_validation.sh`. Its preview path constructs a clean,
 committed-only repository transport and declines dstack submission; its launch
-path submits exactly one detached task. The remote wrapper authenticates all 22
-portable source bundles before one strict merge, restores the private baseline,
-runs topic 407 first, warms topics 14/31, and then runs all 22 topics with four
-workers under `--cached-upstream-rescore`. It publishes the private result
-archive first and its completion marker last, then downloads and revalidates
-both bytes. Planning, retrieval, and passage scoring must report zero misses,
-network/provider calls, and model batches throughout.
+path requires the approved backend, region, instance type, H200/H100 GPU, and
+hourly-price cap, re-previews those exact constraints, then submits exactly one
+detached task. The remote wrapper authenticates all 22 portable source bundles
+before one strict merge, restores the private baseline, runs topic 407 first,
+then samples peak memory while processing topics 14/31. Four workers proceed
+only when projected usage is at most 90% of the 80+ GB GPU; the signed-off
+decision is included in the private result bundle. Canary/probe topic receipts
+resume in the same final run namespace. The archive is uploaded before its
+completion marker, then both are downloaded and revalidated. Planning,
+retrieval, and passage scoring must report zero misses, network/provider calls,
+and model batches throughout.
+
+Any nonzero exit after the private destinations are authenticated triggers a
+separate `${run_id}-diagnostic` bundle. It contains only authenticated completed
+checkpoint phases, available comparison pairs and completed frozen-plan
+coverage states, plus a canonical failure-stage receipt. Its schema records
+`promotion_eligible: false`; it can never verify as a successful result. The
+diagnostic archive is uploaded before its completion marker and round-trip
+verified without replacing the original failure status.
 
 ## Answer-quality evaluation
 

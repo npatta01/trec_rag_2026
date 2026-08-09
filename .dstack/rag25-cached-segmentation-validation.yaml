@@ -23,10 +23,10 @@ commands:
 
 resources:
   gpu:
-    name: [H200, H100, L40S]
+    name: [H200, H100]
     count: 1
-    memory: 48GB..
-  memory: 32GB..
+    memory: 80GB..
+  memory: 64GB..
   disk: 100GB
 
 backends: [runpod, vastai]

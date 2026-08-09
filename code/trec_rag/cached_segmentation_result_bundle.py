@@ -28,6 +28,8 @@ COMPLETE_SCHEMA = "cached-segmentation-result-bundle-complete-v1"
 ARCHIVE_NAME = "bundle.tar.zst"
 COMPLETE_NAME = "bundle-complete.json"
 MANIFEST_NAME = "bundle-manifest.json"
+DIAGNOSTIC_STATUS_NAME = "diagnostic-status.json"
+DIAGNOSTIC_SCHEMA = "cached-segmentation-diagnostic-v1"
 COVERAGE_FILES = (
     "input.json",
     "plan.json",
@@ -515,7 +517,7 @@ def _parse_manifest(
     revision = value["git_revision"]
     topics = value["topic_ids"]
     if (
-        kind not in {"baseline", "result"}
+        kind not in {"baseline", "result", "diagnostic"}
         or not isinstance(run_id, str)
         or not run_id
         or not isinstance(revision, str)
@@ -757,8 +759,10 @@ def _verify(bundle_dir: Path, *, expected_kind: str) -> VerifiedResultBundle:
         _extract_verified(root / ARCHIVE_NAME, complete, extraction)
         if expected_kind == "baseline":
             _verify_baseline_semantics(verified, extraction)
-        else:
+        elif expected_kind == "result":
             _verify_result_semantics(verified, extraction)
+        else:
+            _verify_diagnostic_semantics(verified, extraction)
     return verified
 
 
@@ -926,6 +930,9 @@ def _comparison_sources(
     run_root: Path,
     topics: tuple[str, ...],
     candidate_handoff_sha256: str,
+    run_id: str,
+    config_sha256: str,
+    selected_workers: int,
 ) -> list[_SourceMember]:
     sources: list[_SourceMember] = []
     for kind in ("structural", "semantic"):
@@ -945,6 +952,10 @@ def _comparison_sources(
             or comparison.get("candidate_handoff_sha256")
             != candidate_handoff_sha256
             or comparison.get("gates_passed") is not True
+            or (
+                kind == "structural"
+                and comparison.get("improvement_observed") is not True
+            )
             or manifest.get("schema_version") != expected_manifest_schema
             or manifest.get("comparison_file") != comparison_path.name
             or manifest.get("comparison_bytes") != len(comparison_body)
@@ -974,6 +985,82 @@ def _comparison_sources(
                 ),
             )
         )
+    decision_path = validation_root / "concurrency-decision.json"
+    decision_body, decision = _strict_file(
+        decision_path, "concurrency decision"
+    )
+    expected_decision_fields = {
+        "schema_version",
+        "run_id",
+        "config_sha256",
+        "gpu_name",
+        "gpu_uuid",
+        "driver_version",
+        "probe_topics",
+        "probe_workers",
+        "selected_workers",
+        "elapsed_seconds",
+        "idle_memory_mib",
+        "peak_memory_mib",
+        "total_memory_mib",
+        "projected_four_worker_memory_mib",
+        "safe_limit_memory_mib",
+    }
+    integer_fields = expected_decision_fields - {
+        "schema_version",
+        "run_id",
+        "config_sha256",
+        "gpu_name",
+        "gpu_uuid",
+        "driver_version",
+        "probe_topics",
+    }
+    gpu_name = decision.get("gpu_name")
+    gpu_uuid = decision.get("gpu_uuid")
+    driver_version = decision.get("driver_version")
+    if (
+        set(decision) != expected_decision_fields
+        or _canonical(decision) != decision_body
+        or decision.get("schema_version")
+        != "cached-segmentation-concurrency-decision-v1"
+        or decision.get("run_id") != run_id
+        or decision.get("config_sha256") != config_sha256
+        or not isinstance(gpu_name, str)
+        or not any(model in gpu_name for model in ("H100", "H200"))
+        or not isinstance(gpu_uuid, str)
+        or not gpu_uuid.startswith("GPU-")
+        or not isinstance(driver_version, str)
+        or not driver_version
+        or decision.get("probe_topics") != ["14", "31"]
+        or decision.get("probe_workers") != 2
+        or decision.get("selected_workers") != selected_workers
+        or selected_workers != 4
+        or any(type(decision.get(field)) is not int for field in integer_fields)
+    ):
+        raise ResultBundleIntegrityError("concurrency decision identity changed")
+    idle = decision["idle_memory_mib"]
+    peak = decision["peak_memory_mib"]
+    total = decision["total_memory_mib"]
+    expected_projected = idle + 2 * max(0, peak - idle)
+    expected_safe_limit = int(total * 0.90)
+    if (
+        decision["elapsed_seconds"] < 0
+        or idle < 0
+        or peak < idle
+        or total <= 0
+        or peak > total
+        or decision["projected_four_worker_memory_mib"] != expected_projected
+        or decision["safe_limit_memory_mib"] != expected_safe_limit
+        or expected_projected > expected_safe_limit
+    ):
+        raise ResultBundleIntegrityError("concurrency decision identity changed")
+    sources.append(
+        _source(
+            decision_path,
+            validation_root,
+            "validation/concurrency-decision.json",
+        )
+    )
     return sources
 
 
@@ -994,6 +1081,10 @@ def _validated_result_sources(
     export_body, export = _strict_file(
         run / "retrieval_export_manifest.json", "retrieval export manifest"
     )
+    execution = _fields(
+        export.get("execution"), {"topic_workers"}, "retrieval export execution"
+    )
+    selected_workers = execution.get("topic_workers")
     artifacts = export.get("artifacts")
     expected_export_artifacts = {
         "generation_handoff_manifest.json",
@@ -1004,6 +1095,7 @@ def _validated_result_sources(
         export.get("run_id") != run_id
         or export.get("export_code_commit") != revision
         or export.get("selected_topic_ids") != list(topics)
+        or selected_workers != 4
         or not isinstance(artifacts, dict)
         or set(artifacts) != expected_export_artifacts
     ):
@@ -1205,6 +1297,9 @@ def _validated_result_sources(
             run,
             topics,
             candidate_handoff_sha,
+            run_id,
+            config_sha,
+            selected_workers,
         )
     )
     coverage_root = validation / "retrieval_nugget_coverage_v2"
@@ -1249,6 +1344,428 @@ def _verify_result_semantics(verified: VerifiedResultBundle, root: Path) -> None
         raise ResultBundleIntegrityError("result bundle member closure changed")
 
 
+def _optional_source_root(path: Path, label: str) -> Path | None:
+    if not path.exists():
+        return None
+    return _source_root(path, label)
+
+
+def _canonical_object_file(path: Path, label: str) -> tuple[bytes, dict[str, Any]]:
+    body, value = _strict_file(path, label)
+    if _canonical(value) != body:
+        raise ResultBundleIntegrityError(f"{label} encoding changed")
+    return body, value
+
+
+def _ordered_topic_subset(
+    value: object,
+    requested_topics: tuple[str, ...],
+    label: str,
+) -> tuple[str, ...]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(topic, str) or not topic for topic in value)
+        or len(set(value)) != len(value)
+    ):
+        raise ResultBundleIntegrityError(f"{label} topic set changed")
+    topics = tuple(value)
+    selected = set(topics)
+    if tuple(topic for topic in requested_topics if topic in selected) != topics:
+        raise ResultBundleIntegrityError(f"{label} topic order changed")
+    return topics
+
+
+def _diagnostic_comparison_sources(
+    validation_root: Path,
+    requested_topics: tuple[str, ...],
+    candidate_handoff_sha256: str | None,
+) -> list[_SourceMember]:
+    sources: list[_SourceMember] = []
+    for relative_root in (Path(), Path("canary")):
+        comparison_root = validation_root / relative_root
+        for kind in ("structural", "semantic"):
+            comparison_path = comparison_root / f"{kind}-comparison.json"
+            manifest_path = comparison_root / f"{kind}-comparison-manifest.json"
+            present = (comparison_path.exists(), manifest_path.exists())
+            if not any(present):
+                continue
+            if not all(present):
+                # An interruption can land between the create-only comparison
+                # and its hash-binding manifest. Preserve other completed
+                # evidence, but never admit the unsealed half-pair.
+                continue
+            comparison_body, comparison = _canonical_object_file(
+                comparison_path, f"diagnostic {kind} comparison"
+            )
+            _, manifest = _canonical_object_file(
+                manifest_path, f"diagnostic {kind} comparison manifest"
+            )
+            topics = _ordered_topic_subset(
+                comparison.get("topic_ids"),
+                requested_topics,
+                f"diagnostic {kind} comparison",
+            )
+            gates_passed = comparison.get("gates_passed")
+            comparison_candidate_sha = _digest(
+                comparison.get("candidate_handoff_sha256"),
+                f"diagnostic {kind} candidate handoff",
+            )
+            if (
+                comparison.get("schema_version")
+                != f"cached-segmentation-{kind}-comparison-v1"
+                or type(gates_passed) is not bool
+                or (
+                    relative_root == Path()
+                    and candidate_handoff_sha256 is not None
+                    and comparison_candidate_sha != candidate_handoff_sha256
+                )
+                or manifest.get("schema_version")
+                != f"cached-segmentation-{kind}-manifest-v1"
+                or manifest.get("comparison_file") != comparison_path.name
+                or manifest.get("comparison_bytes") != len(comparison_body)
+                or manifest.get("comparison_sha256")
+                != sha256(comparison_body).hexdigest()
+                or manifest.get("topic_ids") != list(topics)
+                or manifest.get("gates_passed") is not gates_passed
+            ):
+                raise ResultBundleIntegrityError(
+                    f"diagnostic {kind} comparison identity changed"
+                )
+            prefix = "validation"
+            if relative_root.parts:
+                prefix += f"/{relative_root.as_posix()}"
+            sources.extend(
+                (
+                    _source(
+                        comparison_path,
+                        validation_root,
+                        f"{prefix}/{comparison_path.name}",
+                    ),
+                    _source(
+                        manifest_path,
+                        validation_root,
+                        f"{prefix}/{manifest_path.name}",
+                    ),
+                )
+            )
+    return sources
+
+
+def _diagnostic_evidence_sources(
+    run_root: Path,
+    validation_root: Path,
+    *,
+    run_id: str,
+    revision: str,
+    requested_topics: tuple[str, ...],
+) -> list[_SourceMember]:
+    sources: list[_SourceMember] = []
+    run = _optional_source_root(Path(run_root), "diagnostic run root")
+    validation = _optional_source_root(
+        Path(validation_root), "diagnostic validation root"
+    )
+    candidate_handoff_path: Path | None = None
+    candidate_handoff_sha256: str | None = None
+    candidate_topics: tuple[str, ...] = ()
+
+    if run is not None:
+        handoff_path = run / "generation_handoff_manifest.json"
+        if handoff_path.exists():
+            try:
+                handoff = load_generation_handoff(handoff_path)
+            except Exception as exc:
+                raise ResultBundleIntegrityError(
+                    "diagnostic generation handoff is invalid"
+                ) from exc
+            candidate_topics = tuple(topic.topic_id for topic in handoff.topics)
+            _ordered_topic_subset(
+                list(candidate_topics), requested_topics, "diagnostic generation handoff"
+            )
+            if (
+                handoff.producer.retrieval_run_id != run_id
+                or handoff.producer.producer_revision != revision
+            ):
+                raise ResultBundleIntegrityError(
+                    "diagnostic generation handoff identity changed"
+                )
+            candidate_handoff_path = handoff_path
+            candidate_handoff_sha256 = _file_receipt(handoff_path)[1]
+            sources.append(
+                _source(
+                    handoff_path,
+                    run,
+                    "run/generation_handoff_manifest.json",
+                )
+            )
+
+        for name in ("retrieval_export_manifest.json", "cache-operation-manifest.json"):
+            path = run / name
+            if not path.exists():
+                continue
+            body, value = _canonical_object_file(path, f"diagnostic {name}")
+            if value.get("run_id") != run_id:
+                raise ResultBundleIntegrityError(
+                    f"diagnostic {name} run identity changed"
+                )
+            if name == "cache-operation-manifest.json":
+                _validate_receipt_digest(body, value, "diagnostic operation manifest")
+            sources.append(_source(path, run, f"run/{name}"))
+
+        for topic_id in requested_topics:
+            topic_root = run / topic_id
+            if not topic_root.exists():
+                continue
+            if topic_root.is_symlink() or not topic_root.is_dir():
+                raise ResultBundleIntegrityError(
+                    "diagnostic topic root is missing or unsafe"
+                )
+            for name in (
+                "cache-operation-receipt.cached-upstream-rescore.json",
+                "topic-job-receipt.cached-upstream-rescore.json",
+            ):
+                path = topic_root / name
+                if not path.exists():
+                    continue
+                body, value = _canonical_object_file(
+                    path, f"diagnostic {topic_id} {name}"
+                )
+                if value.get("run_id") != run_id or value.get("topic_id") != topic_id:
+                    raise ResultBundleIntegrityError(
+                        "diagnostic topic receipt identity changed"
+                    )
+                if name.startswith("cache-operation-receipt"):
+                    _validate_receipt_digest(
+                        body, value, "diagnostic topic operation receipt"
+                    )
+                sources.append(_source(path, run, f"run/{topic_id}/{name}"))
+
+            decomposition_result = topic_root / "decomposition/result.json"
+            decomposition_manifest = topic_root / "decomposition/manifest.json"
+            decomposition_present = (
+                decomposition_result.exists(),
+                decomposition_manifest.exists(),
+            )
+            if all(decomposition_present):
+                result_body = decomposition_result.read_bytes()
+                _, manifest = _canonical_object_file(
+                    decomposition_manifest, "diagnostic decomposition manifest"
+                )
+                if (
+                    manifest.get("result_file") != "result.json"
+                    or manifest.get("result_bytes") != len(result_body)
+                    or manifest.get("result_sha256")
+                    != sha256(result_body).hexdigest()
+                ):
+                    raise ResultBundleIntegrityError(
+                        "diagnostic decomposition receipt changed"
+                    )
+                sources.extend(
+                    (
+                        _source(
+                            decomposition_result,
+                            run,
+                            f"run/{topic_id}/decomposition/result.json",
+                        ),
+                        _source(
+                            decomposition_manifest,
+                            run,
+                            f"run/{topic_id}/decomposition/manifest.json",
+                        ),
+                    )
+                )
+            for phase in ("retrieval", "scoring", "canonical"):
+                if (topic_root / phase / "complete.json").exists():
+                    sources.extend(_phase_sources(topic_root, run, topic_id, phase))
+
+    if validation is not None:
+        sources.extend(
+            _diagnostic_comparison_sources(
+                validation,
+                requested_topics,
+                candidate_handoff_sha256,
+            )
+        )
+        decision_path = validation / "concurrency-decision.json"
+        if decision_path.exists():
+            _, decision = _canonical_object_file(
+                decision_path, "diagnostic concurrency decision"
+            )
+            if (
+                decision.get("schema_version")
+                != "cached-segmentation-concurrency-decision-v1"
+                or decision.get("run_id") != run_id
+            ):
+                raise ResultBundleIntegrityError(
+                    "diagnostic concurrency decision identity changed"
+                )
+            sources.append(
+                _source(
+                    decision_path,
+                    validation,
+                    "validation/concurrency-decision.json",
+                )
+            )
+
+        coverage_root = validation / "retrieval_nugget_coverage_v2"
+        if coverage_root.exists():
+            if candidate_handoff_path is None:
+                raise ResultBundleIntegrityError(
+                    "diagnostic coverage has no candidate handoff"
+                )
+            coverage = _source_root(coverage_root, "diagnostic coverage root")
+            for topic_id in candidate_topics:
+                work = coverage / topic_id
+                if not work.exists() or {item.name for item in work.iterdir()} != set(
+                    COVERAGE_FILES
+                ):
+                    continue
+                try:
+                    load_completed_coverage_evaluation(
+                        handoff_manifest_path=candidate_handoff_path,
+                        topic_id=topic_id,
+                        work_dir=work,
+                    )
+                except Exception as exc:
+                    raise ResultBundleIntegrityError(
+                        f"diagnostic coverage is invalid for topic {topic_id}"
+                    ) from exc
+                for name in COVERAGE_FILES:
+                    sources.append(
+                        _source(
+                            work / name,
+                            validation,
+                            f"validation/retrieval_nugget_coverage_v2/{topic_id}/{name}",
+                        )
+                    )
+    return sources
+
+
+def _verify_diagnostic_semantics(
+    verified: VerifiedResultBundle,
+    root: Path,
+) -> None:
+    status_body, status = _canonical_object_file(
+        root / DIAGNOSTIC_STATUS_NAME, "diagnostic status"
+    )
+    expected_fields = {
+        "schema_version",
+        "promotion_eligible",
+        "run_id",
+        "git_revision",
+        "requested_topic_ids",
+        "stage",
+        "exit_status",
+        "evidence_members",
+    }
+    evidence_members = status.get("evidence_members")
+    if (
+        set(status) != expected_fields
+        or status.get("schema_version") != DIAGNOSTIC_SCHEMA
+        or status.get("promotion_eligible") is not False
+        or status.get("run_id") != verified.run_id
+        or status.get("git_revision") != verified.git_revision
+        or status.get("requested_topic_ids") != list(verified.topic_ids)
+        or not isinstance(status.get("stage"), str)
+        or not status["stage"]
+        or type(status.get("exit_status")) is not int
+        or not 1 <= status["exit_status"] <= 255
+        or not isinstance(evidence_members, list)
+        or any(not isinstance(path, str) for path in evidence_members)
+        or evidence_members != sorted(evidence_members)
+        or len(set(evidence_members)) != len(evidence_members)
+        or _canonical(status) != status_body
+    ):
+        raise ResultBundleIntegrityError("diagnostic status identity changed")
+    evidence = _diagnostic_evidence_sources(
+        root / "run",
+        root / "validation",
+        run_id=verified.run_id,
+        revision=verified.git_revision,
+        requested_topics=verified.topic_ids,
+    )
+    actual_evidence = sorted(source.path for source in evidence)
+    expected_members = {DIAGNOSTIC_STATUS_NAME, *actual_evidence}
+    if evidence_members != actual_evidence or {
+        member.path for member in verified.members
+    } != expected_members:
+        raise ResultBundleIntegrityError("diagnostic bundle member closure changed")
+
+
+def pack_diagnostic_bundle(
+    run_root: str | Path,
+    validation_root: str | Path,
+    destination: str | Path,
+    *,
+    run_id: str,
+    revision: str,
+    topic_ids: Sequence[str],
+    stage: str,
+    exit_status: int,
+) -> VerifiedResultBundle:
+    """Preserve authenticated partial evidence without making it promotable."""
+
+    topics = tuple(topic_ids)
+    if type(exit_status) is not int or not 1 <= exit_status <= 255:
+        raise ValueError("diagnostic bundles require a failure exit status")
+    raw_run_root = Path(run_root)
+    raw_validation_root = Path(validation_root)
+    if not raw_run_root.is_absolute() or not raw_validation_root.is_absolute():
+        raise ValueError("diagnostic source roots must be absolute")
+    if (
+        not run_id
+        or len(revision) != 40
+        or any(character not in "0123456789abcdef" for character in revision)
+        or not topics
+        or len(set(topics)) != len(topics)
+        or any(not topic for topic in topics)
+        or not stage
+        or len(stage) > 80
+        or any(not (character.isalnum() or character in "_-") for character in stage)
+    ):
+        raise ValueError("diagnostic identity is invalid")
+    evidence = _diagnostic_evidence_sources(
+        raw_run_root,
+        raw_validation_root,
+        run_id=run_id,
+        revision=revision,
+        requested_topics=topics,
+    )
+    evidence_paths = sorted(source.path for source in evidence)
+    with tempfile.TemporaryDirectory(prefix="segmentation-diagnostic-status-") as temp:
+        status_path = Path(temp) / DIAGNOSTIC_STATUS_NAME
+        status_path.write_bytes(
+            _canonical(
+                {
+                    "schema_version": DIAGNOSTIC_SCHEMA,
+                    "promotion_eligible": False,
+                    "run_id": run_id,
+                    "git_revision": revision,
+                    "requested_topic_ids": list(topics),
+                    "stage": stage,
+                    "exit_status": exit_status,
+                    "evidence_members": evidence_paths,
+                }
+            )
+        )
+        sources = [
+            _source(status_path, Path(temp), DIAGNOSTIC_STATUS_NAME),
+            *evidence,
+        ]
+        return _pack(
+            Path(destination),
+            kind="diagnostic",
+            run_id=run_id,
+            revision=revision,
+            topics=topics,
+            sources=sources,
+        )
+
+
+def verify_diagnostic_bundle(bundle_dir: str | Path) -> VerifiedResultBundle:
+    return _verify(Path(bundle_dir), expected_kind="diagnostic")
+
+
 def pack_result_bundle(
     run_root: str | Path,
     validation_root: str | Path,
@@ -1289,6 +1806,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     pack.add_argument("--destination", type=Path, required=True)
     verify = commands.add_parser("verify")
     verify.add_argument("bundle", type=Path)
+    pack_diagnostic = commands.add_parser("pack-diagnostic")
+    pack_diagnostic.add_argument("--run-root", type=Path, required=True)
+    pack_diagnostic.add_argument("--validation-root", type=Path, required=True)
+    pack_diagnostic.add_argument("--destination", type=Path, required=True)
+    pack_diagnostic.add_argument("--run-id", required=True)
+    pack_diagnostic.add_argument("--revision", required=True)
+    pack_diagnostic.add_argument("--topic", action="append", required=True)
+    pack_diagnostic.add_argument("--stage", required=True)
+    pack_diagnostic.add_argument("--exit-status", type=int, required=True)
+    verify_diagnostic = commands.add_parser("verify-diagnostic")
+    verify_diagnostic.add_argument("bundle", type=Path)
     args = parser.parse_args(argv)
     if args.command == "pack-baseline":
         pack_baseline_bundle(args.handoff, args.coverage_root, args.destination)
@@ -1298,8 +1826,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         restore_baseline_bundle(args.bundle, args.destination)
     elif args.command == "pack":
         pack_result_bundle(args.run_root, args.validation_root, args.destination)
-    else:
+    elif args.command == "verify":
         verify_result_bundle(args.bundle)
+    elif args.command == "pack-diagnostic":
+        pack_diagnostic_bundle(
+            args.run_root,
+            args.validation_root,
+            args.destination,
+            run_id=args.run_id,
+            revision=args.revision,
+            topic_ids=args.topic,
+            stage=args.stage,
+            exit_status=args.exit_status,
+        )
+    else:
+        verify_diagnostic_bundle(args.bundle)
     return 0
 
 

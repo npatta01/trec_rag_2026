@@ -68,10 +68,10 @@ published as valid.
 
 Use one on-demand dstack machine so repository setup, bundle download, cache
 merge, and model downloads are paid once. Preview live offers immediately
-before launch and select the fastest available GPU whose offer the user
-approves. Prefer H100-class compute when an acceptable offer exists; otherwise
-prefer L40S over the previously proven A40. Do not choose extra VRAM alone: the
-selected GPU must improve transformer inference throughput for this workload.
+before launch and select the fastest available H200/H100 offer the user
+approves. Bind the submitted backend, region, instance type, GPU, and hourly
+price cap to those approved axes so a second marketplace resolution cannot
+silently substitute another offer class.
 
 The task remains single-GPU. Sentence-scoring workers share that GPU; they do
 not use distributed training or multiple machines.
@@ -83,8 +83,8 @@ known fragmentation baseline. The wrapper validates its cache counters,
 artifacts, and structural before/after metrics before continuing.
 
 After the canary passes, run multiple topics concurrently on the same GPU. Use
-two workers as the proven floor and permit four only on a 48 GB or larger GPU
-when a pre-compute memory check and the canary show sufficient headroom. The
+two workers as the proven floor and permit four only on an 80 GB or larger GPU
+when the two-topic probe projects usage below 90% of VRAM. The
 wrapper records worker count, GPU identity, elapsed time, and peak memory. It
 must fail rather than silently reduce validation or restart retrieval after an
 out-of-memory error.
@@ -100,7 +100,7 @@ probe on the same lease; the remaining topics use the faster safe setting.
    dstack launcher pattern.
 2. Verify required secret presence without printing values and confirm the
    configured Hugging Face Bucket is private.
-3. Require the new result prefix to be empty.
+3. Require the new result and non-promotable diagnostic prefixes to be empty.
 4. Download exactly the 22 existing archive/marker pairs from the pinned
    private source prefix.
 5. Verify each archive and merge all bundles into a fresh task-local cache.
@@ -111,6 +111,11 @@ probe on the same lease; the remaining topics use the faster safe setting.
 9. Produce a private before/after validation report.
 10. Pack, locally verify, upload, download, byte-compare, and semantically
     reverify the new immutable result bundle. Upload its completion marker last.
+11. On any nonzero exit after destination authentication, package the available
+    completed checkpoint phases, comparison pairs, frozen-plan judgments, and a
+    canonical stage/exit receipt into a distinct diagnostic bundle. Upload and
+    round-trip verify its completion marker last while preserving the original
+    failure status.
 
 The destination is a new run-specific private prefix beneath
 `trec_rag_2026/experiments/`. Existing bundles are never deleted or
@@ -159,11 +164,11 @@ so. Organizer gold nuggets and qrels remain outside the retrieval/generation
 runner; a separate read-only development diagnostic may be added only if its
 input and interpretation are explicit.
 
-The fixed arm passes the semantic gate when topic-macro required coverage and
-strict-full rate do not regress, no topic has an unexplained material coverage
-loss, and the report shows either a positive aggregate change or clearly better
-faithfulness/readability at equal coverage. Any loss is inspected at the
-obligation and source-passage level before promotion.
+The fixed arm passes the semantic gate only when topic-macro, every topic, and
+every obligation do not regress. A gain elsewhere never compensates a local
+loss. The report must show either a positive semantic change or an explicit
+fixed-output readability improvement at equal coverage; any loss blocks
+automatic promotion and is preserved for inspection.
 
 ## Promotion Gate
 
@@ -215,6 +220,11 @@ remain private and outside git.
 - Remote publication mismatch: stop; never overwrite the destination prefix.
 - Semantic regression: preserve the paired evidence for inspection and do not
   promote the branch.
+
+Failure bundles use a separate `diagnostic` kind with
+`promotion_eligible: false`; the successful-result verifier must reject them.
+They exclude secrets, model caches, raw provider responses, qrels, gold
+nuggets, and unrelated task-local files.
 
 ## Non-goals
 

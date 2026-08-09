@@ -14,13 +14,21 @@
   cached-upstream rescore policy, authenticated structural comparison, and
   frozen-plan paired nugget judging, plus strict private baseline/result
   bundles and the one-machine dstack workflow.
-- Latest focused evidence: `uv lock --check`, the real wrapper preflight, shell
-  syntax checks, and 136 focused tests pass. The worktree environment does not
-  include Ruff, so its optional lint command was unavailable; `git diff
-  --check` passes.
-- Next action: run the Task 7 local verification/review gate, package and upload
-  the private baseline, then preview actual dstack offers. No private upload or
-  dstack launch has occurred yet.
+- The minimal private baseline is uploaded and round-trip verified. Archive
+  SHA-256: `ee7d3e3f278842d44489d13663a43613bfa437a0f5bede94cca2d9996dd4137f`;
+  completion-marker SHA-256:
+  `1fb76af1b52fc7b1cb4c3bc10d7dde73e89628c93cf8634e52f332bac2054793`.
+- Independent review found compensated semantic-loss, mismatched candidate
+  population, punctuation-fragment, offer-binding, and concurrency-recording
+  gaps. Test-first fixes now reject local losses, compare both sealed candidate
+  databases over byte-identical candidate requests, bind launch constraints to
+  the approved offer axes, and package the measured four-worker decision. A
+  final review finding now also preserves any failed gate or interrupted run in
+  a distinct marker-last, non-promotable diagnostic bundle.
+- Local verification passes: lock check, shell syntax, compile checks, diff
+  check, real wrapper/dstack-HF preflights, and 453 targeted tests. Next action:
+  finish the independent re-review, commit the fixes, then preview actual
+  dstack offers. No dstack launch has occurred.
 
 ## Global Constraints
 
@@ -31,7 +39,7 @@
 - Planning, retrieval, document materialization, and passage scoring are fail-closed cache-only/read-only.
 - Sentence scoring and similarity may use local GPU work. Canonicalization may make bounded hosted calls.
 - Reuse existing baseline `plan.json` bytes and make at most 22 candidate-arm judge calls; make no planner calls.
-- Use one on-demand machine, one GPU with at least 48 GB VRAM, 32 GB RAM, and 100 GB disk.
+- Use one on-demand machine, one H200/H100 GPU with at least 80 GB VRAM, 64 GB RAM, and 100 GB disk.
 - Topic 407 validates first. The full run uses `execution.topic_workers: 4`.
 - Keep caches, outputs, evidence, nuggets, provider responses, and reports private and out of git.
 - Ignore Modal completely: no Modal dependency, config key, import, test, or execution path.
@@ -246,7 +254,7 @@ old: Housing Costs | Rents soared. | from Dubai and
 fixed: Housing Costs + Rents soared because demand increased. | Prices rose 17%.
 ```
 
-Assert exact source-unit and candidate counts, median lengths, sub-40 fractions, fragment-proxy counts, first-position fragment status, canonical nugget lengths, and source containment. Source-unit baselines are nonblank `splitlines()` over the authenticated selected-document text; fixed units come from the production sentence/paragraph segmenter over those exact same bytes. These catch reading unauthenticated manifest totals or comparing different document populations.
+Assert exact source-unit and candidate counts, median lengths, sub-40 fractions, fragment-proxy counts, first-position fragment status, canonical nugget lengths, and source containment. Source-unit baselines are nonblank `splitlines()` over the byte-sealed candidate-request sources; fixed units come from the production sentence/paragraph segmenter over those exact same request bytes. These catch reading unauthenticated manifest totals or comparing different document populations.
 
 - [ ] **Step 2: Verify RED**
 
@@ -258,7 +266,12 @@ Expected: module import failure.
 
 - [ ] **Step 3: Implement authenticated loaders and metrics**
 
-Open each sealed `TopicRecords` database with its records manifest and shared `DocumentStore`, call `load_candidates()`, validate selections with `load_validated_selection_artifacts`, and load both authenticated generation handoffs. Require identical topic/narrative, decomposition, retrieval, passage, and selected-document source-seal identities before comparison. Candidate IDs may differ.
+Authenticate both old and fixed `records.sqlite3` files through their canonical
+checkpoint and records manifests. Read old `exact_rules_v1` candidate spans
+through the dedicated read-only legacy validator; also revalidate the fixed
+database through current `TopicRecords`. Require byte-identical sealed
+candidate requests plus identical topic/narrative and upstream identities.
+Candidate IDs may differ.
 
 Use deterministic definitions:
 
@@ -332,7 +345,7 @@ Use a frozen plan where old is `partial` and fixed is `full`. Assert required-co
 .venv/bin/python -m pytest code/tests/test_cached_segmentation_validation.py -k semantic -q
 ```
 
-For each topic, validate `retrieval_nugget_coverage_v2/<topic>`, seed fixed state, call `run_coverage_evaluation(mode="resume", allow_hosted_calls=True)`, and reload the completed fixed state. Emit old/new label vectors and macro scores. Gate only when macro required coverage and strict-full rate do not regress; list every per-obligation regression for review.
+For each topic, validate `retrieval_nugget_coverage_v2/<topic>`, seed fixed state, call `run_coverage_evaluation(mode="resume", allow_hosted_calls=True)`, and reload the completed fixed state. Emit old/new label vectors and macro scores. Require macro, per-topic, and per-obligation non-regression; unrelated gains never compensate a local loss. Equal semantic coverage is valid only with an explicit fixed-output structural readability improvement.
 
 - [ ] **Step 6: Run both suites and commit**
 
@@ -362,6 +375,9 @@ git commit -m "Compare nuggets against frozen coverage plans"
 - CLI `verify-baseline DIR`.
 - CLI `pack --run-root PATH --validation-root PATH --destination DIR`.
 - CLI `verify DIR`.
+- CLI `pack-diagnostic --run-root PATH --validation-root PATH --destination DIR
+  --run-id ID --revision SHA --topic ID... --stage NAME --exit-status N`.
+- CLI `verify-diagnostic DIR`.
 - Each command produces exactly `bundle.tar.zst` and `bundle-complete.json`. Baseline markers bind the handoff plus 22 complete coverage directories. Result markers bind archive/member hashes, run ID, Git revision, topics, retrieval export, operation manifest, and both comparisons.
 
 - [ ] **Step 1: Write hostile archive and round-trip tests**
@@ -410,7 +426,10 @@ run_cached_segmentation_validation.sh [--preflight]
 ```
 
 ```text
-apply_cached_segmentation_validation.sh --preview|--launch --name NAME -- WRAPPER_ARGS
+apply_cached_segmentation_validation.sh --preview|--launch --name NAME \
+  [--approved-backend NAME --approved-region NAME \
+   --approved-instance-type NAME --approved-gpu H200|H100 \
+   --approved-hourly-price PRICE] -- WRAPPER_ARGS
 ```
 
 - [ ] **Step 1: Write executable workflow tests first**
@@ -429,19 +448,30 @@ Follow the existing cache-shard launcher for committed-only transport, secret-sa
 
 - [ ] **Step 4: Implement canary, warm probe, full run, and validation**
 
-Generate ignored configs from tracked `configs/rag25_competition_retrieval_v1.yaml`:
+Generate one ignored four-worker config from tracked
+`configs/rag25_competition_retrieval_v1.yaml`. Extend one run namespace so
+topic receipts from the canary and probe are resumed rather than recomputed:
 
 ```text
-canary 407: one worker
-warm probe 14,31: two workers
+canary 407: one active topic
+warm probe 14,31: two active topics with peak-memory sampling
 final 22: four workers
 ```
 
-All share the restored downstream cache, so canary/probe sentence, similarity, and canonical results become final-run hits. Run topic 407 structural validation before continuing. After full export, run all structural and frozen-plan semantic checks, then pack/upload/round-trip-verify the result.
+Run topic 407 structural validation before continuing. Project four-worker
+memory from the two-topic probe and stop if it exceeds 90% of device memory.
+Package the canonical concurrency decision with the final structural and
+frozen-plan semantic checks, then upload and round-trip verify the result. A
+nonzero exit packages available completed checkpoint phases, comparisons, and
+coverage states into a distinct marker-last diagnostic bundle that is
+explicitly ineligible for promotion.
 
 - [ ] **Step 5: Add task configuration**
 
-Use the pinned `huggingface/trl` image digest and launcher sentinel. Map secret names only. Configure one on-demand performance GPU pool verified against dstack 0.20.29, at least 48 GB VRAM, 32 GB RAM, 100 GB disk, `max_duration: 5h`, hard price cap, RunPod/Vast.ai, and bounded `no-capacity` retry. Exclude A40 unless faster offers are unavailable and separately approved.
+Use the pinned `huggingface/trl` image digest and launcher sentinel. Map secret
+names only. Configure one on-demand H200/H100 pool verified against dstack
+0.20.29, at least 80 GB VRAM, 64 GB RAM, 100 GB disk, `max_duration: 5h`, hard
+price cap, RunPod/Vast.ai, and bounded `no-capacity` retry.
 
 - [ ] **Step 6: Verify GREEN and commit**
 
@@ -524,7 +554,10 @@ Show the dstack table unchanged. Report GPU/provider/region identities, hourly p
 
 - [ ] **Step 6: Submit exactly once after offer approval**
 
-Run the same launcher with `--launch`, which must call `dstack apply -y -d` once. Check `dstack ps -v`, then monitor logs and GPU memory/utilization without a blocking attach.
+Run the same launcher with `--launch` and all five approved offer fields. It
+must re-plan with the exact backend, region, instance type, GPU, and price cap,
+then call the identically constrained `dstack apply -y -d` once. Check `dstack
+ps -v`, then monitor logs and GPU memory/utilization without a blocking attach.
 
 - [ ] **Step 7: Enforce canary and full gates**
 

@@ -20,6 +20,16 @@ die() {
   exit 2
 }
 
+propagate_probe_failure() {
+  local status=$1
+  if [[ $status == 0 ]]; then
+    return 0
+  fi
+  printf 'ERROR: two-topic concurrency probe failed with status %s\n' \
+    "$status" >&2
+  return "$status"
+}
+
 while (($#)); do
   case "$1" in
     --preflight) preflight=true; shift ;;
@@ -70,6 +80,7 @@ PY
 
 source_prefix="hf://buckets/${BUCKET_ID}/${BUCKET_PREFIX}/experiments/${source_run_id}"
 result_prefix="hf://buckets/${BUCKET_ID}/${BUCKET_PREFIX}/experiments/${run_id}"
+diagnostic_prefix="${result_prefix}-diagnostic"
 if $preflight; then
   printf '%s\n' \
     "preflight=ok" \
@@ -82,6 +93,7 @@ if $preflight; then
     "source_prefix=$source_prefix" \
     "baseline_prefix=$baseline_uri" \
     "result_prefix=$result_prefix" \
+    "diagnostic_prefix=$diagnostic_prefix" \
     "planning_calls_expected=0" \
     "retrieval_network_calls_expected=0" \
     "passage_model_batches_expected=0" \
@@ -125,13 +137,91 @@ baseline_output="$work_root/baseline-output"
 validation_root="$work_root/validation"
 result_bundle="$work_root/result-bundle"
 roundtrip_bundle="$work_root/roundtrip-bundle"
+diagnostic_bundle="$work_root/diagnostic-bundle"
+diagnostic_roundtrip_bundle="$work_root/diagnostic-roundtrip-bundle"
 config_root="$REPO_ROOT/configs/local"
+final_output="$REPO_ROOT/outputs/$run_id"
 mkdir -p "$bundle_root" "$cache_root" "$source_outputs" "$baseline_bundle" \
   "$baseline_output" "$validation_root" "$result_bundle" "$roundtrip_bundle" \
-  "$config_root"
+  "$diagnostic_bundle" "$diagnostic_roundtrip_bundle" "$config_root"
 chmod 700 "$work_root" "$cache_root" "$source_outputs" "$validation_root"
 export TREC_RAG_CACHE_ROOT="$cache_root"
 export HF_HOME="$work_root/huggingface"
+
+diagnostic_enabled=false
+diagnostic_stage="authenticated-input-download"
+diagnostic_upload_number=0
+upload_diagnostic() {
+  local source=$1
+  diagnostic_upload_number=$((diagnostic_upload_number + 1))
+  local upload_stage="$work_root/diagnostic-upload-$diagnostic_upload_number"
+  mkdir -m 700 "$upload_stage"
+  cp -- "$source" "$upload_stage/$(basename "$source")"
+  hf_cli buckets sync "$upload_stage" "$diagnostic_prefix" --ignore-existing
+}
+preserve_failure() {
+  local original_status=$?
+  trap - EXIT
+  if [[ $original_status == 0 || $diagnostic_enabled != true ]]; then
+    exit "$original_status"
+  fi
+  set +e
+  printf 'Preserving non-promotable diagnostic evidence for stage %s\n' \
+    "$diagnostic_stage" >&2
+  local revision
+  revision=$(git rev-parse HEAD)
+  local diagnostic_args=()
+  local topic_id
+  for topic_id in "${TOPICS[@]}"; do diagnostic_args+=(--topic "$topic_id"); done
+  "$venv_python" -m trec_rag.cached_segmentation_result_bundle pack-diagnostic \
+    --run-root "$final_output" --validation-root "$validation_root" \
+    --destination "$diagnostic_bundle" --run-id "$run_id" \
+    --revision "$revision" --stage "$diagnostic_stage" \
+    --exit-status "$original_status" "${diagnostic_args[@]}"
+  local diagnostic_status=$?
+  if [[ $diagnostic_status == 0 ]]; then
+    "$venv_python" -m trec_rag.cached_segmentation_result_bundle \
+      verify-diagnostic "$diagnostic_bundle"
+    diagnostic_status=$?
+  fi
+  local diagnostic_archive="$diagnostic_bundle/bundle.tar.zst"
+  local diagnostic_completion="$diagnostic_bundle/bundle-complete.json"
+  if [[ $diagnostic_status == 0 ]]; then
+    upload_diagnostic "$diagnostic_archive"
+    diagnostic_status=$?
+  fi
+  if [[ $diagnostic_status == 0 ]]; then
+    upload_diagnostic "$diagnostic_completion"
+    diagnostic_status=$?
+  fi
+  if [[ $diagnostic_status == 0 ]]; then
+    hf_cli buckets cp "$diagnostic_prefix/bundle.tar.zst" \
+      "$diagnostic_roundtrip_bundle/bundle.tar.zst"
+    diagnostic_status=$?
+  fi
+  if [[ $diagnostic_status == 0 ]]; then
+    hf_cli buckets cp "$diagnostic_prefix/bundle-complete.json" \
+      "$diagnostic_roundtrip_bundle/bundle-complete.json"
+    diagnostic_status=$?
+  fi
+  if [[ $diagnostic_status == 0 ]]; then
+    cmp -s "$diagnostic_archive" \
+      "$diagnostic_roundtrip_bundle/bundle.tar.zst" \
+      && cmp -s "$diagnostic_completion" \
+        "$diagnostic_roundtrip_bundle/bundle-complete.json" \
+      && "$venv_python" -m trec_rag.cached_segmentation_result_bundle \
+        verify-diagnostic "$diagnostic_roundtrip_bundle"
+    diagnostic_status=$?
+  fi
+  if [[ $diagnostic_status == 0 ]]; then
+    printf '%s\n' "diagnostic_status=complete" \
+      "diagnostic_prefix=$diagnostic_prefix" >&2
+  else
+    printf 'ERROR: diagnostic preservation failed with status %s\n' \
+      "$diagnostic_status" >&2
+  fi
+  exit "$original_status"
+}
 
 hf_cli buckets --help >/dev/null
 hf_cli auth whoami --format json >/dev/null
@@ -157,6 +247,13 @@ hf_cli buckets list "$result_prefix" --recursive --format json >"$work_root/resu
 "$venv_python" -m trec_rag.hf_bucket_listing require-empty \
   "$work_root/result-before.json" \
   --topic-prefix "${BUCKET_PREFIX}/experiments/${run_id}"
+hf_cli buckets list "$diagnostic_prefix" --recursive --format json \
+  >"$work_root/diagnostic-before.json"
+"$venv_python" -m trec_rag.hf_bucket_listing require-empty \
+  "$work_root/diagnostic-before.json" \
+  --topic-prefix "${BUCKET_PREFIX}/experiments/${run_id}-diagnostic"
+diagnostic_enabled=true
+trap preserve_failure EXIT
 
 bundle_dirs=()
 for topic_id in "${TOPICS[@]}"; do
@@ -230,16 +327,12 @@ if len(select_configured_topics(loaded)) != 22:
 PY
 }
 
-canary_config="$config_root/${run_id}-canary.yaml"
-warm_config="$config_root/${run_id}-warm.yaml"
 final_config="$config_root/${run_id}.yaml"
-make_config "$canary_config" "${run_id}-canary" 1
-make_config "$warm_config" "${run_id}-warm" 2
 make_config "$final_config" "$run_id" 4
 
-"$venv_python" -m trec_rag.competition_retrieval "$canary_config" \
+diagnostic_stage="canary-rescore"
+"$venv_python" -m trec_rag.competition_retrieval "$final_config" \
   --topic 407 --cached-upstream-rescore
-canary_output="$REPO_ROOT/outputs/${run_id}-canary"
 baseline_handoff="$baseline_restore/generation_handoff_manifest.json"
 baseline_coverage="$baseline_restore/retrieval_nugget_coverage_v2"
 "$venv_python" - "$baseline_handoff" "$work_root/baseline-407.json" <<'PY'
@@ -253,29 +346,126 @@ if len(topics) != 1:
     raise SystemExit("baseline topic 407 changed")
 write_generation_handoff(destination, GenerationHandoff(loaded.producer, topics))
 PY
-"$venv_python" -m trec_rag.cached_segmentation_validation structural \
-  --baseline-output-root "$baseline_output" \
-  --candidate-output-root "$canary_output" \
-  --document-store-root "$cache_root/documents" \
-  --baseline-handoff "$work_root/baseline-407.json" \
-  --candidate-handoff "$canary_output/generation_handoff_manifest.json" \
-  --output-dir "$validation_root/canary" --topic 407
-
-"$venv_python" -m trec_rag.competition_retrieval "$warm_config" \
-  --topic 14 --topic 31 --cached-upstream-rescore
-"$venv_python" -m trec_rag.competition_retrieval "$final_config" \
-  --cached-upstream-rescore
-final_output="$REPO_ROOT/outputs/$run_id"
-
-topic_args=()
-for topic_id in "${TOPICS[@]}"; do topic_args+=(--topic "$topic_id"); done
+diagnostic_stage="canary-structural-validation"
 "$venv_python" -m trec_rag.cached_segmentation_validation structural \
   --baseline-output-root "$baseline_output" \
   --candidate-output-root "$final_output" \
-  --document-store-root "$cache_root/documents" \
+  --document-store-root "$cache_root/documents/v1" \
+  --baseline-handoff "$work_root/baseline-407.json" \
+  --candidate-handoff "$final_output/generation_handoff_manifest.json" \
+  --output-dir "$validation_root/canary" --topic 407
+
+# The global cache-operation marker covers the selected invocation, while the
+# topic receipts are immutable and resumable. Remove only that expandable root
+# marker before extending this same run namespace with the probe and full set.
+"$venv_python" - "$final_output/cache-operation-manifest.json" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+if not path.is_file() or path.is_symlink():
+    raise SystemExit("canary cache-operation marker is missing or unsafe")
+path.unlink()
+PY
+
+diagnostic_stage="concurrency-probe"
+probe_memory="$validation_root/warm-probe-memory.csv"
+gpu_identity="$validation_root/gpu-identity.csv"
+nvidia-smi --query-gpu=name,uuid,driver_version --format=csv,noheader \
+  >"$gpu_identity"
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits \
+  >"$probe_memory"
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits \
+  --loop=1 >>"$probe_memory" &
+monitor_pid=$!
+probe_started=$(date +%s)
+set +e
+"$venv_python" -m trec_rag.competition_retrieval "$final_config" \
+  --topic 407 --topic 14 --topic 31 --cached-upstream-rescore
+probe_status=$?
+set -e
+probe_finished=$(date +%s)
+kill "$monitor_pid" 2>/dev/null || true
+wait "$monitor_pid" 2>/dev/null || true
+propagate_probe_failure "$probe_status"
+
+concurrency_decision="$validation_root/concurrency-decision.json"
+"$venv_python" - "$probe_memory" "$concurrency_decision" \
+  "$probe_started" "$probe_finished" "$run_id" "$final_config" \
+  "$gpu_identity" <<'PY'
+from pathlib import Path
+from hashlib import sha256
+import csv, json, sys
+source, destination = map(Path, sys.argv[1:3])
+started, finished = map(int, sys.argv[3:5])
+run_id, config_path, gpu_identity_path = sys.argv[5:]
+samples = []
+for line in source.read_text().splitlines():
+    fields = [field.strip() for field in line.split(",")]
+    if len(fields) != 2:
+        raise SystemExit("GPU probe row changed")
+    samples.append(tuple(map(int, fields)))
+if not samples or len({total for _, total in samples}) != 1:
+    raise SystemExit("GPU probe samples are incomplete")
+idle = samples[0][0]
+peak = max(used for used, _ in samples)
+total = samples[0][1]
+projected = idle + 2 * max(0, peak - idle)
+safe_limit = int(total * 0.90)
+if projected > safe_limit:
+    raise SystemExit(
+        f"four-worker projection {projected} MiB exceeds 90% limit {safe_limit} MiB"
+    )
+with Path(gpu_identity_path).open(newline="") as source_file:
+    identity_rows = [tuple(field.strip() for field in row) for row in csv.reader(source_file)]
+if len(identity_rows) != 1 or len(identity_rows[0]) != 3:
+    raise SystemExit("expected exactly one GPU identity")
+gpu_name, gpu_uuid, driver_version = identity_rows[0]
+if not any(model in gpu_name for model in ("H100", "H200")) or not gpu_uuid.startswith("GPU-"):
+    raise SystemExit("GPU identity differs from the approved task class")
+value = {
+    "schema_version": "cached-segmentation-concurrency-decision-v1",
+    "run_id": run_id,
+    "config_sha256": sha256(Path(config_path).read_bytes()).hexdigest(),
+    "gpu_name": gpu_name,
+    "gpu_uuid": gpu_uuid,
+    "driver_version": driver_version,
+    "probe_topics": ["14", "31"],
+    "probe_workers": 2,
+    "selected_workers": 4,
+    "elapsed_seconds": finished - started,
+    "idle_memory_mib": idle,
+    "peak_memory_mib": peak,
+    "total_memory_mib": total,
+    "projected_four_worker_memory_mib": projected,
+    "safe_limit_memory_mib": safe_limit,
+}
+destination.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+PY
+
+"$venv_python" - "$final_output/cache-operation-manifest.json" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+if not path.is_file() or path.is_symlink():
+    raise SystemExit("probe cache-operation marker is missing or unsafe")
+path.unlink()
+PY
+
+diagnostic_stage="full-rescore"
+"$venv_python" -m trec_rag.competition_retrieval "$final_config" \
+  --cached-upstream-rescore
+
+topic_args=()
+for topic_id in "${TOPICS[@]}"; do topic_args+=(--topic "$topic_id"); done
+diagnostic_stage="full-structural-validation"
+"$venv_python" -m trec_rag.cached_segmentation_validation structural \
+  --baseline-output-root "$baseline_output" \
+  --candidate-output-root "$final_output" \
+  --document-store-root "$cache_root/documents/v1" \
   --baseline-handoff "$baseline_handoff" \
   --candidate-handoff "$final_output/generation_handoff_manifest.json" \
   --output-dir "$validation_root" "${topic_args[@]}"
+diagnostic_stage="semantic-validation"
 "$venv_python" -m trec_rag.cached_segmentation_validation semantic \
   --baseline-handoff "$baseline_handoff" \
   --baseline-coverage-root "$baseline_coverage" \
@@ -283,6 +473,7 @@ for topic_id in "${TOPICS[@]}"; do topic_args+=(--topic "$topic_id"); done
   --candidate-coverage-root "$validation_root/retrieval_nugget_coverage_v2" \
   --output-dir "$validation_root" "${topic_args[@]}"
 
+diagnostic_stage="result-pack"
 "$venv_python" -m trec_rag.cached_segmentation_result_bundle pack \
   --run-root "$final_output" --validation-root "$validation_root" \
   --destination "$result_bundle"
@@ -300,6 +491,7 @@ upload_one() {
   cp -- "$source" "$stage/$(basename "$source")"
   hf_cli buckets sync "$stage" "$result_prefix" --ignore-existing
 }
+diagnostic_stage="result-upload"
 hf_cli buckets list "$result_prefix" --recursive --format json >"$work_root/result-preupload.json"
 "$venv_python" -m trec_rag.hf_bucket_listing require-empty \
   "$work_root/result-preupload.json" \
@@ -307,6 +499,7 @@ hf_cli buckets list "$result_prefix" --recursive --format json >"$work_root/resu
 upload_one "$result_archive"
 upload_one "$result_completion"
 
+diagnostic_stage="result-roundtrip"
 hf_cli buckets cp "$result_prefix/bundle.tar.zst" "$roundtrip_bundle/bundle.tar.zst"
 hf_cli buckets cp "$result_prefix/bundle-complete.json" "$roundtrip_bundle/bundle-complete.json"
 cmp -s "$result_archive" "$roundtrip_bundle/bundle.tar.zst" \

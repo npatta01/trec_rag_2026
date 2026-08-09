@@ -291,6 +291,7 @@ def _result_fixture(tmp_path: Path) -> tuple[Path, Path]:
             "run_id": "fixture-run",
             "export_code_commit": "c" * 40,
             "selected_topic_ids": list(TOPICS),
+            "execution": {"topic_workers": 4},
             "topic_receipts": topic_receipts,
             "artifacts": {
                 "generation_handoff_manifest.json": {
@@ -358,6 +359,8 @@ def _result_fixture(tmp_path: Path) -> tuple[Path, Path]:
             comparison.update(
                 {"planner_calls": 0, "candidate_judge_calls": len(TOPICS)}
             )
+        else:
+            comparison["improvement_observed"] = True
         comparison_body = _write_json(
             validation_root / f"{kind}-comparison.json", comparison
         )
@@ -372,6 +375,26 @@ def _result_fixture(tmp_path: Path) -> tuple[Path, Path]:
                 "gates_passed": True,
             },
         )
+    _write_json(
+        validation_root / "concurrency-decision.json",
+        {
+            "schema_version": "cached-segmentation-concurrency-decision-v1",
+            "run_id": "fixture-run",
+            "config_sha256": config_sha,
+            "gpu_name": "NVIDIA H100 80GB HBM3",
+            "gpu_uuid": "GPU-11111111-2222-3333-4444-555555555555",
+            "driver_version": "575.57.08",
+            "probe_topics": ["14", "31"],
+            "probe_workers": 2,
+            "selected_workers": 4,
+            "elapsed_seconds": 120,
+            "idle_memory_mib": 1000,
+            "peak_memory_mib": 20000,
+            "total_memory_mib": 81559,
+            "projected_four_worker_memory_mib": 39000,
+            "safe_limit_memory_mib": 73403,
+        },
+    )
     (run_root / ".retrieval-export.lock").write_text("excluded")
     return run_root, validation_root
 
@@ -461,6 +484,13 @@ def test_baseline_bundle_roundtrip_is_deterministic_and_revalidates_each_topic(
         "bundle.tar.zst",
         "bundle-complete.json",
     }
+    restored = tmp_path / "restored"
+    bundle_module.restore_baseline_bundle(first, restored)
+    assert (restored / "generation_handoff_manifest.json").is_file()
+    assert sorted((restored / "retrieval_nugget_coverage_v2").iterdir()) == [
+        restored / "retrieval_nugget_coverage_v2" / topic_id
+        for topic_id in TOPICS
+    ]
 
 
 def test_baseline_pack_rejects_missing_completed_topic(tmp_path: Path) -> None:
@@ -495,6 +525,176 @@ def test_result_bundle_roundtrip_binds_run_revision_topics_and_excludes_locks(
     assert all(".lock" not in member.path for member in verified.members)
     assert any(member.path.endswith("records.sqlite3") for member in verified.members)
     assert any("semantic-comparison.json" in member.path for member in verified.members)
+    assert any("concurrency-decision.json" in member.path for member in verified.members)
+
+
+def test_diagnostic_bundle_preserves_failed_semantic_evidence_and_is_nonpromotable(
+    tmp_path: Path,
+) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    comparison_path = validation_root / "semantic-comparison.json"
+    comparison = json.loads(comparison_path.read_text())
+    comparison["gates_passed"] = False
+    comparison_body = _write_json(comparison_path, comparison)
+    manifest_path = validation_root / "semantic-comparison-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["comparison_bytes"] = len(comparison_body)
+    manifest["comparison_sha256"] = _digest(comparison_body)
+    manifest["gates_passed"] = False
+    _write_json(manifest_path, manifest)
+
+    bundle = tmp_path / "diagnostic"
+    packed = bundle_module.pack_diagnostic_bundle(
+        run_root,
+        validation_root,
+        bundle,
+        run_id="fixture-run",
+        revision="c" * 40,
+        topic_ids=TOPICS,
+        stage="semantic-validation",
+        exit_status=2,
+    )
+    verified = bundle_module.verify_diagnostic_bundle(bundle)
+
+    assert packed == verified
+    assert verified.bundle_kind == "diagnostic"
+    assert any(
+        member.path == "validation/semantic-comparison.json"
+        for member in verified.members
+    )
+    assert any(
+        member.path.endswith("retrieval_nugget_coverage_v2/14/judgments.json")
+        for member in verified.members
+    )
+    with pytest.raises(bundle_module.ResultBundleIntegrityError, match="kind"):
+        bundle_module.verify_result_bundle(bundle)
+
+
+def test_diagnostic_bundle_tolerates_partial_interruption_and_keeps_completed_phase(
+    tmp_path: Path,
+) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root = tmp_path / "source" / "run"
+    validation_root = tmp_path / "source" / "validation"
+    _handoff(run_root / "generation_handoff_manifest.json", topics=("14",))
+    _write_phase(run_root / "14", "14", "retrieval")
+    validation_root.mkdir(parents=True)
+
+    bundle = tmp_path / "diagnostic"
+    bundle_module.pack_diagnostic_bundle(
+        run_root,
+        validation_root,
+        bundle,
+        run_id="fixture-run",
+        revision="c" * 40,
+        topic_ids=TOPICS,
+        stage="concurrency-probe",
+        exit_status=137,
+    )
+    verified = bundle_module.verify_diagnostic_bundle(bundle)
+
+    paths = {member.path for member in verified.members}
+    assert "diagnostic-status.json" in paths
+    assert "run/generation_handoff_manifest.json" in paths
+    assert "run/14/retrieval/complete.json" in paths
+    assert "run/14/retrieval/evidence-bundle.json" in paths
+    assert all(not path.startswith("run/31/") for path in paths)
+
+
+def test_diagnostic_bundle_preserves_canary_comparison_after_handoff_expansion(
+    tmp_path: Path,
+) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    canary = validation_root / "canary"
+    comparison = json.loads(
+        (validation_root / "structural-comparison.json").read_text()
+    )
+    comparison["topic_ids"] = ["14"]
+    comparison["candidate_handoff_sha256"] = "f" * 64
+    comparison_body = _write_json(canary / "structural-comparison.json", comparison)
+    manifest = json.loads(
+        (validation_root / "structural-comparison-manifest.json").read_text()
+    )
+    manifest["topic_ids"] = ["14"]
+    manifest["comparison_bytes"] = len(comparison_body)
+    manifest["comparison_sha256"] = _digest(comparison_body)
+    _write_json(canary / "structural-comparison-manifest.json", manifest)
+
+    bundle = tmp_path / "diagnostic"
+    bundle_module.pack_diagnostic_bundle(
+        run_root,
+        validation_root,
+        bundle,
+        run_id="fixture-run",
+        revision="c" * 40,
+        topic_ids=TOPICS,
+        stage="semantic-validation",
+        exit_status=2,
+    )
+    verified = bundle_module.verify_diagnostic_bundle(bundle)
+
+    assert any(
+        member.path == "validation/canary/structural-comparison.json"
+        for member in verified.members
+    )
+
+
+def test_diagnostic_bundle_requires_a_failure_exit_status(tmp_path: Path) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    with pytest.raises(ValueError, match="failure"):
+        bundle_module.pack_diagnostic_bundle(
+            run_root,
+            validation_root,
+            tmp_path / "diagnostic",
+            run_id="fixture-run",
+            revision="c" * 40,
+            topic_ids=TOPICS,
+            stage="semantic-validation",
+            exit_status=0,
+        )
+
+
+def test_diagnostic_bundle_skips_an_interrupted_unsealed_comparison(
+    tmp_path: Path,
+) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root = tmp_path / "source" / "run"
+    validation_root = tmp_path / "source" / "validation"
+    run_root.mkdir(parents=True)
+    _write_json(
+        validation_root / "semantic-comparison.json",
+        {
+            "schema_version": "cached-segmentation-semantic-comparison-v1",
+            "candidate_handoff_sha256": "f" * 64,
+            "topic_ids": list(TOPICS),
+            "gates_passed": False,
+        },
+    )
+
+    bundle = tmp_path / "diagnostic"
+    bundle_module.pack_diagnostic_bundle(
+        run_root,
+        validation_root,
+        bundle,
+        run_id="fixture-run",
+        revision="c" * 40,
+        topic_ids=TOPICS,
+        stage="semantic-validation",
+        exit_status=143,
+    )
+    verified = bundle_module.verify_diagnostic_bundle(bundle)
+
+    assert {member.path for member in verified.members} == {
+        "diagnostic-status.json"
+    }
 
 
 @pytest.mark.parametrize("field", ["run_id", "export_code_commit"])
@@ -588,4 +788,88 @@ def test_result_pack_rejects_wrong_topic_order_and_missing_comparison_manifest(
     with pytest.raises(bundle_module.ResultBundleIntegrityError, match="manifest"):
         bundle_module.pack_result_bundle(
             run_root, validation_root, tmp_path / "missing-manifest-bundle"
+        )
+
+
+def test_result_pack_rejects_structural_pass_without_observed_improvement(
+    tmp_path: Path,
+) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    comparison_path = validation_root / "structural-comparison.json"
+    comparison = json.loads(comparison_path.read_text())
+    comparison["improvement_observed"] = False
+    comparison_body = _write_json(comparison_path, comparison)
+    manifest_path = validation_root / "structural-comparison-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["comparison_bytes"] = len(comparison_body)
+    manifest["comparison_sha256"] = _digest(comparison_body)
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="structural comparison identity",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
+        )
+
+
+def test_result_pack_rejects_unsafe_concurrency_decision(tmp_path: Path) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    path = validation_root / "concurrency-decision.json"
+    value = json.loads(path.read_text())
+    value["projected_four_worker_memory_mib"] = 80000
+    _write_json(path, value)
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="concurrency decision",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
+        )
+
+
+def test_result_pack_rejects_internally_inconsistent_concurrency_decision(
+    tmp_path: Path,
+) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    path = validation_root / "concurrency-decision.json"
+    value = json.loads(path.read_text())
+    value["projected_four_worker_memory_mib"] = 0
+    value["safe_limit_memory_mib"] = 0
+    _write_json(path, value)
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="concurrency decision",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
+        )
+
+
+def test_result_pack_rejects_concurrency_decision_from_another_run(
+    tmp_path: Path,
+) -> None:
+    import trec_rag.cached_segmentation_result_bundle as bundle_module
+
+    run_root, validation_root = _result_fixture(tmp_path / "source")
+    path = validation_root / "concurrency-decision.json"
+    value = json.loads(path.read_text())
+    value["run_id"] = "different-run"
+    _write_json(path, value)
+
+    with pytest.raises(
+        bundle_module.ResultBundleIntegrityError,
+        match="concurrency decision",
+    ):
+        bundle_module.pack_result_bundle(
+            run_root, validation_root, tmp_path / "bundle"
         )

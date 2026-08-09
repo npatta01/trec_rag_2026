@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path
 
 import pytest
 
+import trec_rag.cached_segmentation_validation as validation_module
 from trec_rag.cached_segmentation_validation import (
+    _semantic_gate_failures,
     compare_semantic_runs,
     compare_structural_runs,
 )
 from trec_rag.document_store import DocumentStore
+from trec_rag.evidence_store import _request_row
 from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_evidence import (
     CandidateSubnarrative,
@@ -124,9 +128,9 @@ def _semantic_judgment(label: str) -> dict[str, object]:
     }
 
 
-def _fixed_candidates():
+def _candidate_request() -> ExtractiveCandidateRequest:
     scoring_text, _ = _scoring_text_and_boundaries(SOURCE)
-    request = ExtractiveCandidateRequest(
+    return ExtractiveCandidateRequest(
         topic_id=TOPIC_ID,
         document_id="doc-1",
         source=SOURCE,
@@ -147,22 +151,66 @@ def _fixed_candidates():
             ),
         ),
     )
-    return extract_document_candidates(request, _Scorer())
 
 
-def _write_records(output_root: Path, store: DocumentStore):
+def _fixed_candidates():
+    return extract_document_candidates(_candidate_request(), _Scorer())
+
+
+def _write_records(
+    output_root: Path,
+    store: DocumentStore,
+    *,
+    run_id: str,
+):
     candidates = _fixed_candidates()
     builder = TopicRecordsBuilder(
         output_root / TOPIC_ID,
         TOPIC_ID,
         store,
-        run_id="fixed-run",
+        run_id=run_id,
     )
     builder.bind_document("doc-1", SOURCE, expected_sha256=_digest(SOURCE))
     for candidate in candidates:
         builder.add_candidate(candidate)
     builder.publish({"fixture": "cached-segmentation-validation"})
     return candidates
+
+
+def _write_candidate_inputs(output_root: Path) -> None:
+    topic_root = output_root / TOPIC_ID
+    request = _candidate_request()
+    request_body = _canonical(_request_row(request))
+    request_path = topic_root / "canonical/handoff/candidate-requests.jsonl"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_bytes(request_body)
+    handoff_body = _canonical(
+        {
+            "topic_id": TOPIC_ID,
+            "requests_file": request_path.name,
+            "requests_sha256": _digest(request_body),
+            "request_schema_version": "extractive_candidate_request_v1",
+            "document_count": 1,
+        }
+    )
+    handoff_path = request_path.with_name("handoff-manifest.json")
+    handoff_path.write_bytes(handoff_body)
+    records_path = topic_root / "records.sqlite3"
+    records_manifest_path = topic_root / "canonical/records-manifest.json"
+    artifacts = []
+    for relative, path in (
+        ("canonical/handoff/candidate-requests.jsonl", request_path),
+        ("canonical/handoff/handoff-manifest.json", handoff_path),
+        ("records.sqlite3", records_path),
+        ("canonical/records-manifest.json", records_manifest_path),
+    ):
+        body = path.read_bytes()
+        artifacts.append(
+            {"relative_path": relative, "bytes": len(body), "sha256": _digest(body)}
+        )
+    (topic_root / "canonical/complete.json").write_bytes(
+        _canonical({"artifacts": artifacts})
+    )
 
 
 def _span(text: str) -> EvidenceSourceSpan:
@@ -281,16 +329,23 @@ def _fixture(tmp_path: Path):
     store_root = tmp_path / "objects"
     store = DocumentStore(store_root)
     store.admit_text(SOURCE)
-    candidates = _write_records(candidate_root, store)
+    candidates = _write_records(baseline_root, store, run_id="baseline-run")
+    _write_records(candidate_root, store, run_id="fixed-run")
+    _write_candidate_inputs(baseline_root)
+    _write_candidate_inputs(candidate_root)
     _write_sealed_upstream(baseline_root)
     _write_sealed_upstream(candidate_root)
-    old_text = "from Dubai and"
+    old = min(candidates, key=lambda candidate: (len(candidate.text), candidate.text))
     fixed = max(candidates, key=lambda candidate: (len(candidate.text), candidate.text))
     baseline_handoff = baseline_root / "generation_handoff_manifest.json"
     candidate_handoff = candidate_root / "generation_handoff_manifest.json"
     write_generation_handoff(
         baseline_handoff,
-        _handoff(run_id="baseline-run", evidence_id="old-fragment", evidence_text=old_text),
+        _handoff(
+            run_id="baseline-run",
+            evidence_id=old.candidate_nugget_id,
+            evidence_text=old.text,
+        ),
     )
     write_generation_handoff(
         candidate_handoff,
@@ -321,14 +376,20 @@ def test_structural_comparison_authenticates_same_sources_and_improves_fragments
 
     topic = comparison.topics[0]
     assert topic.topic_id == TOPIC_ID
-    assert topic.selected_document_count == 1
+    assert topic.candidate_request_count == 1
+    assert topic.source_document_count == 1
     assert topic.old_line_units.count == 5
     assert topic.fixed_segmentation_units.median_characters > (
         topic.old_line_units.median_characters
     )
     assert topic.baseline_representatives.fragment_count == 1
     assert topic.candidate_representatives.fragment_count == 0
+    assert topic.baseline_candidate_units.count == len(_fixed_candidates())
     assert topic.candidate_units.count == len(_fixed_candidates())
+    assert comparison.aggregate_baseline_candidate_units.count == len(
+        _fixed_candidates()
+    )
+    assert comparison.improvement_observed is True
     assert comparison.aggregate_candidate_representatives.fragment_fraction == 0.0
     assert comparison.gates_passed is True
 
@@ -368,7 +429,7 @@ def test_structural_comparison_reports_aggregate_representative_regression(
         old_handoff,
         _handoff(
             run_id="baseline-run",
-            evidence_id="baseline-good",
+            evidence_id=good.candidate_nugget_id,
             evidence_text=good.text,
         ),
     )
@@ -392,6 +453,68 @@ def test_structural_comparison_reports_aggregate_representative_regression(
 
     assert comparison.gates_passed is False
     assert "aggregate representative fragment fraction worsened" in (
+        comparison.gate_failures
+    )
+
+
+def test_structural_comparison_rejects_unpunctuated_selected_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline_root, candidate_root, store_root, old_handoff, fixed_handoff = _fixture(
+        tmp_path
+    )
+    baseline_text = "Rents soared because demand increased.\nPrices rose 17%."
+    candidate_text = "Prices rose 17%.\nfrom Dubai and\ncontinued mid sentence"
+    old_handoff.unlink()
+    fixed_handoff.unlink()
+    write_generation_handoff(
+        old_handoff,
+        _handoff(
+            run_id="baseline-run",
+            evidence_id="baseline-long",
+            evidence_text=baseline_text,
+        ),
+    )
+    write_generation_handoff(
+        fixed_handoff,
+        _handoff(
+            run_id="fixed-run",
+            evidence_id="candidate-long",
+            evidence_text=candidate_text,
+        ),
+    )
+    loaded = iter(
+        (
+            validation_module._LoadedCandidateTopic(
+                texts=(baseline_text,),
+                candidate_ids=frozenset({"baseline-long"}),
+                kind_counts=(("exact_sentence", 1),),
+            ),
+            validation_module._LoadedCandidateTopic(
+                texts=(baseline_text,),
+                candidate_ids=frozenset({"candidate-long"}),
+                kind_counts=(("exact_sentence", 1),),
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "_load_sealed_candidate_topic",
+        lambda *args, **kwargs: next(loaded),
+    )
+
+    comparison = compare_structural_runs(
+        baseline_output_root=baseline_root,
+        candidate_output_root=candidate_root,
+        document_store_root=store_root,
+        baseline_handoff_path=old_handoff,
+        candidate_handoff_path=fixed_handoff,
+        topic_ids=(TOPIC_ID,),
+    )
+
+    assert comparison.gates_passed is False
+    assert "407: selected evidence fragment fraction worsened" in (
         comparison.gate_failures
     )
 
@@ -486,8 +609,73 @@ def test_semantic_comparison_lists_regression_and_fails_macro_gate(
     assert comparison.topics[0].regressed_obligation_ids == ("f001-o001",)
     assert comparison.gates_passed is False
     assert comparison.gate_failures == (
+        "407: required coverage regressed",
+        "407: strict-full rate regressed",
+        "407: obligation f001-o001 regressed",
         "topic-macro required coverage regressed",
         "topic-macro strict-full rate regressed",
+    )
+
+
+def test_semantic_gate_rejects_compensated_topic_and_obligation_regression(
+    tmp_path: Path,
+) -> None:
+    _, _, _, baseline_handoff, candidate_handoff = _fixture(tmp_path)
+    baseline_coverage = tmp_path / "baseline-coverage"
+    _write_baseline_coverage(baseline_handoff, baseline_coverage, label="partial")
+    comparison = compare_semantic_runs(
+        baseline_handoff_path=baseline_handoff,
+        baseline_coverage_root=baseline_coverage,
+        candidate_handoff_path=candidate_handoff,
+        candidate_coverage_root=tmp_path / "candidate-coverage",
+        topic_ids=(TOPIC_ID,),
+        judge=_CoverageBackend([_semantic_judgment("partial")]),
+    )
+    template = comparison.topics[0]
+    regressed_obligation = replace(
+        template.obligations[0],
+        baseline_label="full",
+        candidate_label="unsupported",
+        label_delta=-1.0,
+    )
+    improved_obligation = replace(
+        template.obligations[0],
+        obligation_id="f001-o002",
+        baseline_label="unsupported",
+        candidate_label="full",
+        label_delta=1.0,
+    )
+    topics = (
+        replace(
+            template,
+            topic_id="loss",
+            required_coverage_delta=-1.0,
+            strict_full_rate_delta=-1.0,
+            obligations=(regressed_obligation,),
+            regressed_obligation_ids=("f001-o001",),
+        ),
+        replace(
+            template,
+            topic_id="gain",
+            required_coverage_delta=1.0,
+            strict_full_rate_delta=1.0,
+            obligations=(improved_obligation,),
+            improved_obligation_ids=("f001-o002",),
+        ),
+    )
+
+    failures = _semantic_gate_failures(
+        topics,
+        baseline_required=0.5,
+        candidate_required=0.5,
+        baseline_strict=0.5,
+        candidate_strict=0.5,
+    )
+
+    assert failures == (
+        "loss: required coverage regressed",
+        "loss: strict-full rate regressed",
+        "loss: obligation f001-o001 regressed",
     )
 
 

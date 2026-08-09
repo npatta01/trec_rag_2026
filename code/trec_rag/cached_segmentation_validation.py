@@ -11,11 +11,13 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import statistics
 import tempfile
 from typing import Any, NoReturn
 
 from trec_rag.document_store import DocumentStore
+from trec_rag.evidence_store import _iter_candidate_requests
 from trec_rag.facet_evidence import _byte_offsets, _source_spans
 from trec_rag.generation_handoff import (
     GenerationHandoff,
@@ -55,10 +57,12 @@ class TextShapeMetrics:
 class StructuralTopicMetrics:
     topic_id: str
     narrative_sha256: str
-    selected_document_count: int
+    candidate_request_count: int
+    source_document_count: int
     source_document_sha256s: tuple[str, ...]
     old_line_units: TextShapeMetrics
     fixed_segmentation_units: TextShapeMetrics
+    baseline_candidate_units: TextShapeMetrics
     candidate_units: TextShapeMetrics
     baseline_selected_evidence: TextShapeMetrics
     candidate_selected_evidence: TextShapeMetrics
@@ -66,6 +70,7 @@ class StructuralTopicMetrics:
     candidate_representatives: TextShapeMetrics
     baseline_claim_hints: TextShapeMetrics
     candidate_claim_hints: TextShapeMetrics
+    baseline_candidate_kind_counts: tuple[tuple[str, int], ...]
     candidate_kind_counts: tuple[tuple[str, int], ...]
     selected_cluster_count: int
     upstream_identity_sha256: str
@@ -82,6 +87,7 @@ class StructuralComparison:
     topics: tuple[StructuralTopicMetrics, ...]
     aggregate_old_line_units: TextShapeMetrics
     aggregate_fixed_segmentation_units: TextShapeMetrics
+    aggregate_baseline_candidate_units: TextShapeMetrics
     aggregate_candidate_units: TextShapeMetrics
     aggregate_baseline_selected_evidence: TextShapeMetrics
     aggregate_candidate_selected_evidence: TextShapeMetrics
@@ -89,6 +95,7 @@ class StructuralComparison:
     aggregate_candidate_representatives: TextShapeMetrics
     aggregate_baseline_claim_hints: TextShapeMetrics
     aggregate_candidate_claim_hints: TextShapeMetrics
+    improvement_observed: bool
     gates_passed: bool
     gate_failures: tuple[str, ...]
 
@@ -159,6 +166,14 @@ class _LoadedCandidateTopic:
     texts: tuple[str, ...]
     candidate_ids: frozenset[str]
     kind_counts: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class _CandidateRequestPopulation:
+    sources: tuple[str, ...]
+    source_sha256s: tuple[str, ...]
+    request_count: int
+    sealed_bytes: bytes
 
 
 def _digest(value: bytes) -> str:
@@ -346,12 +361,162 @@ def _representative_texts(topic: GenerationTopic) -> tuple[str, ...]:
     )
 
 
-def _segmentation_texts(documents: Sequence[_SelectedDocument]) -> tuple[str, ...]:
+def _segmentation_texts(sources: Sequence[str]) -> tuple[str, ...]:
     return tuple(
         span.text
-        for document in documents
-        for span in _source_spans(document.text, _byte_offsets(document.text))
+        for source in sources
+        for span in _source_spans(source, _byte_offsets(source))
     )
+
+
+def _load_candidate_request_population(
+    output_root: Path,
+    document_store_root: Path,
+    topic_id: str,
+) -> _CandidateRequestPopulation:
+    request_relative = "canonical/handoff/candidate-requests.jsonl"
+    manifest_relative = "canonical/handoff/handoff-manifest.json"
+    request_body = _artifact_bytes(
+        output_root,
+        topic_id,
+        manifest_relative="canonical/complete.json",
+        artifact_relative=request_relative,
+    )
+    manifest_body = _artifact_bytes(
+        output_root,
+        topic_id,
+        manifest_relative="canonical/complete.json",
+        artifact_relative=manifest_relative,
+    )
+    manifest = _strict_json(manifest_body, f"candidate handoff:{topic_id}")
+    request_path = Path(output_root) / topic_id / request_relative
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest.get("topic_id") != topic_id
+        or manifest.get("requests_file") != request_path.name
+        or manifest.get("requests_sha256") != _digest(request_body)
+        or not isinstance(manifest.get("request_schema_version"), str)
+    ):
+        raise ValueError("candidate request handoff identity changed")
+    store = DocumentStore(Path(document_store_root))
+    requests = tuple(
+        _iter_candidate_requests(
+            request_path,
+            document_store=store,
+            expected_schema=manifest["request_schema_version"],
+        )
+    )
+    if any(request.topic_id != topic_id for request in requests):
+        raise ValueError("candidate request topic identity changed")
+    source_sha256s = tuple(sorted({request.document_sha256 for request in requests}))
+    document_count = len({request.document_id for request in requests})
+    if document_count != manifest.get("document_count"):
+        raise ValueError("candidate request document count changed")
+    return _CandidateRequestPopulation(
+        sources=tuple(request.source for request in requests),
+        source_sha256s=source_sha256s,
+        request_count=len(requests),
+        sealed_bytes=request_body,
+    )
+
+
+def _load_sealed_candidate_topic(
+    output_root: Path,
+    document_store_root: Path,
+    topic_id: str,
+    *,
+    require_current_splitter: bool,
+) -> _LoadedCandidateTopic:
+    """Read a byte-sealed candidate population, including legacy splitters."""
+    database_relative = "records.sqlite3"
+    records_manifest_relative = "canonical/records-manifest.json"
+    database_body = _artifact_bytes(
+        output_root,
+        topic_id,
+        manifest_relative="canonical/complete.json",
+        artifact_relative=database_relative,
+    )
+    records_manifest_body = _artifact_bytes(
+        output_root,
+        topic_id,
+        manifest_relative="canonical/complete.json",
+        artifact_relative=records_manifest_relative,
+    )
+    records_manifest = _strict_json(
+        records_manifest_body, f"records manifest:{topic_id}"
+    )
+    database_path = Path(output_root) / topic_id / database_relative
+    if (
+        not isinstance(records_manifest, Mapping)
+        or records_manifest.get("topic_id") != topic_id
+        or records_manifest.get("records_file") != database_path.name
+        or records_manifest.get("database_bytes") != len(database_body)
+        or records_manifest.get("database_sha256") != _digest(database_body)
+        or not isinstance(records_manifest.get("document_sha256s"), list)
+        or not isinstance(records_manifest.get("row_counts"), Mapping)
+    ):
+        raise ValueError("records manifest identity changed")
+    store = DocumentStore(Path(document_store_root))
+    uri = database_path.resolve().as_uri() + "?mode=ro&immutable=1"
+    with sqlite3.connect(uri, uri=True) as database:
+        database.execute("PRAGMA query_only=ON")
+        if database.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+            raise ValueError("candidate SQLite integrity check failed")
+        rows = database.execute(
+            "SELECT c.candidate_nugget_id, c.candidate_kind, c.start_char, "
+            "c.end_char, c.text_sha256, c.sentence_splitter_version, "
+            "d.content_sha256 FROM candidate AS c "
+            "JOIN document_binding AS d ON d.document_pk=c.document_pk "
+            "WHERE c.topic_id=? ORDER BY c.subnarrative_id, c.candidate_nugget_id",
+            (topic_id,),
+        ).fetchall()
+        database_document_sha256s = tuple(
+            row[0]
+            for row in database.execute(
+                "SELECT DISTINCT content_sha256 FROM document_binding "
+                "WHERE topic_id=? ORDER BY content_sha256",
+                (topic_id,),
+            ).fetchall()
+        )
+    if len(rows) != records_manifest["row_counts"].get("candidate"):
+        raise ValueError("sealed candidate row count changed")
+    if database_document_sha256s != tuple(records_manifest["document_sha256s"]):
+        raise ValueError("sealed candidate document closure changed")
+    texts: list[str] = []
+    candidate_ids: set[str] = set()
+    kinds: Counter[str] = Counter()
+    for candidate_id, kind, start, end, text_sha256, splitter, document_sha256 in rows:
+        source = store.read_text(document_sha256)
+        if (
+            not isinstance(candidate_id, str)
+            or not candidate_id
+            or candidate_id in candidate_ids
+            or not isinstance(kind, str)
+            or not kind
+            or type(start) is not int
+            or type(end) is not int
+            or start < 0
+            or end <= start
+            or end > len(source)
+            or not isinstance(text_sha256, str)
+            or text_sha256 != _digest(source[start:end].encode("utf-8"))
+            or not isinstance(splitter, str)
+            or not splitter
+        ):
+            raise ValueError("sealed candidate source row changed")
+        candidate_ids.add(candidate_id)
+        kinds[kind] += 1
+        texts.append(source[start:end])
+    loaded = _LoadedCandidateTopic(
+        texts=tuple(texts),
+        candidate_ids=frozenset(candidate_ids),
+        kind_counts=tuple(sorted(kinds.items())),
+    )
+    if require_current_splitter:
+        current = load_structural_topic(output_root, document_store_root, topic_id)
+        if current != loaded:
+            raise ValueError("current candidate validation disagrees with sealed population")
+    return loaded
 
 
 def load_structural_topic(
@@ -407,6 +572,7 @@ def compare_structural_runs(
     topic_metrics: list[StructuralTopicMetrics] = []
     all_old_lines: list[str] = []
     all_fixed_segments: list[str] = []
+    all_baseline_candidate_texts: list[str] = []
     all_candidate_texts: list[str] = []
     all_baseline_evidence: list[str] = []
     all_candidate_evidence: list[str] = []
@@ -437,16 +603,40 @@ def compare_structural_runs(
             raise ValueError("authenticated upstream identity changed")
         if baseline_selected_bytes != candidate_selected_bytes:
             raise ValueError("selected_documents bytes changed")
-        documents = _selected_documents(
+        _selected_documents(
             baseline_selected_bytes,
             topic_id=topic_id,
             store=store,
         )
-        loaded_candidates = load_structural_topic(
+        baseline_requests = _load_candidate_request_population(
+            Path(baseline_output_root),
+            Path(document_store_root),
+            topic_id,
+        )
+        candidate_requests = _load_candidate_request_population(
             Path(candidate_output_root),
             Path(document_store_root),
             topic_id,
         )
+        if baseline_requests.sealed_bytes != candidate_requests.sealed_bytes:
+            raise ValueError("candidate request population changed")
+        baseline_candidates = _load_sealed_candidate_topic(
+            Path(baseline_output_root),
+            Path(document_store_root),
+            topic_id,
+            require_current_splitter=False,
+        )
+        loaded_candidates = _load_sealed_candidate_topic(
+            Path(candidate_output_root),
+            Path(document_store_root),
+            topic_id,
+            require_current_splitter=True,
+        )
+        if any(
+            evidence.evidence_id not in baseline_candidates.candidate_ids
+            for evidence in baseline_topic.evidence
+        ):
+            raise ValueError("baseline handoff references an unvalidated candidate")
         if any(
             evidence.evidence_id not in loaded_candidates.candidate_ids
             for evidence in candidate_topic.evidence
@@ -455,11 +645,11 @@ def compare_structural_runs(
 
         old_lines = tuple(
             line.strip()
-            for document in documents
-            for line in document.text.splitlines()
+            for source in baseline_requests.sources
+            for line in source.splitlines()
             if line.strip()
         )
-        fixed_segments = _segmentation_texts(documents)
+        fixed_segments = _segmentation_texts(baseline_requests.sources)
         baseline_evidence_texts = tuple(row.text for row in baseline_topic.evidence)
         candidate_evidence_texts = tuple(row.text for row in candidate_topic.evidence)
         baseline_representative_texts = _representative_texts(baseline_topic)
@@ -480,36 +670,47 @@ def compare_structural_runs(
         )
         old_line_metrics = _measure_texts(old_lines)
         fixed_segment_metrics = _measure_texts(fixed_segments)
+        baseline_candidate_metrics = _measure_texts(baseline_candidates.texts)
+        candidate_metrics = _measure_texts(loaded_candidates.texts)
         failures: list[str] = []
-        if fixed_segment_metrics.median_characters <= old_line_metrics.median_characters:
-            failures.append("fixed segmentation median did not improve")
-        if fixed_segment_metrics.short_fraction > old_line_metrics.short_fraction:
-            failures.append("fixed segmentation short fraction worsened")
+        if candidate_metrics.short_fraction > baseline_candidate_metrics.short_fraction:
+            failures.append("candidate short fraction worsened")
+        if candidate_metrics.fragment_fraction > baseline_candidate_metrics.fragment_fraction:
+            failures.append("candidate fragment fraction worsened")
+        if candidate_evidence.short_fraction > baseline_evidence.short_fraction:
+            failures.append("selected evidence short fraction worsened")
+        if candidate_evidence.fragment_fraction > baseline_evidence.fragment_fraction:
+            failures.append("selected evidence fragment fraction worsened")
+        if candidate_representatives.fragment_fraction > baseline_representatives.fragment_fraction:
+            failures.append("representative fragment fraction worsened")
+        candidate_claims = _measure_texts(candidate_claim_texts)
+        baseline_claims = _measure_texts(baseline_claim_texts)
+        if candidate_claims.fragment_fraction > baseline_claims.fragment_fraction:
+            failures.append("claim-hint fragment fraction worsened")
         if topic_id == "407":
             if fixed_segment_metrics.median_characters <= 11:
-                failures.append("topic 407 median did not exceed 11")
+                failures.append("topic 407 segmentation median did not exceed 11")
             if fixed_segment_metrics.short_fraction >= 0.604:
-                failures.append("topic 407 short fraction did not beat 0.604")
+                failures.append("topic 407 segmentation short fraction did not beat 0.604")
 
         topic_metrics.append(
             StructuralTopicMetrics(
                 topic_id=topic_id,
                 narrative_sha256=baseline_topic.narrative_sha256,
-                selected_document_count=len(documents),
-                source_document_sha256s=tuple(row.text_sha256 for row in documents),
+                candidate_request_count=baseline_requests.request_count,
+                source_document_count=len(baseline_requests.source_sha256s),
+                source_document_sha256s=baseline_requests.source_sha256s,
                 old_line_units=old_line_metrics,
                 fixed_segmentation_units=fixed_segment_metrics,
-                candidate_units=_measure_texts(loaded_candidates.texts),
+                baseline_candidate_units=baseline_candidate_metrics,
+                candidate_units=candidate_metrics,
                 baseline_selected_evidence=baseline_evidence,
                 candidate_selected_evidence=candidate_evidence,
                 baseline_representatives=baseline_representatives,
                 candidate_representatives=candidate_representatives,
-                baseline_claim_hints=_measure_texts(
-                    baseline_claim_texts
-                ),
-                candidate_claim_hints=_measure_texts(
-                    candidate_claim_texts
-                ),
+                baseline_claim_hints=baseline_claims,
+                candidate_claim_hints=candidate_claims,
+                baseline_candidate_kind_counts=baseline_candidates.kind_counts,
                 candidate_kind_counts=loaded_candidates.kind_counts,
                 selected_cluster_count=sum(
                     len(group.selected_clusters) for group in candidate_topic.groups
@@ -522,6 +723,7 @@ def compare_structural_runs(
 
         all_old_lines.extend(old_lines)
         all_fixed_segments.extend(fixed_segments)
+        all_baseline_candidate_texts.extend(baseline_candidates.texts)
         all_candidate_texts.extend(loaded_candidates.texts)
         all_baseline_evidence.extend(baseline_evidence_texts)
         all_candidate_evidence.extend(candidate_evidence_texts)
@@ -532,6 +734,7 @@ def compare_structural_runs(
 
     aggregate_old_lines = _measure_texts(all_old_lines)
     aggregate_fixed_segments = _measure_texts(all_fixed_segments)
+    aggregate_baseline_candidates = _measure_texts(all_baseline_candidate_texts)
     aggregate_candidates = _measure_texts(all_candidate_texts)
     aggregate_baseline_evidence = _measure_texts(all_baseline_evidence)
     aggregate_candidate_evidence = _measure_texts(all_candidate_evidence)
@@ -544,13 +747,20 @@ def compare_structural_runs(
         aggregate_failures.append("aggregate segmentation median did not improve")
     if aggregate_fixed_segments.short_fraction > aggregate_old_lines.short_fraction:
         aggregate_failures.append("aggregate segmentation short fraction worsened")
-    if aggregate_candidates.short_fraction > aggregate_old_lines.short_fraction:
-        aggregate_failures.append("aggregate candidate short fraction exceeded old lines")
+    if aggregate_candidates.short_fraction > aggregate_baseline_candidates.short_fraction:
+        aggregate_failures.append("aggregate candidate short fraction worsened")
+    if aggregate_candidates.fragment_fraction > aggregate_baseline_candidates.fragment_fraction:
+        aggregate_failures.append("aggregate candidate fragment fraction worsened")
     if (
         aggregate_candidate_evidence.short_fraction
         > aggregate_baseline_evidence.short_fraction
     ):
         aggregate_failures.append("aggregate selected evidence short fraction worsened")
+    if (
+        aggregate_candidate_evidence.fragment_fraction
+        > aggregate_baseline_evidence.fragment_fraction
+    ):
+        aggregate_failures.append("aggregate selected evidence fragment fraction worsened")
     if (
         aggregate_candidate_representatives.fragment_fraction
         > aggregate_baseline_representatives.fragment_fraction
@@ -561,6 +771,24 @@ def compare_structural_runs(
         > aggregate_baseline_claims.fragment_fraction
     ):
         aggregate_failures.append("aggregate claim-hint fragment fraction worsened")
+    improvement_observed = any(
+        (
+            aggregate_candidates.short_fraction
+            < aggregate_baseline_candidates.short_fraction,
+            aggregate_candidates.fragment_fraction
+            < aggregate_baseline_candidates.fragment_fraction,
+            aggregate_candidate_evidence.short_fraction
+            < aggregate_baseline_evidence.short_fraction,
+            aggregate_candidate_evidence.fragment_fraction
+            < aggregate_baseline_evidence.fragment_fraction,
+            aggregate_candidate_representatives.fragment_fraction
+            < aggregate_baseline_representatives.fragment_fraction,
+            aggregate_candidate_claims.fragment_fraction
+            < aggregate_baseline_claims.fragment_fraction,
+        )
+    )
+    if not improvement_observed:
+        aggregate_failures.append("no fixed-output readability improvement observed")
     topic_failures = tuple(
         f"{topic.topic_id}: {failure}"
         for topic in topic_metrics
@@ -576,6 +804,7 @@ def compare_structural_runs(
         topics=tuple(topic_metrics),
         aggregate_old_line_units=aggregate_old_lines,
         aggregate_fixed_segmentation_units=aggregate_fixed_segments,
+        aggregate_baseline_candidate_units=aggregate_baseline_candidates,
         aggregate_candidate_units=aggregate_candidates,
         aggregate_baseline_selected_evidence=aggregate_baseline_evidence,
         aggregate_candidate_selected_evidence=aggregate_candidate_evidence,
@@ -583,6 +812,7 @@ def compare_structural_runs(
         aggregate_candidate_representatives=aggregate_candidate_representatives,
         aggregate_baseline_claim_hints=aggregate_baseline_claims,
         aggregate_candidate_claim_hints=aggregate_candidate_claims,
+        improvement_observed=improvement_observed,
         gates_passed=not gate_failures,
         gate_failures=gate_failures,
     )
@@ -604,6 +834,33 @@ def _semantic_artifact_hashes(
 def _semantic_label_counts(labels: Sequence[str]) -> tuple[tuple[str, int], ...]:
     counts = Counter(labels)
     return tuple((label, counts[label]) for label in ("full", "partial", "unsupported"))
+
+
+def _semantic_gate_failures(
+    topics: Sequence[SemanticTopicComparison],
+    *,
+    baseline_required: float,
+    candidate_required: float,
+    baseline_strict: float,
+    candidate_strict: float,
+) -> tuple[str, ...]:
+    """Reject local losses even when unrelated gains preserve macro means."""
+    failures: list[str] = []
+    for topic in topics:
+        if topic.required_coverage_delta < 0:
+            failures.append(f"{topic.topic_id}: required coverage regressed")
+        if topic.strict_full_rate_delta < 0:
+            failures.append(f"{topic.topic_id}: strict-full rate regressed")
+        failures.extend(
+            f"{topic.topic_id}: obligation {obligation.obligation_id} regressed"
+            for obligation in topic.obligations
+            if obligation.label_delta < 0
+        )
+    if candidate_required < baseline_required:
+        failures.append("topic-macro required coverage regressed")
+    if candidate_strict < baseline_strict:
+        failures.append("topic-macro strict-full rate regressed")
+    return tuple(failures)
 
 
 def compare_semantic_runs(
@@ -780,11 +1037,13 @@ def compare_semantic_runs(
     candidate_strict = statistics.fmean(
         topic.candidate_strict_full_rate for topic in topics
     )
-    failures: list[str] = []
-    if candidate_required < baseline_required:
-        failures.append("topic-macro required coverage regressed")
-    if candidate_strict < baseline_strict:
-        failures.append("topic-macro strict-full rate regressed")
+    failures = _semantic_gate_failures(
+        topics,
+        baseline_required=baseline_required,
+        candidate_required=candidate_required,
+        baseline_strict=baseline_strict,
+        candidate_strict=candidate_strict,
+    )
 
     return SemanticComparison(
         schema_version=SEMANTIC_COMPARISON_SCHEMA,
@@ -815,7 +1074,7 @@ def compare_semantic_runs(
         candidate_judge_calls=len(topics),
         expected_candidate_judge_calls=len(topics),
         gates_passed=not failures,
-        gate_failures=tuple(failures),
+        gate_failures=failures,
     )
 
 
