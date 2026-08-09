@@ -909,6 +909,62 @@ tests with:
   code/tests/test_competition_rag.py
 ```
 
+### Two RAG submissions from one completed retrieval
+
+The authenticated v3 handoff can feed two independent generation strategies without rerunning
+retrieval:
+
+```text
+outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
+├── trec_rag.competition_rag            -> single-pass submission
+└── trec_rag.competition_rag_multistage -> frozen multi-stage submission
+```
+
+Use the ignored local configs below. They deliberately have different experiment IDs, output
+directories, work state, run IDs, and JSONL files:
+
+```text
+configs/local/rag26-rag-singlepass-sol-final-v1.yaml
+configs/local/rag26-rag-multistage-sol-final-v1.yaml
+configs/local/rag26-rag-multistage-smoke-0-1-2.yaml
+```
+
+The retrieval result is reused through the sealed handoff. Generated answers are not shared
+between strategies: single pass caches one validated row per topic under `work/rows/`, while the
+multi-stage runner caches its bounded stage state under `work/bounded_revision/`. Resume is valid
+only under the exact strategy-specific identity.
+
+First authenticate the full handoff and inspect the multi-stage call ceiling without writes or
+provider calls:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag_multistage \
+  --config configs/local/rag26-rag-multistage-sol-final-v1.yaml --dry-run
+```
+
+Run only the three-topic multi-stage smoke first:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag_multistage \
+  --config configs/local/rag26-rag-multistage-smoke-0-1-2.yaml
+```
+
+After reviewing that smoke, the two independent full runs are:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag \
+  --config configs/local/rag26-rag-singlepass-sol-final-v1.yaml
+
+PYTHONPATH=code .venv/bin/python -m trec_rag.competition_rag_multistage \
+  --config configs/local/rag26-rag-multistage-sol-final-v1.yaml
+```
+
+If a run is interrupted, change only its local config from `mode: create` to `mode: resume` and
+repeat the same command. Multi-stage resume authenticates the complete run identity, resumes an
+existing per-topic state, creates a topic that never started, and publishes no organizer JSONL
+until every selected final row passes local validation. Multi-stage `overwrite` is intentionally
+unsupported; use a fresh experiment ID for a materially different run.
+
 ## Private post-run competition debug report
 
 `trec_rag.competition_debug_report` explains an already completed competition

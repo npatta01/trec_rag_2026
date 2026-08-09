@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import trec_rag.competition_rag_multistage as competition_rag_multistage
 from trec_rag.competition_rag import RagGenerationConfig
 from trec_rag.competition_rag_multistage import (
     _multistage_identity,
@@ -24,6 +25,7 @@ from trec_rag.generation_handoff import (
     HandoffProducer,
     SelectedCluster,
     TopicSourceReceipts,
+    write_generation_handoff,
 )
 from trec_rag.narrative_blueprint_trial import (
     TRIAL_CONTRACT_VERSION,
@@ -364,3 +366,68 @@ def test_incomplete_topic_state_never_publishes(tmp_path: Path) -> None:
         )
 
     assert not config.output_path.exists()
+
+
+def test_dry_run_reports_exact_budget_without_writes_or_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handoff = GenerationHandoff(
+        producer=_handoff().producer,
+        topics=(_topic(0), _topic(1), _topic(2)),
+    )
+    handoff_path = tmp_path / "outputs/retrieval/generation_handoff_manifest.json"
+    write_generation_handoff(handoff_path, handoff)
+    config_path = tmp_path / "multistage.yaml"
+    config_path.write_text(
+        """schema_version: competition_rag_config_v2
+experiment:
+  id: multistage-dry-run
+  output_dir: outputs/multistage-dry-run
+  mode: create
+  topic_ids: [rag2026-0, rag2026-1, rag2026-2]
+submission:
+  team_id: castorini
+  run_desc: Multi-stage dry-run fixture.
+inputs:
+  handoff_manifest: outputs/retrieval/generation_handoff_manifest.json
+generation:
+  type: openrouter
+  api_base: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: openai/gpt-5.6-sol
+  reasoning_effort: medium
+  structured_output: strict_schema
+  temperature: null
+  max_tokens: 12000
+  timeout_seconds: 900
+  transport_max_attempts: 3
+  concurrency: 2
+""",
+        encoding="utf-8",
+    )
+    provider_calls: list[str] = []
+
+    async def fail_if_called(*args: object, **kwargs: object) -> None:
+        provider_calls.append("called")
+
+    monkeypatch.setattr(
+        competition_rag_multistage,
+        "run_multistage_generation",
+        fail_if_called,
+    )
+
+    competition_rag_multistage.main(
+        ["--config", str(config_path), "--dry-run"]
+    )
+
+    output = capsys.readouterr().out
+    assert "topics=3,groups=3" in output
+    assert "sol_routine:6,sol_max:9,luna_min:6,luna_max:9,provider:0" in output
+    assert "concurrency=2" in output
+    assert f"handoff={handoff_path}" in output
+    assert f"output={tmp_path / 'outputs/multistage-dry-run/rag_output_trec_rag_2026.jsonl'}" in output
+    assert f"work={tmp_path / 'outputs/multistage-dry-run/work'}" in output
+    assert provider_calls == []
+    assert not (tmp_path / "outputs/multistage-dry-run").exists()

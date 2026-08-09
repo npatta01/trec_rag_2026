@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +19,12 @@ from trec_rag.competition_rag import (
     _validate_exact_hint_citations,
     _validate_generated_submission_record,
     _work_has_artifacts,
+    load_rag_generation_config,
 )
 from trec_rag.generation_handoff import (
     GenerationHandoff,
     GenerationTopic,
+    load_generation_handoff,
     select_generation_topics,
 )
 from trec_rag.narrative_blueprint_trial import (
@@ -31,6 +35,7 @@ from trec_rag.narrative_blueprint_trial import (
     _bounded_revalidate_files,
     _run_bounded_revision,
 )
+from trec_rag.repo_env import find_repo_root, load_repo_env
 
 
 MULTISTAGE_IDENTITY_VERSION = 1
@@ -208,3 +213,65 @@ async def run_multistage_generation(
         raise RuntimeError(
             f"multi-stage generation is already active for {config.output_path}"
         ) from exc
+
+
+def _print_dry_run(
+    config: RagGenerationConfig,
+    topics: Sequence[GenerationTopic],
+) -> None:
+    topic_count = len(topics)
+    group_count = sum(len(topic.groups) for topic in topics)
+    print(f"topics={topic_count},groups={group_count}")
+    print(
+        "calls="
+        f"sol_routine:{2 * topic_count},"
+        f"sol_max:{3 * topic_count},"
+        f"luna_min:{topic_count + group_count},"
+        f"luna_max:{2 * topic_count + group_count},"
+        "provider:0"
+    )
+    print(f"concurrency={config.concurrency}")
+    print(f"handoff={config.handoff_manifest_path}")
+    print(f"output={config.output_path}")
+    print(f"work={config.resolved_work_dir}")
+
+
+def arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, required=True, help="Competition RAG YAML.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Authenticate inputs and report the call budget without writing state.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    try:
+        args = arguments(argv)
+        config_path = args.config.resolve()
+        config = load_rag_generation_config(config_path)
+        handoff = load_generation_handoff(config.handoff_manifest_path)
+        topics = select_generation_topics(handoff, config.topic_ids)
+        _validate_artifact_paths(config)
+        if args.dry_run:
+            _print_dry_run(config, topics)
+            return
+        if config.overwrite:
+            raise ValueError(
+                "multi-stage generation does not support experiment.mode: overwrite"
+            )
+        load_repo_env(find_repo_root(config_path.parent))
+        api_key = os.environ.get(config.api_key_env, "")
+        if not api_key:
+            raise ValueError(f"{config.api_key_env} is missing or empty")
+        asyncio.run(run_multistage_generation(config, handoff, api_key=api_key))
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as exc:
+        raise SystemExit(f"error: {type(exc).__name__}: {exc}") from exc
+
+
+if __name__ == "__main__":
+    main()
