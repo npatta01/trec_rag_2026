@@ -196,12 +196,20 @@ memory and use `1` on a memory-constrained single GPU. The runner intentionally
 does not impose a device-count ceiling because CPU and externally sharded topic
 workers use the same topic-first contract.
 
-A completed run publishes these three conventional files beneath the experiment
-directory:
+The checked-in full-run config sets `experiment.id: facet-deepseek-b40-v3`, so
+its canonical output namespace is `outputs/facet-deepseek-b40-v3/`. A completed
+run publishes these four conventional organizer and generation-handoff files
+beneath that directory:
 
 - `r_output_trec_rag_2026.tsv`: the variable-depth official evidence run;
 - `retrieval_with_text.jsonl.zip`: the mandatory full-text archive;
+- `generation_handoff_manifest.json`: the authenticated selected-evidence input
+  consumed by competition RAG generation;
 - `retrieval_export_manifest.json`: the manifest-last export seal.
+
+The same directory also contains `cache-operation-manifest.json`, which binds
+the per-topic cache-operation receipts to the sealed retrieval export for
+auditing and offline-replay verification.
 
 The official run and full-text archive are deterministic projections of each
 topic's validated Evidence Bundle. Candidate-pool, provenance, and resolved
