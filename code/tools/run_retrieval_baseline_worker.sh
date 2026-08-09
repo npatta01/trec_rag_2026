@@ -85,6 +85,8 @@ required_python=$(<.python-version)
 git submodule update --init --recursive
 git_status=$(git status --porcelain=v1 --untracked-files=no --ignore-submodules=none)
 [[ -z $git_status ]] || die "tracked worker source or submodule state is dirty"
+source_revision=$(git rev-parse 'HEAD^{commit}')
+export TREC_RAG_SOURCE_REVISION="$source_revision"
 uv sync --group cuda --locked --python "$required_python"
 venv_python="$REPO_ROOT/.venv/bin/python"
 venv_hf="$REPO_ROOT/.venv/bin/hf"
@@ -155,7 +157,6 @@ done
 publication="$worker_root/publication"
 mv "$worker_root/matrices" "$publication/matrices"
 mv "$worker_root/runs" "$publication/runs"
-source_revision=$(git rev-parse 'HEAD^{commit}')
 "$venv_python" - "$publication/worker-receipt.json" "$task_name" "$source_revision" "${topic_ids[@]}" <<'PY'
 from __future__ import annotations
 

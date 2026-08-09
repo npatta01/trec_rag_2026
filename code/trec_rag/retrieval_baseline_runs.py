@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 import math
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
 import re
 from statistics import median
 import tempfile
@@ -16,11 +16,42 @@ from typing import Any, Mapping, Protocol, TypeVar
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk
 from trec_rag.document_store import DocumentStore
-from trec_rag.mixedbread_passage_scorer import MixedbreadPassageScorer, ScoredPassage
+from trec_rag.mixedbread_passage_scorer import (
+    BACKEND as MIXEDBREAD_BACKEND,
+    BACKEND_VERSION as MIXEDBREAD_BACKEND_VERSION,
+    INFERENCE_DTYPE as MIXEDBREAD_INFERENCE_DTYPE,
+    INPUT_POLICY as MIXEDBREAD_INPUT_POLICY,
+    MAX_LENGTH as MIXEDBREAD_MAX_LENGTH,
+    MIXEDBREAD_MODEL,
+    MIXEDBREAD_REVISION,
+    SCORE_REPRESENTATION as MIXEDBREAD_SCORE_REPRESENTATION,
+    MixedbreadPassageScorer,
+    ScoredPassage,
+)
 
 
 _TOP_PASSAGE_WEIGHTS = (0.55, 0.25, 0.13, 0.07)
 _Key = TypeVar("_Key")
+_TOPIC_ID = re.compile(r"rag2026-[0-9]+\Z")
+_PINNED_SCORER_IDENTITY = {
+    "backend": MIXEDBREAD_BACKEND,
+    "backend_version": MIXEDBREAD_BACKEND_VERSION,
+    "model": MIXEDBREAD_MODEL,
+    "model_revision": MIXEDBREAD_REVISION,
+    "score_representation": MIXEDBREAD_SCORE_REPRESENTATION,
+    "inference_dtype": MIXEDBREAD_INFERENCE_DTYPE,
+    "max_length": MIXEDBREAD_MAX_LENGTH,
+    "batch_size": 32,
+    "device": "cuda",
+    "input_policy": MIXEDBREAD_INPUT_POLICY,
+    "implementation_version": 1,
+}
+_PINNED_CHUNKER_IDENTITY = {
+    "backend": "trec_rag.chunking.SemanticTextChunker",
+    "max_characters": 3_500,
+    "overlap_characters": 350,
+    "trim": True,
+}
 
 
 @dataclass(frozen=True)
@@ -228,6 +259,14 @@ class MatrixUnit:
 
 
 @dataclass(frozen=True)
+class MatrixChunk:
+    docid: str
+    start_char: int
+    end_char: int
+    text_sha256: str
+
+
+@dataclass(frozen=True)
 class MatrixPassage:
     unit_id: str
     docid: str
@@ -241,11 +280,12 @@ class TopicMatrix:
     topic_id: str
     documents: tuple[MatrixDocument, ...]
     units: tuple[MatrixUnit, ...]
+    chunks: tuple[MatrixChunk, ...]
     passages: tuple[MatrixPassage, ...]
     source_sha256s: Mapping[str, str]
     scorer_identity: Mapping[str, object]
     chunker_identity: Mapping[str, object]
-    cache_stats: Mapping[str, int]
+    cache_stats: Mapping[str, int] = field(default_factory=dict, compare=False)
 
 
 class PassageScorer(Protocol):
@@ -284,18 +324,226 @@ def topic_sort_key(topic_id: str) -> tuple[str, int, str]:
     return (match.group(1), int(match.group(2)), topic_id)
 
 
-def _read_json_object(path: Path) -> tuple[dict[str, object], str]:
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError(f"duplicate JSON field: {name}")
+        result[name] = value
+    return result
+
+
+def _read_json_object(path: Path) -> tuple[dict[str, object], bytes]:
     try:
         body = path.read_bytes()
     except OSError as exc:
         raise ValueError(f"required source file is unreadable: {path}") from exc
     try:
-        value = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = json.loads(body, object_pairs_hook=_unique_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"required source file is invalid JSON: {path}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"required source file must contain a JSON object: {path}")
-    return value, sha256(body).hexdigest()
+    return value, body
+
+
+def _require_digest(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ValueError(f"{label} must be a lowercase SHA-256")
+    return value
+
+
+def _validate_artifact_receipts(
+    topic_dir: Path,
+    manifest: Mapping[str, object],
+    *,
+    phase: str,
+    expected_paths: set[str],
+) -> None:
+    if (
+        manifest.get("schema_version") != "facet_pilot_v2"
+        or manifest.get("topic_id") != topic_dir.name
+        or manifest.get("phase") != phase
+        or not isinstance(manifest.get("artifacts"), list)
+    ):
+        raise ValueError(f"{phase} checkpoint manifest identity is invalid")
+    found: set[str] = set()
+    for raw in manifest["artifacts"]:
+        if not isinstance(raw, dict) or set(raw) != {
+            "bytes",
+            "relative_path",
+            "sha256",
+        }:
+            raise ValueError(f"{phase} checkpoint artifact receipt is invalid")
+        relative = raw["relative_path"]
+        size = raw["bytes"]
+        if (
+            not isinstance(relative, str)
+            or PurePath(relative).is_absolute()
+            or ".." in PurePath(relative).parts
+            or relative in found
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+        ):
+            raise ValueError(f"{phase} checkpoint artifact receipt is invalid")
+        path = topic_dir.joinpath(*PurePath(relative).parts)
+        try:
+            body = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"{phase} checkpoint artifact is unreadable") from exc
+        if len(body) != size or sha256(body).hexdigest() != _require_digest(
+            raw["sha256"], label=f"{phase} artifact digest"
+        ):
+            raise ValueError(f"{phase} checkpoint artifact digest differs")
+        found.add(relative)
+    if found != expected_paths:
+        raise ValueError(f"{phase} checkpoint artifact set changed")
+
+
+def _validate_source_chain(
+    *,
+    topic_dir: Path,
+    topic_id: str,
+    loaded: Mapping[str, Mapping[str, object]],
+    bodies: Mapping[str, bytes],
+) -> None:
+    receipt = loaded["topic-job-receipt.json"]
+    if set(receipt) != {
+        "config_sha256",
+        "mode",
+        "projection_manifest_sha256",
+        "run_id",
+        "schema_version",
+        "status",
+        "stopping_reason",
+        "topic_id",
+    }:
+        raise ValueError("topic job receipt fields changed")
+    canonical_receipt = json.dumps(
+        receipt,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    if (
+        bodies["topic-job-receipt.json"] != canonical_receipt
+        or receipt.get("schema_version") != "topic-job-receipt-v3"
+        or receipt.get("mode") != "online"
+        or receipt.get("run_id") != topic_dir.parent.name
+        or receipt.get("topic_id") != topic_id
+        or receipt.get("status") != "complete"
+        or not isinstance(receipt.get("stopping_reason"), str)
+        or not receipt["stopping_reason"]
+    ):
+        raise ValueError("topic job receipt is invalid")
+    config_digest = _require_digest(
+        receipt["config_sha256"], label="topic config digest"
+    )
+
+    projection_manifest = loaded["canonical/retrieval-projection-manifest.json"]
+    if sha256(bodies["canonical/retrieval-projection-manifest.json"]).hexdigest() != (
+        _require_digest(
+            receipt["projection_manifest_sha256"],
+            label="topic projection manifest digest",
+        )
+    ):
+        raise ValueError("topic projection manifest digest differs")
+    if (
+        projection_manifest.get("schema_version")
+        != "retrieval_projection_manifest_v4"
+        or projection_manifest.get("phase") != "retrieval_projection"
+        or projection_manifest.get("topic_id") != topic_id
+        or projection_manifest.get("retrieval_status") != receipt["status"]
+        or projection_manifest.get("retrieval_stopping_reason")
+        != receipt["stopping_reason"]
+        or projection_manifest.get("projection_filename")
+        != "retrieval-projection.json"
+    ):
+        raise ValueError("topic projection manifest identity is invalid")
+    projection_body = bodies["canonical/retrieval-projection.json"]
+    if (
+        projection_manifest.get("projection_bytes") != len(projection_body)
+        or _require_digest(
+            projection_manifest.get("projection_sha256"),
+            label="topic projection digest",
+        )
+        != sha256(projection_body).hexdigest()
+    ):
+        raise ValueError("topic projection payload digest differs")
+
+    retrieval = loaded["retrieval/complete.json"]
+    scoring = loaded["scoring/complete.json"]
+    decomposition_body = bodies["decomposition/result.json"]
+    narrative = loaded["decomposition/result.json"].get("topic")
+    if not isinstance(narrative, dict) or not isinstance(narrative.get("narrative"), str):
+        raise ValueError("decomposition narrative is invalid")
+    narrative_digest = sha256(narrative["narrative"].encode("utf-8")).hexdigest()
+    decomposition_digest = sha256(decomposition_body).hexdigest()
+    retrieval_digest = sha256(bodies["retrieval/complete.json"]).hexdigest()
+    scoring_digest = sha256(bodies["scoring/complete.json"]).hexdigest()
+    seals = projection_manifest.get("source_seals")
+    if not isinstance(seals, dict) or any(
+        seals.get(name) != expected
+        for name, expected in {
+            "config_sha256": config_digest,
+            "decomposition_source_sha256": decomposition_digest,
+            "narrative_sha256": narrative_digest,
+            "retrieval_manifest_sha256": retrieval_digest,
+            "scoring_manifest_sha256": scoring_digest,
+        }.items()
+    ):
+        raise ValueError("topic projection source seal differs")
+    if (
+        retrieval.get("decomposition_source_sha256") != decomposition_digest
+        or retrieval.get("narrative_sha256") != narrative_digest
+        or scoring.get("decomposition_source_sha256") != decomposition_digest
+        or scoring.get("narrative_sha256") != narrative_digest
+        or scoring.get("retrieval_manifest_sha256") != retrieval_digest
+    ):
+        raise ValueError("retrieval/scoring checkpoint hash chain differs")
+
+    decomposition_manifest = loaded["decomposition/manifest.json"]
+    if (
+        set(decomposition_manifest)
+        != {
+            "planner",
+            "result_bytes",
+            "result_file",
+            "result_sha256",
+            "schema_version",
+        }
+        or decomposition_manifest.get("schema_version")
+        != "facet-decomposition-manifest-v1"
+        or decomposition_manifest.get("result_file") != "result.json"
+        or decomposition_manifest.get("result_bytes") != len(decomposition_body)
+        or decomposition_manifest.get("result_sha256") != decomposition_digest
+        or not isinstance(decomposition_manifest.get("planner"), dict)
+    ):
+        raise ValueError("decomposition producer manifest differs")
+
+    _validate_artifact_receipts(
+        topic_dir,
+        retrieval,
+        phase="retrieve",
+        expected_paths={
+            "decomposition.json",
+            "retrieval/audit.json",
+            "retrieval/evidence-bundle.json",
+        },
+    )
+    _validate_artifact_receipts(
+        topic_dir,
+        scoring,
+        phase="score",
+        expected_paths={
+            "scoring/lane_scores.jsonl",
+            "scoring/selected_documents.jsonl",
+            "scoring/selected_subnarrative_scores.jsonl",
+            "scoring/selection.json",
+        },
+    )
 
 
 def _required_text(value: object, *, label: str) -> str:
@@ -311,25 +559,35 @@ def load_topic_input(
 ) -> TopicInput:
     """Load one complete source topic without opening organizer judgments."""
 
-    if not isinstance(topic_id, str) or not topic_id or Path(topic_id).name != topic_id:
-        raise ValueError("topic_id must be a safe path component")
+    if not isinstance(topic_id, str) or _TOPIC_ID.fullmatch(topic_id) is None:
+        raise ValueError("topic_id must match the official rag2026-N pattern")
     topic_dir = Path(source_dir) / topic_id
     relative_paths = (
         "topic-job-receipt.json",
         "decomposition/result.json",
+        "decomposition/manifest.json",
         "retrieval/audit.json",
+        "retrieval/complete.json",
         "scoring/selection.json",
+        "scoring/complete.json",
+        "canonical/retrieval-projection-manifest.json",
+        "canonical/retrieval-projection.json",
     )
     loaded: dict[str, dict[str, object]] = {}
+    source_bodies: dict[str, bytes] = {}
     source_sha256s: dict[str, str] = {}
     for relative in relative_paths:
-        value, digest = _read_json_object(topic_dir / relative)
+        value, body = _read_json_object(topic_dir / relative)
         loaded[relative] = value
-        source_sha256s[relative] = digest
+        source_bodies[relative] = body
+        source_sha256s[relative] = sha256(body).hexdigest()
 
-    receipt = loaded["topic-job-receipt.json"]
-    if receipt.get("status") != "complete" or receipt.get("topic_id") != topic_id:
-        raise ValueError("topic job receipt is not complete for the requested topic")
+    _validate_source_chain(
+        topic_dir=topic_dir,
+        topic_id=topic_id,
+        loaded=loaded,
+        bodies=source_bodies,
+    )
 
     decomposition = loaded["decomposition/result.json"]
     if decomposition.get("error") is not None:
@@ -545,7 +803,7 @@ def score_topic(
         raise ValueError("passage scorer counters decreased during topic scoring")
 
     config = chunker.config
-    return TopicMatrix(
+    matrix = TopicMatrix(
         topic_id=topic.topic_id,
         documents=tuple(
             MatrixDocument(
@@ -563,6 +821,22 @@ def score_topic(
                 text_sha256=sha256(query_text.encode("utf-8")).hexdigest(),
             )
             for unit_id, kind, query_text in units
+        ),
+        chunks=tuple(
+            MatrixChunk(
+                docid=chunk.document_id,
+                start_char=chunk.start_char,
+                end_char=chunk.end_char,
+                text_sha256=sha256(chunk.text.encode("utf-8")).hexdigest(),
+            )
+            for chunk in sorted(
+                chunk_rows,
+                key=lambda row: (
+                    row.document_id.encode("utf-8"),
+                    row.start_char,
+                    row.end_char,
+                ),
+            )
         ),
         passages=tuple(
             sorted(
@@ -585,6 +859,128 @@ def score_topic(
         },
         cache_stats=stats,
     )
+    _validate_topic_matrix(matrix)
+    return matrix
+
+
+def _validate_topic_matrix(matrix: TopicMatrix) -> None:
+    if not isinstance(matrix, TopicMatrix):
+        raise TypeError("matrix must be a TopicMatrix")
+    if _TOPIC_ID.fullmatch(matrix.topic_id) is None:
+        raise ValueError("matrix topic ID is invalid")
+    if dict(matrix.scorer_identity) != _PINNED_SCORER_IDENTITY:
+        raise ValueError("matrix scorer identity is not the pinned scoring contract")
+    if dict(matrix.chunker_identity) != _PINNED_CHUNKER_IDENTITY:
+        raise ValueError("matrix chunker identity is not the pinned chunking contract")
+    if not matrix.source_sha256s or any(
+        not isinstance(name, str)
+        or not name
+        or _require_digest(digest, label="matrix source digest") != digest
+        for name, digest in matrix.source_sha256s.items()
+    ):
+        raise ValueError("matrix source hashes are invalid")
+
+    documents = {row.docid: row for row in matrix.documents}
+    if not documents or len(documents) != len(matrix.documents):
+        raise ValueError("matrix documents must be nonempty and unique")
+    if tuple(documents) != tuple(
+        sorted(documents, key=lambda value: value.encode("utf-8"))
+    ):
+        raise ValueError("matrix documents are not in canonical order")
+    for row in matrix.documents:
+        if not row.docid or any(character.isspace() for character in row.docid):
+            raise ValueError("matrix document ID is invalid")
+        _require_digest(row.content_sha256, label="matrix document digest")
+        if (
+            isinstance(row.best_retrieval_rank, bool)
+            or not isinstance(row.best_retrieval_rank, int)
+            or row.best_retrieval_rank <= 0
+        ):
+            raise ValueError("matrix document retrieval rank is invalid")
+
+    units = {row.unit_id: row for row in matrix.units}
+    if len(units) != len(matrix.units) or not units:
+        raise ValueError("matrix semantic units must be nonempty and unique")
+    if matrix.units[0].unit_id != "__narrative__" or matrix.units[0].kind != "narrative":
+        raise ValueError("matrix narrative semantic unit is invalid")
+    if any(row.kind != "subnarrative" for row in matrix.units[1:]):
+        raise ValueError("matrix subnarrative semantic unit is invalid")
+    if not matrix.units[1:]:
+        raise ValueError("matrix requires at least one subnarrative")
+    for row in matrix.units:
+        _require_digest(row.text_sha256, label="matrix semantic text digest")
+    subnarrative_ids = {row.unit_id for row in matrix.units[1:]}
+    for row in matrix.documents:
+        if not set(row.subnarrative_source_ranks).issubset(subnarrative_ids) or any(
+            isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0
+            for rank in row.subnarrative_source_ranks.values()
+        ):
+            raise ValueError("matrix pooled-source rank is invalid")
+
+    chunks: dict[tuple[str, int, int], MatrixChunk] = {}
+    chunks_by_document = {docid: 0 for docid in documents}
+    for row in matrix.chunks:
+        key = (row.docid, row.start_char, row.end_char)
+        if (
+            row.docid not in documents
+            or isinstance(row.start_char, bool)
+            or not isinstance(row.start_char, int)
+            or isinstance(row.end_char, bool)
+            or not isinstance(row.end_char, int)
+            or row.start_char < 0
+            or row.end_char <= row.start_char
+            or key in chunks
+        ):
+            raise ValueError("matrix chunk inventory is invalid")
+        _require_digest(row.text_sha256, label="matrix chunk text digest")
+        chunks[key] = row
+        chunks_by_document[row.docid] += 1
+    if not chunks or any(count == 0 for count in chunks_by_document.values()):
+        raise ValueError("matrix chunk inventory does not cover every document")
+    canonical_chunks = tuple(
+        sorted(
+            matrix.chunks,
+            key=lambda row: (
+                row.docid.encode("utf-8"),
+                row.start_char,
+                row.end_char,
+            ),
+        )
+    )
+    if matrix.chunks != canonical_chunks:
+        raise ValueError("matrix chunk inventory is not in canonical order")
+
+    passage_keys: set[tuple[str, str, int, int]] = set()
+    for row in matrix.passages:
+        key = (row.unit_id, row.docid, row.start_char, row.end_char)
+        if (
+            row.unit_id not in units
+            or (row.docid, row.start_char, row.end_char) not in chunks
+            or key in passage_keys
+        ):
+            raise ValueError("matrix passage coverage is invalid")
+        _validate_raw_score(row.raw_score, label="matrix passage score")
+        passage_keys.add(key)
+    expected_passages = {
+        (unit_id, docid, start_char, end_char)
+        for unit_id in units
+        for docid, start_char, end_char in chunks
+    }
+    if passage_keys != expected_passages:
+        raise ValueError("matrix passage coverage is incomplete")
+    canonical_passages = tuple(
+        sorted(
+            matrix.passages,
+            key=lambda row: (
+                row.unit_id.encode("utf-8"),
+                row.docid.encode("utf-8"),
+                row.start_char,
+                row.end_char,
+            ),
+        )
+    )
+    if matrix.passages != canonical_passages:
+        raise ValueError("matrix passages are not in canonical order")
 
 
 def _canonical_json_line(value: object) -> bytes:
@@ -604,12 +1000,11 @@ def _matrix_bytes(matrix: TopicMatrix) -> bytes:
     rows: list[dict[str, object]] = [
         {
             "record_type": "header",
-            "schema_version": "retrieval-baseline-topic-matrix-v1",
+            "schema_version": "retrieval-baseline-topic-matrix-v2",
             "topic_id": matrix.topic_id,
             "source_sha256s": dict(matrix.source_sha256s),
             "scorer_identity": dict(matrix.scorer_identity),
             "chunker_identity": dict(matrix.chunker_identity),
-            "cache_stats": dict(matrix.cache_stats),
         }
     ]
     rows.extend(
@@ -621,6 +1016,16 @@ def _matrix_bytes(matrix: TopicMatrix) -> bytes:
             "subnarrative_source_ranks": dict(row.subnarrative_source_ranks),
         }
         for row in matrix.documents
+    )
+    rows.extend(
+        {
+            "record_type": "chunk",
+            "docid": row.docid,
+            "start_char": row.start_char,
+            "end_char": row.end_char,
+            "text_sha256": row.text_sha256,
+        }
+        for row in matrix.chunks
     )
     rows.extend(
         {
@@ -661,25 +1066,62 @@ def _atomic_write(path: Path, body: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _create_or_verify(path: Path, body: bytes) -> None:
+    """Publish immutable bytes create-only, accepting an identical replay."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != body:
+                raise ValueError(f"conflicting immutable artifact: {path}") from None
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def write_topic_matrix(matrix: TopicMatrix, output_dir: Path) -> Path:
     """Atomically write one canonical text-free matrix and digest manifest."""
 
+    _validate_topic_matrix(matrix)
     root = Path(output_dir)
     matrix_path = root / "topic-matrix.jsonl"
     body = _matrix_bytes(matrix)
-    _atomic_write(matrix_path, body)
+    _create_or_verify(matrix_path, body)
     manifest = {
-        "schema_version": "retrieval-baseline-topic-matrix-manifest-v1",
+        "schema_version": "retrieval-baseline-topic-matrix-manifest-v2",
         "topic_id": matrix.topic_id,
         "matrix_sha256": sha256(body).hexdigest(),
         "matrix_byte_count": len(body),
         "document_count": len(matrix.documents),
         "semantic_unit_count": len(matrix.units),
+        "chunk_count": len(matrix.chunks),
         "document_semantic_pair_count": len(matrix.documents) * len(matrix.units),
         "passage_pair_count": len(matrix.passages),
     }
     manifest_path = root / "topic-matrix-manifest.json"
-    _atomic_write(manifest_path, _canonical_json_line(manifest))
+    _create_or_verify(manifest_path, _canonical_json_line(manifest))
+    execution = {
+        "schema_version": "retrieval-baseline-score-execution-v1",
+        "topic_id": matrix.topic_id,
+        "matrix_sha256": manifest["matrix_sha256"],
+        "cache_stats": dict(matrix.cache_stats),
+    }
+    execution_body = _canonical_json_line(execution)
+    execution_path = (
+        root
+        / "execution-receipts"
+        / f"{sha256(execution_body).hexdigest()}.json"
+    )
+    _create_or_verify(execution_path, execution_body)
     return manifest_path
 
 
@@ -695,25 +1137,32 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
     root = Path(output_dir)
     body = (root / "topic-matrix.jsonl").read_bytes()
     manifest = _require_mapping(
-        json.loads((root / "topic-matrix-manifest.json").read_bytes()),
+        json.loads(
+            (root / "topic-matrix-manifest.json").read_bytes(),
+            object_pairs_hook=_unique_json_object,
+        ),
         label="topic matrix manifest",
     )
-    if manifest.get("schema_version") != "retrieval-baseline-topic-matrix-manifest-v1":
+    if manifest.get("schema_version") != "retrieval-baseline-topic-matrix-manifest-v2":
         raise ValueError("topic matrix manifest schema is invalid")
     if manifest.get("matrix_sha256") != sha256(body).hexdigest():
         raise ValueError("topic matrix digest does not match its manifest")
     parsed = [
-        _require_mapping(json.loads(line), label="topic matrix row")
+        _require_mapping(
+            json.loads(line, object_pairs_hook=_unique_json_object),
+            label="topic matrix row",
+        )
         for line in body.splitlines()
         if line
     ]
     if not parsed or parsed[0].get("record_type") != "header":
         raise ValueError("topic matrix header is missing")
     header = parsed[0]
-    if header.get("schema_version") != "retrieval-baseline-topic-matrix-v1":
+    if header.get("schema_version") != "retrieval-baseline-topic-matrix-v2":
         raise ValueError("topic matrix schema is invalid")
     documents: list[MatrixDocument] = []
     units: list[MatrixUnit] = []
+    chunks: list[MatrixChunk] = []
     passages: list[MatrixPassage] = []
     for row in parsed[1:]:
         record_type = row.get("record_type")
@@ -730,6 +1179,15 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
                             label="subnarrative source ranks",
                         ).items()
                     },
+                )
+            )
+        elif record_type == "chunk":
+            chunks.append(
+                MatrixChunk(
+                    docid=str(row["docid"]),
+                    start_char=int(row["start_char"]),
+                    end_char=int(row["end_char"]),
+                    text_sha256=str(row["text_sha256"]),
                 )
             )
         elif record_type == "unit":
@@ -756,6 +1214,7 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
         topic_id=str(header["topic_id"]),
         documents=tuple(documents),
         units=tuple(units),
+        chunks=tuple(chunks),
         passages=tuple(passages),
         source_sha256s=_require_mapping(
             header.get("source_sha256s"), label="source hashes"
@@ -766,16 +1225,12 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
         chunker_identity=_require_mapping(
             header.get("chunker_identity"), label="chunker identity"
         ),
-        cache_stats={
-            str(name): int(value)
-            for name, value in _require_mapping(
-                header.get("cache_stats"), label="cache stats"
-            ).items()
-        },
+        cache_stats={},
     )
     expected_counts = {
         "document_count": len(matrix.documents),
         "semantic_unit_count": len(matrix.units),
+        "chunk_count": len(matrix.chunks),
         "document_semantic_pair_count": len(matrix.documents) * len(matrix.units),
         "passage_pair_count": len(matrix.passages),
     }
@@ -783,6 +1238,7 @@ def read_topic_matrix(output_dir: Path) -> TopicMatrix:
         raise ValueError("topic matrix manifest counts do not match")
     if manifest.get("topic_id") != matrix.topic_id:
         raise ValueError("topic matrix topic identity does not match manifest")
+    _validate_topic_matrix(matrix)
     if _matrix_bytes(matrix) != body:
         raise ValueError("topic matrix rows are not in canonical order")
     return matrix
@@ -1004,8 +1460,7 @@ def breadth_counts(
 def rank_topic_matrix(matrix: TopicMatrix) -> RankedTopic:
     """Aggregate one authenticated complete matrix and build all three rankings."""
 
-    if not isinstance(matrix, TopicMatrix):
-        raise TypeError("matrix must be a TopicMatrix")
+    _validate_topic_matrix(matrix)
     documents = {row.docid: row for row in matrix.documents}
     if not documents or len(documents) != len(matrix.documents):
         raise ValueError("matrix documents must be nonempty and unique")
@@ -1157,6 +1612,8 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
     if len(by_topic) != len(matrices):
         raise ValueError("topic matrices must have unique topic IDs")
     ordered = tuple(sorted(matrices, key=lambda row: topic_sort_key(row.topic_id)))
+    for matrix in ordered:
+        _validate_topic_matrix(matrix)
     if any(matrix.scorer_identity != ordered[0].scorer_identity for matrix in ordered):
         raise ValueError("topic matrices must share one scorer identity")
     if any(matrix.chunker_identity != ordered[0].chunker_identity for matrix in ordered):
@@ -1165,10 +1622,11 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
     ranked_topics = tuple(rank_topic_matrix(matrix) for matrix in ordered)
     root = Path(output_dir)
     run_files = {
-        "narrative": "retrieval-narrative.run",
-        "combo": "retrieval-narrative-facet.run",
-        "breadth": "retrieval-facet-breadth.run",
+        "narrative": "narrative/r_output_trec_rag_2026.tsv",
+        "combo": "combo/r_output_trec_rag_2026.tsv",
+        "breadth": "breadth/r_output_trec_rag_2026.tsv",
     }
+    run_file_receipts: dict[str, dict[str, object]] = {}
     for run_name, relative_path in run_files.items():
         run_id = _RUN_IDS[run_name]
         _validate_trec_token(run_id, label="run ID")
@@ -1182,7 +1640,13 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
                 lines.append(
                     f"{ranked.topic_id} Q0 {docid} {rank} {depth - rank + 1} {run_id}\n"
                 )
-        _atomic_write(root / relative_path, "".join(lines).encode("utf-8"))
+        run_body = "".join(lines).encode("utf-8")
+        _atomic_write(root / relative_path, run_body)
+        run_file_receipts[run_name] = {
+            "bytes": len(run_body),
+            "line_count": len(lines),
+            "sha256": sha256(run_body).hexdigest(),
+        }
 
     topics: list[dict[str, object]] = []
     for matrix, ranked in zip(ordered, ranked_topics, strict=True):
@@ -1215,6 +1679,7 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
                 * len(matrix.units),
                 "passage_pair_count": len(matrix.passages),
                 "matrix_sha256": sha256(_matrix_bytes(matrix)).hexdigest(),
+                "source_sha256s": dict(matrix.source_sha256s),
                 "k": len(ranked.rankings.eligible_docids),
                 "pre_fallback_count": ranked.cutoff.pre_fallback_count,
                 "fallback_used": ranked.cutoff.fallback_used,
@@ -1228,10 +1693,18 @@ def export_runs(matrices: tuple[TopicMatrix, ...], output_dir: Path) -> Path:
                 "breadth_docids_sha256": eligible_hash,
             }
         )
+    source_revision = os.environ.get("TREC_RAG_SOURCE_REVISION")
+    if source_revision is not None and re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+        raise ValueError("TREC_RAG_SOURCE_REVISION must be a lowercase Git commit")
     manifest = {
-        "schema_version": "retrieval-baseline-runs-manifest-v1",
+        "schema_version": "retrieval-baseline-runs-manifest-v2",
         "run_files": run_files,
+        "run_file_receipts": run_file_receipts,
         "run_ids": _RUN_IDS,
+        "implementation_identity": {
+            "module_sha256": sha256(Path(__file__).read_bytes()).hexdigest(),
+            "source_revision": source_revision,
+        },
         "scorer_identity": dict(ordered[0].scorer_identity),
         "chunker_identity": dict(ordered[0].chunker_identity),
         "topics": topics,
@@ -1378,6 +1851,7 @@ __all__ = [
     "CutoffDecision",
     "CutoffUnitStat",
     "DocumentScore",
+    "MatrixChunk",
     "MatrixDocument",
     "MatrixPassage",
     "MatrixUnit",

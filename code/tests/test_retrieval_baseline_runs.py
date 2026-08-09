@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -252,6 +253,15 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+def _file_receipt(topic_dir: Path, relative_path: str) -> dict[str, object]:
+    body = (topic_dir / relative_path).read_bytes()
+    return {
+        "bytes": len(body),
+        "relative_path": relative_path,
+        "sha256": sha256(body).hexdigest(),
+    }
+
+
 def _source_fixture(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "source"
     topic_dir = source / "rag2026-2"
@@ -259,10 +269,6 @@ def _source_fixture(tmp_path: Path) -> tuple[Path, Path]:
     store = DocumentStore(document_root)
     first = store.admit_text("first document text")
     second = store.admit_text("second document text")
-    _write_json(
-        topic_dir / "topic-job-receipt.json",
-        {"status": "complete", "topic_id": "rag2026-2"},
-    )
     _write_json(
         topic_dir / "decomposition/result.json",
         {
@@ -278,6 +284,18 @@ def _source_fixture(tmp_path: Path) -> tuple[Path, Path]:
             ],
         },
     )
+    decomposition_body = (topic_dir / "decomposition/result.json").read_bytes()
+    _write_json(
+        topic_dir / "decomposition/manifest.json",
+        {
+            "planner": {"model": "fixture"},
+            "result_bytes": len(decomposition_body),
+            "result_file": "result.json",
+            "result_sha256": sha256(decomposition_body).hexdigest(),
+            "schema_version": "facet-decomposition-manifest-v1",
+        },
+    )
+    _write_json(topic_dir / "decomposition.json", {"fixture": True})
     _write_json(
         topic_dir / "retrieval/audit.json",
         {
@@ -316,6 +334,22 @@ def _source_fixture(tmp_path: Path) -> tuple[Path, Path]:
             ],
         },
     )
+    _write_json(topic_dir / "retrieval/evidence-bundle.json", {"fixture": True})
+    _write_json(
+        topic_dir / "retrieval/complete.json",
+        {
+            "artifacts": [
+                _file_receipt(topic_dir, "decomposition.json"),
+                _file_receipt(topic_dir, "retrieval/audit.json"),
+                _file_receipt(topic_dir, "retrieval/evidence-bundle.json"),
+            ],
+            "decomposition_source_sha256": sha256(decomposition_body).hexdigest(),
+            "narrative_sha256": sha256(b"official narrative").hexdigest(),
+            "phase": "retrieve",
+            "schema_version": "facet_pilot_v2",
+            "topic_id": "rag2026-2",
+        },
+    )
     _write_json(
         topic_dir / "scoring/selection.json",
         {
@@ -325,6 +359,79 @@ def _source_fixture(tmp_path: Path) -> tuple[Path, Path]:
                 {"docid": "d1", "memberships": ["original", "facet:s1:text"]},
             ],
         },
+    )
+    for relative_path in (
+        "scoring/lane_scores.jsonl",
+        "scoring/selected_documents.jsonl",
+        "scoring/selected_subnarrative_scores.jsonl",
+    ):
+        path = topic_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+    retrieval_manifest_body = (topic_dir / "retrieval/complete.json").read_bytes()
+    _write_json(
+        topic_dir / "scoring/complete.json",
+        {
+            "artifacts": [
+                _file_receipt(topic_dir, "scoring/lane_scores.jsonl"),
+                _file_receipt(topic_dir, "scoring/selected_documents.jsonl"),
+                _file_receipt(topic_dir, "scoring/selection.json"),
+                _file_receipt(
+                    topic_dir, "scoring/selected_subnarrative_scores.jsonl"
+                ),
+            ],
+            "decomposition_source_sha256": sha256(decomposition_body).hexdigest(),
+            "narrative_sha256": sha256(b"official narrative").hexdigest(),
+            "phase": "score",
+            "retrieval_manifest_sha256": sha256(
+                retrieval_manifest_body
+            ).hexdigest(),
+            "schema_version": "facet_pilot_v2",
+            "topic_id": "rag2026-2",
+        },
+    )
+    _write_json(topic_dir / "canonical/retrieval-projection.json", {"fixture": True})
+    projection_body = (
+        topic_dir / "canonical/retrieval-projection.json"
+    ).read_bytes()
+    scoring_manifest_body = (topic_dir / "scoring/complete.json").read_bytes()
+    projection_manifest = {
+        "phase": "retrieval_projection",
+        "projection_bytes": len(projection_body),
+        "projection_filename": "retrieval-projection.json",
+        "projection_sha256": sha256(projection_body).hexdigest(),
+        "retrieval_status": "complete",
+        "retrieval_stopping_reason": "coverage_sufficient",
+        "schema_version": "retrieval_projection_manifest_v4",
+        "source_seals": {
+            "config_sha256": "0" * 64,
+            "decomposition_source_sha256": sha256(decomposition_body).hexdigest(),
+            "narrative_sha256": sha256(b"official narrative").hexdigest(),
+            "retrieval_manifest_sha256": sha256(retrieval_manifest_body).hexdigest(),
+            "scoring_manifest_sha256": sha256(scoring_manifest_body).hexdigest(),
+        },
+        "topic_id": "rag2026-2",
+    }
+    _write_json(
+        topic_dir / "canonical/retrieval-projection-manifest.json",
+        projection_manifest,
+    )
+    projection_manifest_body = (
+        topic_dir / "canonical/retrieval-projection-manifest.json"
+    ).read_bytes()
+    receipt = {
+        "config_sha256": "0" * 64,
+        "mode": "online",
+        "projection_manifest_sha256": sha256(projection_manifest_body).hexdigest(),
+        "run_id": "source",
+        "schema_version": "topic-job-receipt-v3",
+        "status": "complete",
+        "stopping_reason": "coverage_sufficient",
+        "topic_id": "rag2026-2",
+    }
+    (topic_dir / "topic-job-receipt.json").write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
     )
     return source, document_root
 
@@ -365,8 +472,23 @@ def test_load_topic_input_rejects_union_not_bound_in_retrieval_audit(
     selection["union_pool"].append({"docid": "ghost", "memberships": []})
     _write_json(selection_path, selection)
 
-    with pytest.raises(ValueError, match="union pool"):
+    with pytest.raises(ValueError, match="digest|union pool"):
         load_topic_input(source, "rag2026-2", document_root)
+
+
+def test_load_topic_input_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    audit_path = source / "rag2026-2/retrieval/audit.json"
+    audit_path.write_text('{"topic_id":"rag2026-2","topic_id":"other"}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid JSON|duplicate|digest"):
+        load_topic_input(source, "rag2026-2", document_root)
+
+
+@pytest.mark.parametrize("topic_id", [".", "..", "rag2026-x", "rag2026-2/other"])
+def test_load_topic_input_requires_official_topic_id(topic_id: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="topic_id"):
+        load_topic_input(tmp_path, topic_id, tmp_path)
 
 
 def test_load_topic_input_rejects_zero_subnarratives(tmp_path: Path) -> None:
@@ -376,7 +498,7 @@ def test_load_topic_input_rejects_zero_subnarratives(tmp_path: Path) -> None:
     decomposition["subnarratives"] = []
     _write_json(decomposition_path, decomposition)
 
-    with pytest.raises(ValueError, match="subnarrative"):
+    with pytest.raises(ValueError, match="source seal|digest|subnarrative"):
         load_topic_input(source, "rag2026-2", document_root)
 
 
@@ -408,7 +530,19 @@ class _FakePassageScorer:
 
     @property
     def identity(self) -> dict[str, object]:
-        return {"model": "deterministic-fake", "batch_size": 8}
+        return {
+            "backend": "sentence-transformers-cross-encoder",
+            "backend_version": "5.6.0",
+            "model": "mixedbread-ai/mxbai-rerank-base-v2",
+            "model_revision": "3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
+            "score_representation": "raw_logits",
+            "inference_dtype": "bfloat16",
+            "max_length": 1024,
+            "batch_size": 32,
+            "device": "cuda",
+            "input_policy": "topic_passage_query_text_v1",
+            "implementation_version": 1,
+        }
 
     @property
     def stats(self) -> dict[str, int]:
@@ -424,7 +558,7 @@ class _FakePassageScorer:
             self._stats["cache_hits"] += count
         else:
             self._stats["cache_misses"] += count
-            self._stats["model_batches"] += (count + 7) // 8
+            self._stats["model_batches"] += (count + 31) // 32
         return tuple(
             ScoredPassage(
                 chunk=chunk,
@@ -440,7 +574,7 @@ def test_score_topic_builds_complete_narrative_and_subnarrative_matrix(
     source, document_root = _source_fixture(tmp_path)
     topic = load_topic_input(source, "rag2026-2", document_root)
     chunker = SemanticTextChunker(
-        ChunkingConfig(max_characters=12, overlap_characters=3)
+        ChunkingConfig(max_characters=3_500, overlap_characters=350)
     )
     expected_chunks = sum(
         len(chunker.split_text(document.text, document_id=document.docid))
@@ -455,7 +589,7 @@ def test_score_topic_builds_complete_narrative_and_subnarrative_matrix(
     assert matrix.cache_stats == {
         "cache_hits": 0,
         "cache_misses": expected_chunks * 2,
-        "model_batches": ((expected_chunks + 7) // 8) * 2,
+        "model_batches": ((expected_chunks + 31) // 32) * 2,
     }
     assert {row.docid for row in matrix.passages} == {"d1", "d2"}
 
@@ -466,7 +600,7 @@ def test_topic_matrix_round_trip_is_hashed_and_contains_no_document_text(
     source, document_root = _source_fixture(tmp_path)
     topic = load_topic_input(source, "rag2026-2", document_root)
     chunker = SemanticTextChunker(
-        ChunkingConfig(max_characters=12, overlap_characters=3)
+        ChunkingConfig(max_characters=3_500, overlap_characters=350)
     )
     matrix = score_topic(topic, scorer=_FakePassageScorer(cached=False), chunker=chunker)
     output_dir = tmp_path / "matrix"
@@ -493,13 +627,24 @@ def test_cache_only_replay_records_zero_model_batches_and_identical_scores(
     source, document_root = _source_fixture(tmp_path)
     topic = load_topic_input(source, "rag2026-2", document_root)
     chunker = SemanticTextChunker(
-        ChunkingConfig(max_characters=12, overlap_characters=3)
+        ChunkingConfig(max_characters=3_500, overlap_characters=350)
     )
     first = score_topic(topic, scorer=_FakePassageScorer(cached=False), chunker=chunker)
 
     replay = score_topic(topic, scorer=_FakePassageScorer(cached=True), chunker=chunker)
 
+    first_root = tmp_path / "first"
+    replay_root = tmp_path / "replay"
+    write_topic_matrix(first, first_root)
+    write_topic_matrix(replay, replay_root)
+
     assert replay.passages == first.passages
+    assert (first_root / "topic-matrix.jsonl").read_bytes() == (
+        replay_root / "topic-matrix.jsonl"
+    ).read_bytes()
+    assert (first_root / "topic-matrix-manifest.json").read_bytes() == (
+        replay_root / "topic-matrix-manifest.json"
+    ).read_bytes()
     assert replay.cache_stats["cache_misses"] == 0
     assert replay.cache_stats["model_batches"] == 0
     assert replay.cache_stats["cache_hits"] == len(replay.passages)
@@ -514,7 +659,7 @@ def test_rank_topic_matrix_uses_complete_scores_but_pooled_sources_for_breadth(
         topic,
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
-            ChunkingConfig(max_characters=12, overlap_characters=3)
+            ChunkingConfig(max_characters=3_500, overlap_characters=350)
         ),
     )
 
@@ -537,7 +682,7 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
         topic,
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
-            ChunkingConfig(max_characters=12, overlap_characters=3)
+            ChunkingConfig(max_characters=3_500, overlap_characters=350)
         ),
     )
     matrices = (replace(base, topic_id="rag2026-10"), base)
@@ -550,6 +695,7 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
     assert first == second
     assert set(first["run_files"]) == {"narrative", "combo", "breadth"}
     for name, relative_path in first["run_files"].items():
+        assert relative_path.endswith("/r_output_trec_rag_2026.tsv")
         first_body = (tmp_path / "first" / relative_path).read_bytes()
         second_body = (tmp_path / "second" / second["run_files"][name]).read_bytes()
         assert first_body == second_body
@@ -572,6 +718,59 @@ def test_export_runs_writes_three_deterministic_naturally_ordered_trec_files(
         assert sum(
             row["admission_multiplicity_histogram"].values()
         ) == row["pre_fallback_count"]
+        assert row["source_sha256s"] == base.source_sha256s
+    for name, receipt in first["run_file_receipts"].items():
+        body = (tmp_path / "first" / first["run_files"][name]).read_bytes()
+        assert receipt["sha256"] == sha256(body).hexdigest()
+        assert receipt["bytes"] == len(body)
+
+
+def test_matrix_rejects_unpinned_identity_and_incomplete_chunk_coverage(
+    tmp_path: Path,
+) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    topic = load_topic_input(source, "rag2026-2", document_root)
+    matrix = score_topic(
+        topic,
+        scorer=_FakePassageScorer(cached=False),
+        chunker=SemanticTextChunker(
+            ChunkingConfig(max_characters=3_500, overlap_characters=350)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="scorer identity"):
+        write_topic_matrix(
+            replace(matrix, scorer_identity={**matrix.scorer_identity, "model": "wrong"}),
+            tmp_path / "wrong-identity",
+        )
+    with pytest.raises(ValueError, match="coverage"):
+        write_topic_matrix(
+            replace(matrix, passages=matrix.passages[:-1]),
+            tmp_path / "missing-passage",
+        )
+
+
+def test_matrix_publication_is_create_only(tmp_path: Path) -> None:
+    source, document_root = _source_fixture(tmp_path)
+    topic = load_topic_input(source, "rag2026-2", document_root)
+    matrix = score_topic(
+        topic,
+        scorer=_FakePassageScorer(cached=False),
+        chunker=SemanticTextChunker(
+            ChunkingConfig(max_characters=3_500, overlap_characters=350)
+        ),
+    )
+    output = tmp_path / "matrix"
+    write_topic_matrix(matrix, output)
+    changed_passage = replace(
+        matrix.passages[0], raw_score=matrix.passages[0].raw_score + 1.0
+    )
+
+    with pytest.raises(ValueError, match="conflicting immutable"):
+        write_topic_matrix(
+            replace(matrix, passages=(changed_passage, *matrix.passages[1:])),
+            output,
+        )
 
 
 def test_rank_and_verify_cli_use_existing_topic_matrices(
@@ -584,7 +783,7 @@ def test_rank_and_verify_cli_use_existing_topic_matrices(
         topic,
         scorer=_FakePassageScorer(cached=False),
         chunker=SemanticTextChunker(
-            ChunkingConfig(max_characters=12, overlap_characters=3)
+            ChunkingConfig(max_characters=3_500, overlap_characters=350)
         ),
     )
     matrix_root = tmp_path / "matrices"
