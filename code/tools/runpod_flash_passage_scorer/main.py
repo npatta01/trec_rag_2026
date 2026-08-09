@@ -6,7 +6,7 @@ from runpod_flash import DataCenter, Endpoint, GpuType, NetworkVolume
 model_cache = NetworkVolume(
     name="trec-rag-mixedbread-model-cache-v1",
     size=50,
-    datacenter=DataCenter.US_GA_2,
+    datacenter=DataCenter.US_NC_2,
 )
 
 
@@ -18,7 +18,7 @@ model_cache = NetworkVolume(
     max_concurrency=1,
     flashboot=True,
     execution_timeout_ms=900_000,
-    datacenter=DataCenter.US_GA_2,
+    datacenter=DataCenter.US_NC_2,
     volume=model_cache,
     env={
         "HF_HUB_CACHE": "/runpod-volume/huggingface",
@@ -128,7 +128,11 @@ async def score_batch(request: dict) -> dict:
             raise ValueError("request passages differ from the scoring contract")
         selected_content_id = passage["content_id"]
         text = passage["text"]
-        if not isinstance(selected_content_id, str) or not isinstance(text, str) or not text.strip():
+        if (
+            not isinstance(selected_content_id, str)
+            or not isinstance(text, str)
+            or not text.strip()
+        ):
             raise ValueError("request passage identity and text must be nonblank")
         if selected_content_id != content_id(query, text):
             raise ValueError("request passage content identity differs")
@@ -149,9 +153,22 @@ async def score_batch(request: dict) -> dict:
     try:
         model = _MODEL
     except NameError:
-        from sentence_transformers import CrossEncoder
+        import sentence_transformers
+        import torch
+        import transformers
 
-        model = CrossEncoder(
+        if sentence_transformers.__version__ != "5.6.0":
+            raise RuntimeError("sentence-transformers version differs from scoring identity")
+        if str(torch.__version__).split("+", 1)[0] != "2.9.1":
+            raise RuntimeError("torch version differs from scoring identity")
+        if transformers.__version__ != "5.13.0":
+            raise RuntimeError("transformers version differs from scoring identity")
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA availability differs from scoring identity")
+        if torch.cuda.get_device_name(0) != "NVIDIA GeForce RTX 4090":
+            raise RuntimeError("CUDA device differs from scoring identity")
+
+        model = sentence_transformers.CrossEncoder(
             model_name,
             revision=model_revision,
             max_length=1024,
@@ -161,6 +178,8 @@ async def score_batch(request: dict) -> dict:
         parameter = next(model.model.parameters())
         if str(parameter.dtype) != "torch.bfloat16":
             raise RuntimeError("model dtype differs from the scoring identity")
+        if not str(parameter.device).startswith("cuda"):
+            raise RuntimeError("model device differs from the scoring identity")
         _MODEL = model
     parameter = next(model.model.parameters())
     if str(parameter.dtype) != "torch.bfloat16":
@@ -169,13 +188,16 @@ async def score_batch(request: dict) -> dict:
     def identity_activation(value):
         return value
 
-    predicted = model.predict(
-        [(query, text) for _selected_content_id, text in normalized],
-        batch_size=model_batch_size,
-        show_progress_bar=False,
-        convert_to_tensor=True,
-        activation_fn=identity_activation,
-    )
+    try:
+        predicted = model.predict(
+            [(query, text) for _selected_content_id, text in normalized],
+            batch_size=model_batch_size,
+            show_progress_bar=False,
+            convert_to_tensor=True,
+            activation_fn=identity_activation,
+        )
+    except Exception:
+        raise RuntimeError("model inference failed") from None
     if hasattr(predicted, "detach"):
         predicted = predicted.detach().cpu()
     if hasattr(predicted, "tolist"):

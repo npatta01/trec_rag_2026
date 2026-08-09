@@ -20,13 +20,19 @@ does not provision Runpod infrastructure.
 - concurrent jobs per worker: one
 - model microbatch: 16 pairs
 - request ceiling: 256 passages and 6 MiB of canonical JSON
-- execution timeout: 900 seconds
+- execution timeout: 900 seconds in the example runner's per-job policy
+- endpoint and volume data center: `US_NC_2`
 - model cache: `trec-rag-mixedbread-model-cache-v1`, mounted at
   `/runpod-volume`
 
 The worker scales to zero after the cooldown. The Network Volume remains and
 lets a later cold worker reuse the pinned Hugging Face snapshot. Runpod charges
 for the volume independently of active GPU workers.
+
+The decorator also requests a 900-second endpoint timeout, but Flash 1.19 does
+not carry that field into its generated deployment manifest. The runner's
+per-job `policy.executionTimeout` is therefore authoritative and is derived
+from its authenticated `timeout_seconds` setting.
 
 ## Local validation
 
@@ -39,10 +45,15 @@ PYTHONPATH=code .venv/bin/python -m pytest \
 
 .venv/bin/python -m py_compile \
   code/tools/runpod_flash_passage_scorer/main.py
+
+cd code/tools/runpod_flash_passage_scorer
+uv run --no-project --with runpod-flash==1.19.0 flash build --no-deps
 ```
 
 The endpoint test substitutes a local decorator and fake bfloat16 model. It
 validates the real worker body without importing Flash or contacting Runpod.
+`flash build` validates Flash's generated worker artifact locally and does not
+deploy it. Its ignored `.flash/` output can be discarded after inspection.
 
 ## Remote development after authorization
 
@@ -75,7 +86,8 @@ Read the actual local port from the log. A queue request goes to
         {"content_id": "<canonical-pair-sha256>", "text": "<passage>"}
       ]
     }
-  }
+  },
+  "policy": {"executionTimeout": 900000}
 }
 ```
 

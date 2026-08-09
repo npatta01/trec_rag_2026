@@ -670,6 +670,92 @@ miss. Coordinator and researcher OpenRouter responses are not cached, so a
 restarted topic makes fresh hosted model calls and may choose different
 adaptive queries.
 
+### Optional Runpod Flash passage scoring
+
+Agentic retrieval can send only the expensive Mixedbread passage-score cache
+misses to the queue-based Flash worker in
+`code/tools/runpod_flash_passage_scorer/`. Local scoring remains the default,
+and the checked-in 119-topic config intentionally has no remote block. Use an
+ignored smoke config with a unique experiment ID and add this nested block
+under `passage`:
+
+```yaml
+passage:
+  # Keep the existing pinned model, revision, cache, and chunking fields.
+  scoring:
+    backend: runpod_flash
+    endpoint_id_env: RUNPOD_PASSAGE_ENDPOINT_ID
+    api_key_env: RUNPOD_API_KEY
+    request_batch_size: 256
+    timeout_seconds: 900
+    max_retries: 3
+```
+
+Set the values only in the environment or ignored local secret files:
+
+```bash
+export RUNPOD_PASSAGE_ENDPOINT_ID='<endpoint-id>'
+export RUNPOD_API_KEY='<api-key>'
+```
+
+Both named values are checked before the runner allocates a topic attempt. The
+normalized backend, environment-variable names, request batch size, timeout,
+and retry bound are authenticated into the immutable run plan. The endpoint ID
+and API key values are never written there.
+
+There are three cache layers:
+
+1. The runner's `GlobalScoreCache` is authoritative for scored pairs. Local
+   topic processes share its SQLite claims and heartbeat leases; exact hits
+   never contact Runpod.
+2. The worker's Network Volume caches the pinned Hugging Face snapshot across
+   cold starts.
+3. A worker-global model object reuses the loaded CrossEncoder throughout the
+   900-second cooldown.
+
+Score-cache misses are claimed in request groups of at most 256, while the
+worker uses a fixed internal model microbatch of 16.
+
+Remote CUDA scores have a dedicated context containing the Runpod backend,
+RTX 4090 device family, package versions, fixed microbatch policy, and complete
+endpoint identity digest. Endpoint implementation changes therefore cannot
+reuse an older remote score namespace, and remote scores do not mix with local
+ROCm scores.
+
+Every submission includes a per-job `executionTimeout` derived from the
+authenticated `timeout_seconds` setting (minimum five seconds). This overrides
+the endpoint default and avoids relying on Flash 1.19's deployment manifest,
+which currently drops the decorator's endpoint timeout. Submission retries are
+limited to explicit HTTP 429 responses: an ambiguous timeout, connection
+failure, or 5xx fails closed because resubmitting `/run` could create a second
+paid job. Polling an identified job retains bounded transient retries. There is
+no silent fallback to local inference.
+
+The snippet ranker, candidate sentence scorer, and MiniLM similarity component
+remain local.
+
+For an authorized two-topic benchmark, record score-cache hits and misses,
+remote job count, passages and model microbatches per job, cold-start versus
+warm latency, end-to-end topic time, endpoint errors/retries, and Runpod worker
+and persistent-volume cost. Compare those values with the same topic/config
+using local scoring; do not infer a full-run saving from endpoint latency alone.
+
+Run the local no-cost contract suite with:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_runpod_passage_scorer.py \
+  code/tests/test_runpod_flash_passage_endpoint.py \
+  code/tests/test_mixedbread_passage_scorer.py \
+  code/tests/test_agentic_retrieval_config.py \
+  code/tests/test_competition_agentic_retrieval.py -q
+```
+
+See `code/tools/runpod_flash_passage_scorer/README.md` for the paid
+`flash dev`/deployment workflow, model-volume behavior, raw queue envelope,
+and teardown. Do not invoke a remote worker until the topic/input scope is
+separately authorized.
+
 There is no agentic overwrite mode. Config-byte, run-ID, topic-source, code, or
 submodule drift requires a fresh `experiment.id` and output namespace. Sealed
 topics are immutable, and conflicting existing bytes fail closed.

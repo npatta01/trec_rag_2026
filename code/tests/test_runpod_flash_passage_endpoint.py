@@ -27,6 +27,7 @@ ENDPOINT_PATH = ROOT / "code" / "tools" / "runpod_flash_passage_scorer" / "main.
 
 class FakeParameter:
     dtype = "torch.bfloat16"
+    device = "cuda:0"
 
 
 class FakeModel:
@@ -41,6 +42,11 @@ class FakeModel:
     def predict(self, pairs, **kwargs):
         self.calls.append((list(pairs), dict(kwargs)))
         return list(self.scores)
+
+
+class FailingModel(FakeModel):
+    def predict(self, pairs, **kwargs):
+        raise RuntimeError("private query and passage leaked by model")
 
 
 def _canonical(value: object) -> bytes:
@@ -93,7 +99,7 @@ def endpoint_module(monkeypatch: pytest.MonkeyPatch):
             return function
 
     fake_flash = SimpleNamespace(
-        DataCenter=SimpleNamespace(US_GA_2="US_GA_2"),
+        DataCenter=SimpleNamespace(US_NC_2="US_NC_2"),
         Endpoint=FakeEndpoint,
         GpuType=SimpleNamespace(NVIDIA_GEFORCE_RTX_4090="RTX_4090"),
         NetworkVolume=FakeNetworkVolume,
@@ -123,7 +129,7 @@ def test_endpoint_configuration_scales_to_zero_and_persists_model_cache(
     assert endpoint["max_concurrency"] == 1
     assert endpoint["flashboot"] is True
     assert endpoint["execution_timeout_ms"] == 900_000
-    assert endpoint["datacenter"] == "US_GA_2"
+    assert endpoint["datacenter"] == "US_NC_2"
     assert endpoint["env"] == {
         "HF_HUB_CACHE": "/runpod-volume/huggingface",
         "TOKENIZERS_PARALLELISM": "false",
@@ -131,7 +137,7 @@ def test_endpoint_configuration_scales_to_zero_and_persists_model_cache(
     assert captured["volume"] == {
         "name": "trec-rag-mixedbread-model-cache-v1",
         "size": 50,
-        "datacenter": "US_GA_2",
+        "datacenter": "US_NC_2",
     }
 
 
@@ -181,7 +187,23 @@ def test_endpoint_loads_model_once_per_warm_worker(
     monkeypatch.setitem(
         sys.modules,
         "sentence_transformers",
-        SimpleNamespace(CrossEncoder=cross_encoder),
+        SimpleNamespace(__version__="5.6.0", CrossEncoder=cross_encoder),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            __version__="2.9.1+cu128",
+            cuda=SimpleNamespace(
+                is_available=lambda: True,
+                get_device_name=lambda _index: "NVIDIA GeForce RTX 4090",
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(__version__="5.13.0"),
     )
     if hasattr(endpoint_module, "_MODEL"):
         del endpoint_module._MODEL
@@ -197,6 +219,82 @@ def test_endpoint_loads_model_once_per_warm_worker(
     assert load_calls[0][1]["device"] == "cuda"
     assert load_calls[0][1]["local_files_only"] is False
     assert len(model.calls) == 2
+
+
+@pytest.mark.parametrize(
+    (
+        "sentence_transformers_version",
+        "torch_version",
+        "transformers_version",
+        "gpu",
+        "message",
+    ),
+    [
+        (
+            "5.6.1",
+            "2.9.1+cu128",
+            "5.13.0",
+            "NVIDIA GeForce RTX 4090",
+            "sentence-transformers version",
+        ),
+        (
+            "5.6.0",
+            "2.9.2+cu128",
+            "5.13.0",
+            "NVIDIA GeForce RTX 4090",
+            "torch version",
+        ),
+        (
+            "5.6.0",
+            "2.9.1+cu128",
+            "5.13.1",
+            "NVIDIA GeForce RTX 4090",
+            "transformers version",
+        ),
+        ("5.6.0", "2.9.1+cu128", "5.13.0", "NVIDIA RTX A6000", "CUDA device"),
+    ],
+)
+def test_endpoint_rejects_runtime_that_differs_from_cache_identity(
+    endpoint_module,
+    monkeypatch: pytest.MonkeyPatch,
+    sentence_transformers_version: str,
+    torch_version: str,
+    transformers_version: str,
+    gpu: str,
+    message: str,
+) -> None:
+    model = FakeModel([0.5])
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(
+            __version__=sentence_transformers_version,
+            CrossEncoder=lambda *_args, **_kwargs: model,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            __version__=torch_version,
+            cuda=SimpleNamespace(
+                is_available=lambda: True,
+                get_device_name=lambda _index: gpu,
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(__version__=transformers_version),
+    )
+    if hasattr(endpoint_module, "_MODEL"):
+        del endpoint_module._MODEL
+
+    with pytest.raises(RuntimeError, match=message):
+        asyncio.run(endpoint_module.score_batch(_request("private passage")))
+
+    assert model.calls == []
 
 
 @pytest.mark.parametrize(
@@ -240,3 +338,13 @@ def test_endpoint_rejects_invalid_model_scores(endpoint_module, score: object) -
 
     with pytest.raises(ValueError, match="finite real"):
         asyncio.run(endpoint_module.score_batch(_request("private passage")))
+
+
+def test_endpoint_suppresses_model_exception_details(endpoint_module) -> None:
+    endpoint_module._MODEL = FailingModel([])
+
+    with pytest.raises(RuntimeError, match="model inference failed") as captured:
+        asyncio.run(endpoint_module.score_batch(_request("private passage")))
+
+    assert "private" not in str(captured.value)
+    assert captured.value.__suppress_context__ is True

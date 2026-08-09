@@ -181,6 +181,7 @@ def test_config_accepts_remote_flash_scoring_without_embedding_endpoint_id(
     [
         ("request_batch_size: 256", "request_batch_size: 0", "request_batch_size"),
         ("request_batch_size: 256", "request_batch_size: 257", "request_batch_size"),
+        ("timeout_seconds: 900", "timeout_seconds: 4", "timeout_seconds"),
         ("timeout_seconds: 900", "timeout_seconds: 3601", "timeout_seconds"),
         ("max_retries: 3", "max_retries: 6", "max_retries"),
         (

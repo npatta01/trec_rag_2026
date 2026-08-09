@@ -33,7 +33,7 @@
 - Produces: `RunpodQueueJobClient(endpoint_id: str, api_key: str, timeout_seconds: int, max_retries: int)` with `run(request) -> Mapping[str, object]`.
 - Produces: `RunpodFlashPassagePredictor(endpoint_id: str, api_key: str, request_batch_size: int, timeout_seconds: int, max_retries: int, job_client: QueueJobClient | None = None).predict(pairs) -> Sequence[float]`, plus `.cache_context` and `.identity`.
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 ```python
 def test_predictor_preserves_order_and_accepts_only_matching_identity():
@@ -63,17 +63,17 @@ def test_request_rejects_more_than_256_passages_and_six_mibibytes():
         predictor.predict((("query", "x" * (6 * 1024 * 1024)),))
 ```
 
-- [ ] **Step 2: Run the contract tests and verify RED**
+- [x] **Step 2: Run the contract tests and verify RED**
 
 Run: `PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python -m pytest code/tests/test_runpod_passage_scorer.py -q`
 
 Expected: collection fails because `trec_rag.runpod_passage_scorer` does not exist.
 
-- [ ] **Step 3: Implement the identity and contract**
+- [x] **Step 3: Implement the identity and contract**
 
-Create immutable constants for schema version, model identity, device family, internal microbatch size 16, request count 256, and request bytes 6 MiB. Build content IDs and the idempotency ID from canonical SHA-256 JSON. Validate one shared nonblank query, nonblank passages, unique ordered IDs, exact response identity digest, exact result count/order, and finite non-Boolean scores.
+Create immutable constants for schema version, model identity, device family, internal microbatch size 16, request count 256, and request bytes 6 MiB. Build content IDs and the deterministic request ID from canonical SHA-256 JSON. Validate one shared nonblank query, nonblank passages, unique ordered IDs, exact response identity digest, exact result count/order, and finite non-Boolean scores.
 
-- [ ] **Step 4: Add failing queue-transport tests**
+- [x] **Step 4: Add failing queue-transport tests**
 
 ```python
 def test_queue_client_submits_wrapped_input_and_polls_to_completion():
@@ -97,19 +97,19 @@ def test_queue_client_fails_closed_on_failed_job():
     assert "private body" not in str(captured.value)
 ```
 
-- [ ] **Step 5: Run transport tests and verify RED**
+- [x] **Step 5: Run transport tests and verify RED**
 
 Expected: tests fail because queue submission, polling, and bounded retry behavior are absent.
 
-- [ ] **Step 6: Implement the queue client and predictor**
+- [x] **Step 6: Implement the queue client and predictor**
 
-Use `POST https://api.runpod.ai/v2/{endpoint_id}/run` with `{"input": {"request": request}}`, then poll `GET https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}`. Retry only timeout/connection failures, HTTP 429, and HTTP 5xx with bounded backoff. Reject failed/cancelled/timed-out jobs and malformed JSON without including body text or credentials in exceptions.
+Use `POST https://api.runpod.ai/v2/{endpoint_id}/run` with `{"input": {"request": request}, "policy": {"executionTimeout": timeout_ms}}`, then poll `GET https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}`. Retry explicit HTTP 429 during submission and bounded transient/5xx failures while polling. Fail closed on ambiguous submission outcomes because Runpod does not deduplicate the request ID. Reject failed/cancelled/timed-out jobs and malformed JSON without including body text or credentials in exceptions.
 
-- [ ] **Step 7: Run Task 1 tests and verify GREEN**
+- [x] **Step 7: Run Task 1 tests and verify GREEN**
 
 Run the Task 1 pytest command. Expected: all tests pass.
 
-- [ ] **Step 8: Commit Task 1**
+- [x] **Step 8: Commit Task 1**
 
 ```bash
 git add code/trec_rag/runpod_passage_scorer.py code/tests/test_runpod_passage_scorer.py
@@ -126,7 +126,7 @@ git commit -m "feat: add Runpod passage score client"
 - Consumes: a backend exposing `predict(pairs)`, `cache_context`, and `identity`.
 - Produces: `MixedbreadPassageScorer(score_cache_root, device="auto", model_loader=load_pinned_cross_encoder, batch_size=8, read_only=False, prediction_backend=None, request_batch_size=None)` while preserving `rank(query_text, chunks)`.
 
-- [ ] **Step 1: Write failing remote-backend scorer tests**
+- [x] **Step 1: Write failing remote-backend scorer tests**
 
 ```python
 def test_remote_backend_uses_distinct_context_and_batches_only_cache_misses(tmp_path):
@@ -157,21 +157,21 @@ def test_remote_failure_commits_no_partial_scores(tmp_path):
 
 The mutation caught is accidentally retaining the local score context or contacting Runpod for a cache hit.
 
-- [ ] **Step 2: Run focused scorer tests and verify RED**
+- [x] **Step 2: Run focused scorer tests and verify RED**
 
 Run: `PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python -m pytest code/tests/test_mixedbread_passage_scorer.py -q`
 
 Expected: new constructor arguments are rejected.
 
-- [ ] **Step 3: Implement the prediction seam**
+- [x] **Step 3: Implement the prediction seam**
 
 Keep the current local model loader and local identity unchanged when no backend is supplied. For a backend, use its cache context and identity, claim up to `request_batch_size` misses, call its `predict`, validate through `_model_scores`, and let `GlobalScoreCache` atomically commit only a complete batch. Continue heartbeat leases while network inference is pending.
 
-- [ ] **Step 4: Run local and remote scorer tests and verify GREEN**
+- [x] **Step 4: Run local and remote scorer tests and verify GREEN**
 
 Run the focused scorer command. Expected: existing local tests and new remote tests pass.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add code/trec_rag/mixedbread_passage_scorer.py code/tests/test_mixedbread_passage_scorer.py
@@ -192,7 +192,7 @@ git commit -m "feat: support remote passage prediction backends"
 - Canonical omission resolves to local scoring.
 - Remote config resolves endpoint ID and API key from named environment variables during preflight.
 
-- [ ] **Step 1: Write failing strict-config tests**
+- [x] **Step 1: Write failing strict-config tests**
 
 ```python
 def test_config_accepts_remote_flash_scoring_without_embedding_endpoint_id(tmp_path):
@@ -213,15 +213,15 @@ def test_local_config_rejects_remote_only_fields(tmp_path):
         load_agentic_retrieval_config(write_config(tmp_path, text))
 ```
 
-- [ ] **Step 2: Run config tests and verify RED**
+- [x] **Step 2: Run config tests and verify RED**
 
 Expected: `passage.scoring` is rejected as an unknown field.
 
-- [ ] **Step 3: Implement normalized scoring settings**
+- [x] **Step 3: Implement normalized scoring settings**
 
 Default omitted scoring to local. Require exact `runpod_flash` fields for remote mode, uppercase safe environment-variable names, request size 1-256, timeout 1-3600 seconds, and retries 0-5. Include the normalized scoring block in the resolved run-plan payload so create/resume cannot drift.
 
-- [ ] **Step 4: Write failing runner tests**
+- [x] **Step 4: Write failing runner tests**
 
 ```python
 def test_remote_preflight_requires_endpoint_and_api_key_environment_names():
@@ -238,21 +238,21 @@ def test_topic_passage_search_accepts_configured_remote_scorer_identity():
     assert search.identity["scorer"] == remote_scorer_identity(256)
 ```
 
-- [ ] **Step 5: Run runner tests and verify RED**
+- [x] **Step 5: Run runner tests and verify RED**
 
 Expected: remote environment preflight and scorer construction are absent, and passage-search identity rejects the remote scorer.
 
-- [ ] **Step 6: Implement production wiring**
+- [x] **Step 6: Implement production wiring**
 
 Validate the configured environment variables before topic attempts are allocated. Build `RunpodFlashPassagePredictor` only in remote mode, inject it into `MixedbreadPassageScorer`, and pass the independently configured remote scorer identity into `_build_topic_passage_search`. Preserve every local and offline-cache-only path.
 
-- [ ] **Step 7: Run Task 3 tests and verify GREEN**
+- [x] **Step 7: Run Task 3 tests and verify GREEN**
 
 Run: `PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python -m pytest code/tests/test_agentic_retrieval_config.py code/tests/test_competition_agentic_retrieval.py code/tests/test_competition_topic_dispatch.py -q`
 
 Expected: all focused config, runner, and existing topic concurrency tests pass.
 
-- [ ] **Step 8: Commit Task 3**
+- [x] **Step 8: Commit Task 3**
 
 ```bash
 git add code/trec_rag/agentic_retrieval_config.py code/trec_rag/competition_agentic_retrieval.py code/trec_rag/competition_retrieval.py code/tests/test_agentic_retrieval_config.py code/tests/test_competition_agentic_retrieval.py
@@ -271,7 +271,7 @@ git commit -m "feat: wire Flash scoring into agentic retrieval"
 - Raw request envelope: `{"input": {"request": <request-v1>}}`.
 - Worker configuration: RTX 4090, zero-to-three workers, 900-second idle timeout, one concurrent request, persistent model volume.
 
-- [ ] **Step 1: Write failing endpoint tests with a fake decorator**
+- [x] **Step 1: Write failing endpoint tests with a fake decorator**
 
 ```python
 def test_endpoint_configuration_scales_to_zero_with_generous_cooldown(endpoint_module):
@@ -302,21 +302,21 @@ def test_endpoint_rejects_malformed_or_oversized_requests(endpoint_module):
         asyncio.run(endpoint_module.score_batch(oversized))
 ```
 
-- [ ] **Step 2: Run endpoint tests and verify RED**
+- [x] **Step 2: Run endpoint tests and verify RED**
 
 Run: `PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python -m pytest code/tests/test_runpod_flash_passage_endpoint.py -q`
 
 Expected: endpoint module is absent.
 
-- [ ] **Step 3: Implement the Flash endpoint**
+- [x] **Step 3: Implement the Flash endpoint**
 
 Use `@Endpoint` function form and the documented worker-global `_MODEL` lazy cache. Pin dependencies, volume/data center, model revision, bfloat16 dtype validation, raw-logit activation, and internal microbatch size 16. Keep all remote-executed imports, constants, validation, and helper logic inside the function body so `flash dev` works when only the body is shipped. Emit only counts, timings, IDs, and the fixed identity.
 
-- [ ] **Step 4: Document development and teardown**
+- [x] **Step 4: Document development and teardown**
 
 Document `uv tool install --python 3.12 runpod-flash`, `flash login`, running `flash dev` from the focused endpoint directory, the double-wrapped request body, `flash deploy`, obtaining the endpoint ID, and `flash app delete` teardown. State that `flash dev` and deployment are paid remote actions requiring explicit scope.
 
-- [ ] **Step 5: Run endpoint tests and syntax validation**
+- [x] **Step 5: Run endpoint tests and syntax validation**
 
 Run the endpoint pytest command, then:
 
@@ -326,7 +326,7 @@ Run the endpoint pytest command, then:
 
 Expected: tests pass and compilation exits zero without importing Flash.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add code/tools/runpod_flash_passage_scorer code/tests/test_runpod_flash_passage_endpoint.py
@@ -343,11 +343,11 @@ git commit -m "feat: add Flash passage scoring worker"
 - Produces a copyable ignored-config block and local test commands.
 - Does not add a remote block to `configs/rag26_competition_agentic_retrieval_v1.yaml`.
 
-- [ ] **Step 1: Add operator instructions**
+- [x] **Step 1: Add operator instructions**
 
 Explain the three cache layers, local-versus-remote score identity, required environment names, ignored smoke-config example, request and worker batch sizes, scale-to-zero cooldown, benchmark metrics, and paid-action boundary.
 
-- [ ] **Step 2: Run the focused suite**
+- [x] **Step 2: Run the focused suite**
 
 ```bash
 PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python -m pytest \
@@ -361,7 +361,7 @@ PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python 
 
 Expected: all selected tests pass.
 
-- [ ] **Step 3: Run broader regression and static checks**
+- [x] **Step 3: Run broader regression and static checks**
 
 ```bash
 PYTHONPATH=code /home/npatta01/data/competitions/trec_rag_2026/.venv/bin/python -m pytest code/tests -q
@@ -370,15 +370,42 @@ git diff --check
 
 Record any pre-existing environment failures separately from failures caused by this branch.
 
-- [ ] **Step 4: Independently review substantive changes**
+- [x] **Step 4: Independently review substantive changes**
 
 Review the branch diff for secret leakage, remote/local cache identity mixing, malformed-response acceptance, unbounded retries, accidental canonical-config changes, and missing teardown instructions. Fix every confirmed finding and rerun affected tests.
 
-- [ ] **Step 5: Mark this plan with verification evidence and commit**
+- [x] **Step 5: Mark this plan with verification evidence and commit**
 
 ```bash
 git add code/trec_rag/README.md docs/superpowers/plans/2026-08-09-runpod-flash-batch-passage-scoring.md
 git commit -m "docs: explain Flash passage scoring workflow"
 ```
+
+## Verification Evidence
+
+Verified locally on 2026-08-09 without deploying or invoking a paid Runpod
+endpoint:
+
+- Focused config, runner, scorer, queue-client, topic-dispatch, and endpoint
+  suite: **123 passed**.
+- Endpoint and queue contract subset: **41 passed**.
+- Full repository suite: **2,794 passed, 19 skipped, 18 failed, 60 subtests
+  passed**. The 18 failures are outside this feature: three resolve absolute
+  config/submodule paths from the main checkout, while 15 retrieval-shard
+  portability tests require a worktree-local `hf` executable and a relocatable
+  `.venv` interpreter.
+- `py_compile` passed for the endpoint, remote client, scorer seam, config, and
+  runner modules; `git diff --check` passed.
+- Import against `runpod-flash==1.19.0` confirmed workers `0..3`, the
+  900-second idle timeout, RTX 4090, `US_NC_2`, and the 50 GB Network Volume.
+- `flash build --no-deps` built the local 24.8 MB worker artifact successfully;
+  its generated `.flash/` directory is ignored and was deleted after
+  validation.
+- The canonical checked-in agentic YAML has no changes from the pre-feature
+  baseline (`0f4685c3^`).
+- Independent Sol review found five issues covering cache invalidation, Flash
+  timeout propagation, ambiguous submission retries, the `RUNNING` job state,
+  and diagnostics validation. All five were reproduced, fixed test-first, and
+  accepted by the follow-up review with no remaining actionable findings.
 
 The implementation is complete when local tests pass, the worktree contains no uncommitted requested changes, and the final handoff clearly states that no paid Runpod endpoint was invoked or deployed.

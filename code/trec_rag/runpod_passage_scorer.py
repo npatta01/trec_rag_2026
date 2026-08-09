@@ -41,7 +41,7 @@ _TORCH_VERSION = "2.9.1"
 _TRANSFORMERS_VERSION = "5.13.0"
 _FIXED_BATCH_POLICY = f"cross-encoder-predict-batch-size-{REMOTE_MODEL_BATCH_SIZE}"
 _SAFE_ENDPOINT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
-_ACTIVE_JOB_STATES = frozenset({"IN_QUEUE", "IN_PROGRESS"})
+_ACTIVE_JOB_STATES = frozenset({"IN_QUEUE", "IN_PROGRESS", "RUNNING"})
 _FAILED_JOB_STATES = frozenset({"FAILED", "CANCELLED", "TIMED_OUT"})
 
 
@@ -115,6 +115,10 @@ def remote_score_cache_context() -> ScoreCacheContext:
         score_representation=DEFAULT_SCORE_REPRESENTATION,
         inference_dtype=DEFAULT_INFERENCE_DTYPE,
         input_policy=INPUT_POLICY,
+        scoring_contract=(
+            "runpod-passage-score-v1:"
+            + remote_endpoint_identity_sha256()
+        ),
         transformers_version=_TRANSFORMERS_VERSION,
         torch_version=_TORCH_VERSION,
         device_family=REMOTE_DEVICE_FAMILY,
@@ -272,6 +276,23 @@ def _validate_score_response(
         scores.append(_finite_remote_score(row.get("score")))
     if tuple(actual_ids) != tuple(content_ids):
         raise RemotePassageScorerError("remote score result identities differ")
+    diagnostics = response.get("diagnostics")
+    if not isinstance(diagnostics, Mapping) or set(diagnostics) != {
+        "passage_count",
+        "model_batches",
+    }:
+        raise RemotePassageScorerError("remote score diagnostics differ")
+    passage_count = diagnostics.get("passage_count")
+    model_batches = diagnostics.get("model_batches")
+    if (
+        isinstance(passage_count, bool)
+        or not isinstance(passage_count, int)
+        or isinstance(model_batches, bool)
+        or not isinstance(model_batches, int)
+        or passage_count != len(content_ids)
+        or model_batches != math.ceil(len(content_ids) / REMOTE_MODEL_BATCH_SIZE)
+    ):
+        raise RemotePassageScorerError("remote score diagnostics differ")
     return tuple(scores)
 
 
@@ -288,8 +309,8 @@ def _urllib_json_transport(
     with urlopen(request, timeout=timeout_seconds) as response:
         try:
             decoded = json.loads(response.read().decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise RemotePassageScorerError("Runpod queue returned invalid JSON") from exc
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise RemotePassageScorerError("Runpod queue returned invalid JSON") from None
     if not isinstance(decoded, Mapping):
         raise RemotePassageScorerError("Runpod queue response must be a mapping")
     return decoded
@@ -318,6 +339,9 @@ class RunpodQueueJobClient:
         self.endpoint_id = endpoint_id
         self._api_key = api_key
         self.timeout_seconds = _positive_number(timeout_seconds, name="timeout_seconds")
+        if self.timeout_seconds < 5:
+            raise ValueError("timeout_seconds must be at least 5")
+        self.execution_timeout_ms = math.ceil(self.timeout_seconds * 1_000)
         self.max_retries = _retry_count(max_retries)
         if (
             isinstance(poll_interval_seconds, bool)
@@ -345,6 +369,7 @@ class RunpodQueueJobClient:
         url: str,
         payload: Mapping[str, object] | None,
         deadline: float,
+        retry_ambiguous_failures: bool,
     ) -> Mapping[str, object]:
         for attempt in range(self.max_retries + 1):
             remaining = deadline - self._monotonic()
@@ -359,8 +384,14 @@ class RunpodQueueJobClient:
                     timeout_seconds=remaining,
                 )
             except HTTPError as exc:
-                retryable = exc.code == 429 or 500 <= exc.code < 600
+                retryable = exc.code == 429 or (
+                    retry_ambiguous_failures and 500 <= exc.code < 600
+                )
                 if not retryable or attempt >= self.max_retries:
+                    if not retry_ambiguous_failures and 500 <= exc.code < 600:
+                        raise RemotePassageScorerError(
+                            "Runpod queue submission outcome is unknown"
+                        ) from None
                     raise RemotePassageScorerError(
                         f"Runpod queue request failed with HTTP {exc.code}"
                     ) from exc
@@ -372,6 +403,10 @@ class RunpodQueueJobClient:
                 self._sleep(max(0.0, min(delay, 60.0)))
                 continue
             except (TimeoutError, URLError, OSError) as exc:
+                if not retry_ambiguous_failures:
+                    raise RemotePassageScorerError(
+                        "Runpod queue submission outcome is unknown"
+                    ) from None
                 if attempt >= self.max_retries:
                     raise RemotePassageScorerError("Runpod queue transport failed") from exc
                 self._sleep(float(min(2**attempt, 60)))
@@ -402,8 +437,12 @@ class RunpodQueueJobClient:
         response = self._request(
             method="POST",
             url=f"{self._base_url}/run",
-            payload={"input": {"request": dict(request)}},
+            payload={
+                "input": {"request": dict(request)},
+                "policy": {"executionTimeout": self.execution_timeout_ms},
+            },
             deadline=deadline,
+            retry_ambiguous_failures=False,
         )
         output = self._completed_output(response)
         if output is not None:
@@ -419,6 +458,7 @@ class RunpodQueueJobClient:
                 url=f"{self._base_url}/status/{job_id}",
                 payload=None,
                 deadline=deadline,
+                retry_ambiguous_failures=True,
             )
             output = self._completed_output(response)
             if output is not None:

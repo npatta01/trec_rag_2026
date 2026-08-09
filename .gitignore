@@ -2,6 +2,7 @@
 /.superpowers/
 .venv/
 .pytest_cache/
+.flash/
 *.egg-info/
 .env
 .env.local

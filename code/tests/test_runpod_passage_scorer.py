@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 
 import pytest
 
+import trec_rag.runpod_passage_scorer as runpod_passage_scorer
 from trec_rag.runpod_passage_scorer import (
     MAX_REQUEST_BYTES,
     MAX_REQUEST_PASSAGES,
@@ -15,11 +16,15 @@ from trec_rag.runpod_passage_scorer import (
     RemotePassageScorerError,
     RunpodFlashPassagePredictor,
     RunpodQueueJobClient,
+    _urllib_json_transport,
     remote_endpoint_identity,
     remote_endpoint_identity_sha256,
     remote_score_cache_context,
     remote_scorer_identity,
 )
+
+
+_DEFAULT_DIAGNOSTICS = object()
 
 
 class EchoCompletedJobClient:
@@ -31,10 +36,12 @@ class EchoCompletedJobClient:
         *,
         reverse_results: bool = False,
         identity: Mapping[str, object] | None = None,
+        diagnostics: object = _DEFAULT_DIAGNOSTICS,
     ) -> None:
         self.scores = scores
         self.reverse_results = reverse_results
         self.identity = dict(identity or remote_endpoint_identity())
+        self.diagnostics = diagnostics
         self.requests: list[dict[str, object]] = []
 
     def run(self, request: Mapping[str, object]) -> Mapping[str, object]:
@@ -48,16 +55,19 @@ class EchoCompletedJobClient:
         ]
         if self.reverse_results:
             results.reverse()
+        diagnostics = self.diagnostics
+        if diagnostics is _DEFAULT_DIAGNOSTICS:
+            diagnostics = {
+                "passage_count": len(results),
+                "model_batches": math.ceil(len(results) / 16),
+            }
         return {
             "schema_version": "runpod_passage_score_response_v1",
             "request_id": copied["request_id"],
             "identity": self.identity,
             "identity_sha256": remote_endpoint_identity_sha256(self.identity),
             "results": results,
-            "diagnostics": {
-                "passage_count": len(results),
-                "model_batches": int(bool(results)),
-            },
+            "diagnostics": diagnostics,
         }
 
 
@@ -90,17 +100,30 @@ class ScriptedTransport:
         return response
 
 
+class InvalidJsonResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return b"private invalid response body"
+
+
 def _predictor(
     scores: tuple[object, ...],
     *,
     request_batch_size: int = 256,
     reverse_results: bool = False,
     identity: Mapping[str, object] | None = None,
+    diagnostics: object = _DEFAULT_DIAGNOSTICS,
 ) -> tuple[RunpodFlashPassagePredictor, EchoCompletedJobClient]:
     jobs = EchoCompletedJobClient(
         scores,
         reverse_results=reverse_results,
         identity=identity,
+        diagnostics=diagnostics,
     )
     predictor = RunpodFlashPassagePredictor(
         endpoint_id="endpoint-1",
@@ -146,6 +169,25 @@ def test_predictor_rejects_endpoint_identity_mismatch() -> None:
         predictor.predict((("query", "first"),))
 
 
+@pytest.mark.parametrize(
+    "diagnostics",
+    [
+        None,
+        {},
+        {"passage_count": 0, "model_batches": 1},
+        {"passage_count": 1, "model_batches": 999},
+        {"passage_count": True, "model_batches": 1},
+    ],
+)
+def test_predictor_rejects_missing_malformed_or_inconsistent_diagnostics(
+    diagnostics: object,
+) -> None:
+    predictor, _jobs = _predictor((0.75,), diagnostics=diagnostics)
+
+    with pytest.raises(RemotePassageScorerError, match="diagnostics"):
+        predictor.predict((("query", "first"),))
+
+
 @pytest.mark.parametrize("score", [True, math.nan, math.inf, "0.2"])
 def test_predictor_rejects_invalid_scores(score: object) -> None:
     predictor, _jobs = _predictor((score,))
@@ -185,10 +227,27 @@ def test_remote_cache_context_is_cuda_specific_and_excludes_request_batch_size()
     assert first["cache_context_sha256"] == second["cache_context_sha256"]
 
 
+def test_endpoint_implementation_change_invalidates_remote_score_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_identity = remote_endpoint_identity_sha256()
+    first_context = remote_score_cache_context().context_sha256
+
+    monkeypatch.setattr(
+        runpod_passage_scorer,
+        "REMOTE_IMPLEMENTATION_VERSION",
+        runpod_passage_scorer.REMOTE_IMPLEMENTATION_VERSION + 1,
+    )
+
+    assert remote_endpoint_identity_sha256() != first_identity
+    assert remote_score_cache_context().context_sha256 != first_context
+
+
 def test_queue_client_wraps_input_and_polls_until_completed() -> None:
     transport = ScriptedTransport(
         [
             {"id": "job-1", "status": "IN_QUEUE"},
+            {"id": "job-1", "status": "RUNNING"},
             {"id": "job-1", "status": "COMPLETED", "output": {"ok": True}},
         ]
     )
@@ -208,12 +267,14 @@ def test_queue_client_wraps_input_and_polls_until_completed() -> None:
     assert transport.calls[0]["method"] == "POST"
     assert transport.calls[0]["url"] == "https://api.runpod.ai/v2/endpoint-1/run"
     assert transport.calls[0]["payload"] == {
-        "input": {"request": {"schema_version": "runpod_passage_score_request_v1"}}
+        "input": {"request": {"schema_version": "runpod_passage_score_request_v1"}},
+        "policy": {"executionTimeout": 30_000},
     }
     assert transport.calls[1]["method"] == "GET"
     assert transport.calls[1]["url"] == (
         "https://api.runpod.ai/v2/endpoint-1/status/job-1"
     )
+    assert transport.calls[2]["method"] == "GET"
 
 
 def test_queue_client_retries_http_429_without_exposing_body_or_key() -> None:
@@ -249,6 +310,85 @@ def test_queue_client_retries_http_429_without_exposing_body_or_key() -> None:
     assert len(transport.calls) == 3
 
 
+def test_queue_client_does_not_duplicate_ambiguous_submission() -> None:
+    transport = ScriptedTransport(
+        [
+            TimeoutError("private accepted response was lost"),
+            {"id": "job-2", "status": "COMPLETED", "output": {"ok": True}},
+        ]
+    )
+    client = RunpodQueueJobClient(
+        "endpoint-1",
+        "secret-value",
+        timeout_seconds=30,
+        max_retries=3,
+        poll_interval_seconds=0,
+        transport=transport,
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(RemotePassageScorerError, match="outcome is unknown") as captured:
+        client.run({"request_id": "request-1"})
+
+    assert len(transport.calls) == 1
+    assert transport.calls[0]["method"] == "POST"
+    assert "private" not in str(captured.value)
+    assert "secret-value" not in str(captured.value)
+    assert captured.value.__cause__ is None
+
+
+def test_queue_client_does_not_retry_submission_http_5xx() -> None:
+    failure = HTTPError(
+        "https://api.runpod.ai/v2/endpoint-1/run",
+        503,
+        "private upstream failure",
+        Message(),
+        io.BytesIO(b"private response body"),
+    )
+    transport = ScriptedTransport(
+        [
+            failure,
+            {"id": "job-2", "status": "COMPLETED", "output": {"ok": True}},
+        ]
+    )
+    client = RunpodQueueJobClient(
+        "endpoint-1",
+        "secret-value",
+        timeout_seconds=30,
+        max_retries=3,
+        poll_interval_seconds=0,
+        transport=transport,
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(RemotePassageScorerError, match="outcome is unknown"):
+        client.run({"request_id": "request-1"})
+
+    assert len(transport.calls) == 1
+
+
+def test_queue_client_retries_safe_status_poll_transport_failure() -> None:
+    transport = ScriptedTransport(
+        [
+            {"id": "job-1", "status": "IN_QUEUE"},
+            TimeoutError("temporary poll failure"),
+            {"id": "job-1", "status": "COMPLETED", "output": {"ok": True}},
+        ]
+    )
+    client = RunpodQueueJobClient(
+        "endpoint-1",
+        "secret-value",
+        timeout_seconds=30,
+        max_retries=1,
+        poll_interval_seconds=0,
+        transport=transport,
+        sleep=lambda _seconds: None,
+    )
+
+    assert client.run({"request_id": "request-1"}) == {"ok": True}
+    assert [call["method"] for call in transport.calls] == ["POST", "GET", "GET"]
+
+
 @pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "TIMED_OUT"])
 def test_queue_client_fails_closed_without_exposing_job_error(status: str) -> None:
     transport = ScriptedTransport(
@@ -269,3 +409,26 @@ def test_queue_client_fails_closed_without_exposing_job_error(status: str) -> No
     message = str(captured.value)
     assert "private response body" not in message
     assert "secret-value" not in message
+
+
+def test_json_transport_suppresses_invalid_response_body_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "trec_rag.runpod_passage_scorer.urlopen",
+        lambda *_args, **_kwargs: InvalidJsonResponse(),
+    )
+
+    with pytest.raises(RemotePassageScorerError, match="invalid JSON") as captured:
+        _urllib_json_transport(
+            method="GET",
+            url="https://api.runpod.ai/v2/endpoint-1/status/job-1",
+            headers={"Authorization": "Bearer secret-value"},
+            payload=None,
+            timeout_seconds=30,
+        )
+
+    assert "private" not in str(captured.value)
+    assert "secret-value" not in str(captured.value)
+    assert captured.value.__suppress_context__ is True
+    assert captured.value.__cause__ is None

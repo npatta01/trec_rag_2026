@@ -419,7 +419,7 @@ def load_agentic_retrieval_config(
                     scoring_raw,
                     "timeout_seconds",
                     "passage.scoring",
-                    minimum=1,
+                    minimum=5,
                     maximum=3_600,
                 ),
                 max_retries=_require_bounded_int(

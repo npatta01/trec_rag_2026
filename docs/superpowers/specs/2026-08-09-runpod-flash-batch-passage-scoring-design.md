@@ -83,8 +83,10 @@ The initial deployment contract is:
   time; request-level batching provides utilization.
 - FlashBoot enabled.
 - One Runpod Network Volume mounted for the Hugging Face model cache.
-- A finite execution timeout large enough for cold initialization plus one
-  maximum-size scoring request.
+- A finite per-job execution policy large enough for cold initialization plus
+  one maximum-size scoring request. The source also requests the same endpoint
+  timeout, but the per-job policy is authoritative because Flash 1.19 omits the
+  endpoint field from its deployment manifest.
 - Pinned Python dependencies matching the repository's CUDA scoring contract.
 
 The maximum worker count is a cost and concurrency guard, not a target. The
@@ -111,6 +113,10 @@ identity merely because the model revision and dtype match. A later parity
 study may authorize promotion or identity unification only after measuring
 score and ranking differences on fixed real and synthetic inputs.
 
+The remote context includes the complete endpoint identity digest. Any change
+to preprocessing, runtime versions, device policy, or endpoint implementation
+version therefore creates a new SQLite namespace before old scores can be read.
+
 The endpoint returns its complete identity with every response. The caller
 compares it with the configured expected identity before accepting any score.
 
@@ -119,7 +125,8 @@ compares it with the configured expected identity before accepting any score.
 Each request is JSON with:
 
 - a schema version;
-- an idempotency/request identifier;
+- a deterministic request identifier for response authentication and
+  diagnostics (not provider-side queue deduplication);
 - the expected endpoint identity digest;
 - one nonblank query string;
 - an ordered list of passage records containing a caller-generated content ID
@@ -187,12 +194,15 @@ endpoint IDs are not written into tracked configuration.
 
 Transport retries and semantic validation are separate:
 
-- Retry bounded transient transport failures, queue timeouts, HTTP 429, and
-  retryable 5xx responses with backoff.
+- Retry HTTP 429 during submission and bounded transient failures/5xx responses
+  while polling an already identified job.
+- Do not retry an ambiguous `/run` timeout, connection failure, or 5xx response:
+  Runpod does not deduplicate the caller's request identifier, so resubmission
+  could create a second paid job.
 - Do not retry malformed responses, identity mismatches, invalid scores, or
   permanent authorization errors as though they were transport failures.
-- Use idempotent request identifiers so retrying a submitted batch is
-  diagnosable and safe.
+- Preserve deterministic request identifiers so outcomes remain diagnosable
+  even though ambiguous queue submission is not retried.
 - Keep the existing `GlobalScoreCache` heartbeat active while remote inference
   is pending so another local process does not steal a live claim.
 - If a batch ultimately fails, release its claims and fail that scoring call;
