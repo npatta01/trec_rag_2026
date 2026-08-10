@@ -113,3 +113,55 @@ No Task 3 test failed in the repository-wide run.
 Planned commit message: feat: bound resumable RAGDoll judging
 
 Committed as the Task 3 commit in this worktree with the message above.
+
+## Fix Round 1: checkpoint each completion
+
+### Reviewer finding
+
+The original worker-pool implementation collected every future result before
+writing any successful labels. An interruption after an early success could
+therefore lose that success and repeat its hosted cost on resume.
+
+### TDD RED
+
+Added
+test_completed_future_is_checkpointed_before_later_interruption. Its injected
+judge returns a valid FS result for the first task and raises KeyboardInterrupt
+for a later task. Before the fix, the test failed because the first identity was
+not present in JudgeCache after the interrupted batch.
+
+### Fix and GREEN
+
+The resolver now consumes futures with as_completed. Each completion is
+validated and conflict-checked, and a valid label is written immediately by
+the controller thread. Final judgment rows still use the original task index,
+so completion timing does not affect output ordering. An interruption remains
+interruptive, while completed checkpoints survive for the next invocation.
+
+Verification after the fix:
+
+    PYTHONPATH=code .venv/bin/python -m pytest \
+      code/tests/test_offline_evaluation.py -k \
+      'checkpointed_before_later_interruption' -q
+    1 passed, 108 deselected
+
+    PYTHONPATH=code .venv/bin/python -m pytest \
+      code/tests/test_offline_evaluation.py -q
+    109 passed, 28 subtests passed
+
+    PYTHONPATH=code .venv/bin/python -m pytest \
+      code/tests/test_offline_evaluation.py \
+      code/tests/test_ragdoll_io.py \
+      code/tests/test_accepted_rag_evaluation.py -q
+    170 passed, 28 subtests passed
+
+    PYTHONPATH=code .venv/bin/python -m compileall -q \
+      code/trec_rag/offline_evaluation.py \
+      code/trec_rag/competition_evaluation_report.py \
+      code/tests/test_offline_evaluation.py
+    git diff --check
+
+Both final checks completed successfully. A fresh-base repository-wide run
+completed 3,219 tests with 19 skips and 61 subtests; 13 unrelated existing
+retrieval-cache-shard workflow cases failed before or during wrapper/launcher
+checkout validation, while no Task 3 test failed.

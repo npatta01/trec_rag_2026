@@ -133,6 +133,22 @@ class ControllerRecordingCache(JudgeCache):
         return super().put(identity, support_label=support_label)
 
 
+class CheckpointThenInterruptJudge:
+    """Complete the first task, then emulate an interrupted hosted job."""
+
+    def __init__(self, first_task_id: str) -> None:
+        self.first_task_id = first_task_id
+        self.calls: list[str] = []
+
+    def __call__(self, task: dict[str, Any]) -> JudgeOutcome:
+        task_id = str(task["task_id"])
+        self.calls.append(task_id)
+        if task_id == self.first_task_id:
+            return JudgeOutcome(status="completed", support_label="FS")
+        time.sleep(0.05)
+        raise KeyboardInterrupt("simulated operator interruption")
+
+
 class Headings(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -1342,6 +1358,46 @@ class JudgeLimitTests(EvaluationCase):
         self.assertEqual(
             set(cache.put_thread_names),
             {threading.current_thread().name},
+        )
+
+    def test_completed_future_is_checkpointed_before_later_interruption(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        baseline = self.build(fixture, judge=None, work_dir=fixture.root / "baseline")
+        tasks = _rows(baseline.work_dir / "support_tasks.jsonl")
+        cache = JudgeCache(fixture.root / "checkpoint-cache")
+        interrupted = CheckpointThenInterruptJudge(str(tasks[0]["task_id"]))
+
+        with self.assertRaises(KeyboardInterrupt):
+            _resolve_judgments(
+                tasks,
+                cache=cache,
+                judge=interrupted,
+                settings=settings(),
+                ragdoll=ragdoll_identity(REPOSITORY_ROOT),
+                judge_workers=2,
+            )
+
+        first_identity = _judge_identity(
+            tasks[0], settings=settings(), ragdoll=ragdoll_identity(REPOSITORY_ROOT)
+        )
+        self.assertEqual(cache.read(first_identity).support_label, "FS")
+
+        resume = RecordingJudge("PS")
+        judgments, report = _resolve_judgments(
+            tasks,
+            cache=cache,
+            judge=resume,
+            settings=settings(),
+            ragdoll=ragdoll_identity(REPOSITORY_ROOT),
+            judge_workers=2,
+        )
+        self.assertEqual(len(resume.calls), 1)
+        self.assertNotIn(str(tasks[0]["task_id"]), resume.calls)
+        self.assertEqual(report["reused_from_cache"], 1)
+        self.assertEqual(report["hosted_calls"], 1)
+        self.assertEqual(
+            [row["task_id"] for row in judgments],
+            [task["task_id"] for task in tasks],
         )
 
     def test_probe_limit_preselects_one_miss_even_with_four_workers(self) -> None:

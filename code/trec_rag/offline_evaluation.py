@@ -17,7 +17,7 @@ import os
 import platform
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -529,24 +529,22 @@ def _resolve_judgments(
         selected_by_digest[digest] = index
         selected.append((index, task, identity))
 
-    # Hosted calls may run concurrently, but all outcomes are consumed and all cache writes
-    # happen below on this controller thread. Collecting in declared order also keeps conflict
-    # handling and the resulting support_judgments.jsonl deterministic across worker counts.
-    outcomes: list[JudgeOutcome | None] = []
+    # Hosted calls may run concurrently, but every completion is consumed and checkpointed on
+    # this controller thread as soon as it is available. Final judgments are still assembled
+    # by declared task index below, so completion timing cannot reorder support_judgments.jsonl.
     if selected and judge is not None:
-        with ThreadPoolExecutor(max_workers=judge_workers) as executor:
-            futures = [executor.submit(judge, task) for _, task, _ in selected]
-            for future in futures:
-                try:
-                    outcomes.append(future.result())
-                except Exception:
-                    outcomes.append(None)
-
-    hosted_calls = len(selected)
+        hosted_calls = len(selected)
+    else:
+        hosted_calls = 0
     failed = 0
     conflicts = 0
     outcome_by_digest: dict[str, tuple[JudgeOutcome | None, str | None, str]] = {}
-    for (_, _, identity), outcome in zip(selected, outcomes, strict=True):
+
+    def checkpoint(
+        identity: JudgeIdentity, outcome: JudgeOutcome | None
+    ) -> None:
+        """Validate and persist one worker outcome on the controller thread."""
+        nonlocal failed, conflicts
         label: str | None = None
         source = "missing"
         if outcome is not None and (
@@ -568,6 +566,20 @@ def _resolve_judgments(
         else:
             failed += 1
         outcome_by_digest[identity.digest] = (outcome, label, source)
+
+    if selected and judge is not None:
+        with ThreadPoolExecutor(max_workers=judge_workers) as executor:
+            future_to_selected = {
+                executor.submit(judge, task): (index, task, identity)
+                for index, task, identity in selected
+            }
+            for future in as_completed(future_to_selected):
+                _, _, identity = future_to_selected[future]
+                try:
+                    outcome = future.result()
+                except Exception:
+                    outcome = None
+                checkpoint(identity, outcome)
 
     # Apply each completed outcome to all same-identity task rows. This is what lets a probe
     # report progress for duplicate statement/citation tasks while still making one hosted call.
