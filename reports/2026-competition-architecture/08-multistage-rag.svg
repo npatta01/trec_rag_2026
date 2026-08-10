@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1220" role="img" aria-labelledby="multi-title multi-desc">
+  <title id="multi-title">Bounded multi-stage Luna and Sol generation</title>
+  <desc id="multi-desc">Luna creates a narrative blueprint and audits authenticated evidence groups. Sol writes a valid draft and may propose a bounded splice revision. Luna screens operations for five safety dimensions. Local code applies only accepted operations or preserves the draft fallback, then validates and publishes accepted run rag26-ms1-final.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7;--ok:#277a45;--ok-soft:#ddf2e3}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616;--ok:#82dda0;--ok-soft:#173c25}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:33px;font-weight:700}.label{font-size:25px;font-weight:700}.body{font-size:21px}.small{font-size:18px}.muted{fill:var(--muted)}.gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:3}.flow{fill:none;stroke:var(--gen);stroke-width:3;marker-end:url(#arrow)}.dash{stroke:var(--adv);stroke-dasharray:12 8}
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="800" height="1220" fill="var(--bg)"/><text class="title" x="400" y="54" text-anchor="middle">Multi-stage: bounded coverage and edit safety</text>
+  <rect class="stage" x="120" y="95" width="560" height="90" rx="9"/><text class="label" x="400" y="150" text-anchor="middle">Authenticated selected-evidence handoff</text>
+  <path class="flow dash" d="M300 185V255" vector-effect="non-scaling-stroke"/><path class="flow dash" d="M500 185V255" vector-effect="non-scaling-stroke"/>
+  <rect class="adv" x="45" y="265" width="330" height="130" rx="9"/><text class="label" x="210" y="313" text-anchor="middle">Luna blueprint</text><text class="small" x="210" y="350" text-anchor="middle">narrative-anchored obligations</text><text class="small muted" x="210" y="378" text-anchor="middle">bounded plan + fallback normalization</text>
+  <rect class="adv" x="425" y="265" width="330" height="130" rx="9"/><text class="label" x="590" y="313" text-anchor="middle">Luna group audits</text><text class="small" x="590" y="350" text-anchor="middle">one per evidence group</text><text class="small muted" x="590" y="378" text-anchor="middle">691 across the full run</text>
+  <path class="flow" d="M210 395V455H400M590 395V455H400V490" vector-effect="non-scaling-stroke"/>
+  <rect class="gen" x="95" y="500" width="610" height="120" rx="9"/><text class="label" x="400" y="548" text-anchor="middle">Sol structured draft</text><text class="body muted" x="400" y="588" text-anchor="middle">validated before any revision can proceed</text>
+  <path class="flow" d="M400 620V680" vector-effect="non-scaling-stroke"/>
+  <rect class="gen" x="95" y="690" width="610" height="120" rx="9"/><text class="label" x="400" y="738" text-anchor="middle">Sol bounded splice proposal</text><text class="body muted" x="400" y="778" text-anchor="middle">keep draft or ≤6 indexed operations</text>
+  <path class="flow dash" d="M400 810V865" vector-effect="non-scaling-stroke"/>
+  <rect class="adv" x="75" y="875" width="650" height="125" rx="9"/><text class="label" x="400" y="920" text-anchor="middle">Optional Luna operation screen</text><text class="small" x="400" y="958" text-anchor="middle">support • atomicity • materiality • redundancy • replacement safety</text>
+  <path class="flow" d="M400 1000V1055" vector-effect="non-scaling-stroke"/>
+  <path class="stage" d="M400 1055L635 1120L400 1185L165 1120Z"/><text class="label" x="400" y="1113" text-anchor="middle">Local apply + validate</text><text class="small muted" x="400" y="1145" text-anchor="middle">safe subset or validated draft fallback</text>
+  <rect class="ok" x="580" y="1160" width="195" height="48" rx="24"/><text class="small" x="677" y="1191" text-anchor="middle">rag26-ms1-final ✓</text>
+  <path class="flow" d="M635 1120H677V1160" vector-effect="non-scaling-stroke"/>
+</svg>

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1160" role="img" aria-labelledby="accepted-title accepted-desc">
+  <title id="accepted-title">Five exact organizer files pass validation and are accepted</title>
+  <desc id="accepted-desc">Three Retrieval TSVs pass structural checks for exact topics, six fields, dense ranks, finite non-increasing scores, unique ClimbMix document IDs, and stable run IDs. Two RAG JSONLs pass organizer AutoJudge for schema, topics, narratives, citations, and word limits. All five hashes match the ledger and Evalbase accepted them.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:33px;font-weight:700}.label{font-size:24px;font-weight:700}.body{font-size:20px}.small{font-size:17px}.muted{fill:var(--muted)}.ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}.gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.gate{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:3}.flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#arrow)}
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="800" height="1160" fill="var(--bg)"/><text class="title" x="400" y="54" text-anchor="middle">Five accepted files, two native validators</text>
+  <text class="label" x="205" y="110" text-anchor="middle">Retrieval task</text><text class="label" x="595" y="110" text-anchor="middle">RAG task</text>
+  <rect class="ret" x="35" y="145" width="340" height="110" rx="9"/><text class="label" x="205" y="188" text-anchor="middle">r26-narr-facet-v1</text><text class="small muted" x="205" y="225" text-anchor="middle">combo • 4,246 rows</text>
+  <rect class="ret" x="35" y="280" width="340" height="110" rx="9"/><text class="label" x="205" y="323" text-anchor="middle">r26-facet-breadth-v1</text><text class="small muted" x="205" y="360" text-anchor="middle">breadth • 4,246 rows</text>
+  <rect class="ret" x="35" y="415" width="340" height="110" rx="9"/><text class="label" x="205" y="458" text-anchor="middle">r26-narrative-v1</text><text class="small muted" x="205" y="495" text-anchor="middle">narrative • 4,246 rows</text>
+  <rect class="gen" x="425" y="210" width="340" height="120" rx="9"/><text class="label" x="595" y="258" text-anchor="middle">rag26-ms1-final</text><text class="small muted" x="595" y="296" text-anchor="middle">multi-stage • 119 reports</text>
+  <rect class="gen" x="425" y="365" width="340" height="120" rx="9"/><text class="label" x="595" y="413" text-anchor="middle">rag26-ss1</text><text class="small muted" x="595" y="451" text-anchor="middle">single-pass • 119 reports</text>
+  <path class="flow" d="M205 525V590H300V635" vector-effect="non-scaling-stroke"/><path class="flow" d="M595 485V590H500V635" vector-effect="non-scaling-stroke"/>
+  <rect class="gate" x="35" y="645" width="340" height="185" rx="9"/><text class="label" x="205" y="690" text-anchor="middle">Retrieval validator</text><text class="small" x="205" y="730" text-anchor="middle">six fields • exact 119 topics</text><text class="small" x="205" y="765" text-anchor="middle">dense ranks • finite scores</text><text class="small" x="205" y="800" text-anchor="middle">unique ClimbMix IDs • stable run ID</text>
+  <rect class="gate" x="425" y="645" width="340" height="185" rx="9"/><text class="label" x="595" y="690" text-anchor="middle">RAG AutoJudge</text><text class="small" x="595" y="730" text-anchor="middle">schema • exact narratives</text><text class="small" x="595" y="765" text-anchor="middle">citations • references</text><text class="small" x="595" y="800" text-anchor="middle">≤1,024 words • 119/119 valid</text>
+  <path class="flow" d="M205 830V895H400M595 830V895H400V930" vector-effect="non-scaling-stroke"/>
+  <rect class="gate" x="125" y="940" width="550" height="90" rx="9"/><text class="label" x="400" y="978" text-anchor="middle">SHA-256 matches ledger + metadata</text><text class="small muted" x="400" y="1010" text-anchor="middle">exact accepted bytes remain immutable</text>
+  <path class="flow" d="M400 1030V1075" vector-effect="non-scaling-stroke"/>
+  <rect class="ok" x="125" y="1085" width="550" height="60" rx="30"/><text class="label" x="400" y="1124" text-anchor="middle">✓ Accepted by Evalbase</text>
+</svg>

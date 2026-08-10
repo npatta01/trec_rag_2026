@@ -24,6 +24,7 @@ assert(
 );
 
 const qmd = fs.readFileSync(sourcePath, "utf8");
+const normalizedQmd = qmd.replace(/\s+/g, " ");
 const html = fs.readFileSync(htmlPath, "utf8");
 const reportCss = fs.readFileSync(path.join(assetRoot, "report.css"), "utf8");
 
@@ -67,14 +68,14 @@ assert(
 
 const figures = [
   "01-whole-system.svg",
-  "02-retrieval-system.svg",
+  "02-frozen-source-retrieval.svg",
   "03-bounded-deepseek-planning.svg",
-  "04-per-query-candidate-accounting.svg",
-  "05-evidence-and-nuggetizer.svg",
+  "04-variable-depth-candidate-core.svg",
+  "05-targeted-scoring-and-runs.svg",
   "06-generation-handoff-contract.svg",
-  "07-sol-generation.svg",
-  "08-validation-and-retries.svg",
-  "09-organizer-output-split.svg",
+  "07-single-pass-rag.svg",
+  "08-multistage-rag.svg",
+  "09-accepted-submissions.svg",
 ];
 
 for (const figure of figures) {
@@ -111,44 +112,48 @@ for (const figure of figures) {
   assert(assetReadme.includes(figure), `Asset README should document ${figure}`);
 }
 assert(
-  assetReadme.includes("fictional") && assetReadme.includes("conceptual"),
-  "Asset README should explain fictional content and conceptual geometry",
+  assetReadme.includes("conceptual") && /no\s+test narrative/.test(assetReadme),
+  "Asset README should explain conceptual geometry and the privacy boundary",
 );
 
 const requiredConcepts = [
-  "Illustrative narrative — not a TREC test topic",
+  "Frozen source, two submission branches",
+  "facet-deepseek-b40-v3",
   "DeepSeek V4 Flash",
   "deepseek/deepseek-v4-flash-20260423",
-  "0–8 focused subnarratives",
-  "1–3 BM25 query lanes per subnarrative",
-  "at most 25 searches per topic",
-  "Pyserini",
-  "ClimbMix",
-  "≤1,000 documents / focused query",
+  "climbmix-400b",
   "3500 characters",
   "350-character overlap",
-  "Mixedbread",
   "mixedbread-ai/mxbai-rerank-base-v2",
-  "≤100 passages / focused query",
-  "Nuggetizer",
+  "median absolute deviation",
+  "2.5 × 1.4826 × MAD",
+  "variable depth",
+  "1–121 documents",
+  "4,246 rows",
+  "r26-narr-facet-v1",
+  "r26-facet-breadth-v1",
+  "r26-narrative-v1",
   "Selected passages are factual authority",
   "Canonical claim hints are advisory",
   "generation_handoff_manifest.json",
+  "rag26-ms1-final",
+  "rag26-ss1",
+  "openai/gpt-5.6-luna",
   "openai/gpt-5.6-sol",
+  "691 evidence groups",
   "12,000-token ceiling",
-  "≤3 transport attempts",
-  "≤2 semantic attempts",
   "1,024-word ceiling",
-  "organizer RAG JSONL",
+  "Accepted by Evalbase",
+  "The Retrieval TSV is not Generation input",
 ];
 
 for (const concept of requiredConcepts) {
-  assert(qmd.includes(concept), `Missing architecture concept in QMD: ${concept}`);
+  assert(normalizedQmd.includes(concept), `Missing architecture concept in QMD: ${concept}`);
 }
 
 assert(
-  fs.readFileSync(path.join(assetRoot, "02-retrieval-system.svg"), "utf8").includes("1–25 query lanes"),
-  "Retrieval overview should show the true executable query-lane range",
+  fs.readFileSync(path.join(assetRoot, "04-variable-depth-candidate-core.svg"), "utf8").includes("1–121 documents"),
+  "Candidate-core figure should show the observed variable-depth range",
 );
 assert(
   fs.readFileSync(path.join(assetRoot, "03-bounded-deepseek-planning.svg"), "utf8").includes("1–3 BM25 queries each"),
@@ -184,11 +189,12 @@ for (const signal of [
   "passages",
   "selected evidence",
   "advisory hints",
-  "TREC run",
+  "Retrieval TSV",
   "full-text ZIP",
   "qrels",
   "gold nuggets",
   "RAGDoll scores",
+  "sibling",
 ]) {
   assert(qmd.includes(signal), `Missing architecture distinction: ${signal}`);
 }
@@ -207,6 +213,7 @@ for (const forbidden of ["Authorization:", "Bearer ", "rag2026-"]) {
 }
 
 const agents = fs.readFileSync(path.join(reportsRoot, "..", "AGENTS.md"), "utf8");
+const normalizedAgents = agents.replace(/\s+/g, " ");
 const rootReadme = fs.readFileSync(path.join(reportsRoot, "..", "README.md"), "utf8");
 
 for (const target of [
@@ -218,17 +225,17 @@ for (const target of [
 }
 
 for (const signal of [
-  "## Architecture Orientation",
-  "Retrieval → handoff → Generation",
+  "## Final Architecture Orientation",
+  "two sibling submission branches",
   "per-query ceilings with a documents-to-passages unit change",
   "1–3 BM25 query lanes",
   "at most 25 searches per topic",
   "Selected passages are factual authority",
-  "authenticated handoff",
-  "TREC run, full-text ZIP, qrels, gold nuggets, or RAGDoll scores",
-  "Transport and semantic retry limits are separate",
+  "authenticated selected-evidence handoff",
+  "organizer-facing Retrieval TSV is not Generation input",
+  "Transport, semantic, and stage reservation limits remain separate",
 ]) {
-  assert(agents.includes(signal), `AGENTS.md should retain architecture signal: ${signal}`);
+  assert(normalizedAgents.includes(signal), `AGENTS.md should retain architecture signal: ${signal}`);
 }
 
 console.log("2026 competition architecture smoke test passed");
