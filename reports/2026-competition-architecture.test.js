@@ -358,6 +358,22 @@ const agents = fs.readFileSync(path.join(reportsRoot, "..", "AGENTS.md"), "utf8"
 const normalizedAgents = agents.replace(/\s+/g, " ");
 const rootReadme = fs.readFileSync(path.join(reportsRoot, "..", "README.md"), "utf8");
 
+const evaluationSignals = [
+  "reports/2026-retrieval-nugget-coverage.html",
+  "rag26-ss1",
+  "rag26-ms1-final",
+  "Private / tailnet",
+  ".agents/skills/trec-rag-competition-debug-report/SKILL.md",
+  "citation support",
+  "not an official TREC score",
+  "immutable evaluated inputs",
+  "raw evaluation work stays outside git",
+  "accepted files and priorities remain unchanged",
+];
+for (const signal of evaluationSignals) {
+  assert(normalizedAgents.includes(signal), `AGENTS.md should orient agents to final analyses: ${signal}`);
+}
+
 for (const target of [
   "reports/2026-competition-architecture.html",
   "reports/2026-competition-architecture.qmd",
