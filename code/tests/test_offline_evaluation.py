@@ -18,6 +18,7 @@ from typing import Any, Sequence
 from offline_evaluation_fixture import (
     RunFixture,
     TopicSpec,
+    build_accepted_run,
     build_run,
     submission_records,
     write_generation_identity,
@@ -110,6 +111,9 @@ class EvaluationCase(unittest.TestCase):
     def run_fixture(self, specs: Sequence[TopicSpec] = THREE_TOPICS, **kwargs: Any) -> RunFixture:
         return build_run(self.workspace(), list(specs), **kwargs)
 
+    def accepted_fixture(self, specs: Sequence[TopicSpec] = THREE_TOPICS) -> RunFixture:
+        return build_accepted_run(self.workspace(), list(specs))
+
     def build(
         self,
         fixture: RunFixture,
@@ -187,6 +191,121 @@ class CliContractTests(EvaluationCase):
         ):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 cli.main(argv)
+
+    def test_cli_requires_config_mode_or_complete_accepted_mode(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(["--retrieval-config", "r.yaml", "--accepted-rag", "run.jsonl"])
+
+    def test_cli_rejects_source_identity_in_config_mode(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(
+                [
+                    "--retrieval-config", "r.yaml",
+                    "--rag-config", "g.yaml",
+                    "--source-identity", "identity.json",
+                ]
+            )
+
+    def test_accepted_mode_records_post_run_binding(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        bundle = build_evaluation_bundle(
+            retrieval_config_path=fixture.retrieval_config,
+            accepted_submission_path=fixture.rag_output,
+            accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+            handoff_manifest_path=fixture.accepted_handoff,
+            work_dir=fixture.root / "accepted-work",
+            repository_root=REPOSITORY_ROOT,
+            cache_root=fixture.root / "accepted-cache",
+            judge=None,
+            judge_settings=settings(),
+            created_utc="2026-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(
+            bundle.manifest["identities"]["binding_kind"],
+            "accepted_rag_evaluation_binding_v1",
+        )
+        self.assertFalse(bundle.manifest["identities"]["source_identity_available"])
+
+    def test_accepted_mode_rejects_changed_submission_bytes(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        fixture.rag_output.write_bytes(fixture.rag_output.read_bytes() + b"\n")
+        with self.assertRaises(ValueError):
+            build_evaluation_bundle(
+                retrieval_config_path=fixture.retrieval_config,
+                accepted_submission_path=fixture.rag_output,
+                accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+                handoff_manifest_path=fixture.accepted_handoff,
+                work_dir=fixture.root / "accepted-work",
+                repository_root=REPOSITORY_ROOT,
+                cache_root=fixture.root / "accepted-cache",
+                judge=None,
+                judge_settings=settings(),
+            )
+
+    def test_accepted_mode_rejects_wrong_run_description(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        metadata = json.loads(fixture.accepted_bundle_metadata.read_text(encoding="utf-8"))
+        metadata["runs"][0]["run_desc"] = "Wrong accepted run description"
+        fixture.accepted_bundle_metadata.write_text(json.dumps(metadata), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            build_evaluation_bundle(
+                retrieval_config_path=fixture.retrieval_config,
+                accepted_submission_path=fixture.rag_output,
+                accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+                handoff_manifest_path=fixture.accepted_handoff,
+                work_dir=fixture.root / "accepted-work",
+                repository_root=REPOSITORY_ROOT,
+                cache_root=fixture.root / "accepted-cache",
+                judge=None,
+                judge_settings=settings(),
+            )
+
+    def test_accepted_mode_rejects_handoff_incompatible_with_retrieval_export(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        other = self.accepted_fixture(ONE_TOPIC)
+        with self.assertRaises(ValueError):
+            build_evaluation_bundle(
+                retrieval_config_path=fixture.retrieval_config,
+                accepted_submission_path=fixture.rag_output,
+                accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+                handoff_manifest_path=other.accepted_handoff,
+                work_dir=fixture.root / "accepted-work",
+                repository_root=REPOSITORY_ROOT,
+                cache_root=fixture.root / "accepted-cache",
+                judge=None,
+                judge_settings=settings(),
+            )
+
+    def test_cli_accepted_mode_writes_portable_command_shape(self) -> None:
+        import contextlib
+        import io
+
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        output = io.StringIO()
+        report = fixture.root / "accepted-report.html"
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--retrieval-config", str(fixture.retrieval_config),
+                        "--accepted-rag", str(fixture.rag_output),
+                        "--accepted-bundle-metadata", str(fixture.accepted_bundle_metadata),
+                        "--handoff-manifest", str(fixture.accepted_handoff),
+                        "--work-dir", str(fixture.root / "accepted-cli-work"),
+                        "--cache-dir", str(fixture.root / "accepted-cli-cache"),
+                        "--output", str(report),
+                    ]
+                ),
+                0,
+            )
+        receipt = json.loads(output.getvalue().strip().splitlines()[-1])
+        page = report.read_text(encoding="utf-8")
+        self.assertIn("--accepted-rag", page)
+        self.assertNotIn(str(fixture.root), page)
+        self.assertEqual(
+            receipt["exact_invocation"].split()[3],
+            "--retrieval-config",
+        )
 
     def test_judge_switch_defaults_to_no_hosted_calls(self) -> None:
         parser_defaults = cli.main.__doc__ or ""

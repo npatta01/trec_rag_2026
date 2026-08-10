@@ -25,7 +25,16 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from trec_rag.competition_debug_report import DebugReportData, load_debug_report_data
+from trec_rag.accepted_rag_evaluation import (
+    AcceptedRunBinding,
+    build_accepted_run_binding,
+    write_accepted_run_binding,
+)
+from trec_rag.competition_debug_report import (
+    DebugReportData,
+    RagArtifactSource,
+    load_debug_report_data,
+)
 from trec_rag.competition_rag import ANSWER_WORD_LIMIT, load_rag_generation_config
 from trec_rag.judge_cache import JudgeCache, JudgeCacheConflict, JudgeIdentity, canonical_bytes
 from trec_rag.ragdoll_io import (
@@ -199,26 +208,98 @@ def _project_version(pyproject: Path) -> str:
 def build_evaluation_bundle(
     *,
     retrieval_config_path: Path,
-    rag_config_path: Path,
     work_dir: Path,
     repository_root: Path,
     cache_root: Path,
+    rag_config_path: Path | None = None,
+    accepted_submission_path: Path | None = None,
+    accepted_bundle_metadata_path: Path | None = None,
+    handoff_manifest_path: Path | None = None,
+    source_identity_path: Path | None = None,
     topic_ids: Sequence[str] | None = None,
     qrels_path: Path | None = None,
     gold_nuggets_path: Path | None = None,
     judge: JudgeCallable | None = None,
     judge_settings: JudgeSettings,
     judge_limit: int | None = None,
+    judge_workers: int = 1,
     created_utc: str | None = None,
 ) -> EvaluationBundle:
     """Validate every input, resolve or run judgments, and seal the bundle manifest."""
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     _require_private_directory(work_dir)
+    if type(judge_workers) is not int or judge_workers < 1:
+        raise EvaluationError("judge_workers must be a positive integer")
+
+    accepted_paths = (
+        accepted_submission_path,
+        accepted_bundle_metadata_path,
+        handoff_manifest_path,
+    )
+    accepted_mode = any(path is not None for path in accepted_paths)
+    if rag_config_path is not None and accepted_mode:
+        raise EvaluationError("RAG config and accepted RAG artifacts are mutually exclusive")
+    if rag_config_path is None and not all(path is not None for path in accepted_paths):
+        raise EvaluationError(
+            "provide either rag_config_path or accepted submission, bundle metadata, and handoff"
+        )
+    if rag_config_path is not None and source_identity_path is not None:
+        raise EvaluationError("source identity is only valid for accepted RAG artifacts")
+
+    rag_config = None
+    identity_path: Path | None = None
+    accepted_binding: AcceptedRunBinding | None = None
+    accepted_binding_path: Path | None = None
+    if rag_config_path is not None:
+        rag_config = load_rag_generation_config(Path(rag_config_path))
+        identity_path = rag_config.work_dir / "generation_identity.json"
+        if not identity_path.is_file():
+            raise EvaluationError(f"{identity_path}: generation identity is missing")
+        from trec_rag.generation_handoff import load_generation_handoff, select_generation_topics
+
+        handoff = load_generation_handoff(rag_config.handoff_manifest_path)
+        selected_topics = select_generation_topics(handoff, rag_config.topic_ids)
+        rag_source = RagArtifactSource(
+            handoff_manifest_path=rag_config.handoff_manifest_path,
+            output_path=rag_config.output_path,
+            topic_ids=tuple(topic.topic_id for topic in selected_topics),
+            team_id=rag_config.team_id,
+            run_id=rag_config.run_id,
+            run_desc=rag_config.run_desc,
+            provider=rag_config.provider,
+            model=rag_config.model,
+        )
+    else:
+        assert accepted_submission_path is not None
+        assert accepted_bundle_metadata_path is not None
+        assert handoff_manifest_path is not None
+        accepted_binding = build_accepted_run_binding(
+            Path(accepted_submission_path),
+            Path(accepted_bundle_metadata_path),
+            Path(handoff_manifest_path),
+            source_identity_path=(
+                None if source_identity_path is None else Path(source_identity_path)
+            ),
+        )
+        accepted_binding_path = write_accepted_run_binding(
+            accepted_binding, work_dir / "accepted_run_binding.json"
+        )
+        rag_source = RagArtifactSource(
+            handoff_manifest_path=Path(handoff_manifest_path).resolve(),
+            output_path=Path(accepted_submission_path).resolve(),
+            topic_ids=accepted_binding.topic_ids,
+            team_id=accepted_binding.team_id,
+            run_id=accepted_binding.run_id,
+            run_desc=accepted_binding.run_desc,
+            provider=accepted_binding.provider,
+            model=", ".join(accepted_binding.models),
+        )
 
     data = load_debug_report_data(
         Path(retrieval_config_path),
-        rag_config_path=Path(rag_config_path),
+        rag_config_path=(None if rag_config_path is None else Path(rag_config_path)),
+        rag_artifact_source=(None if rag_config_path is not None else rag_source),
         topic_ids=list(topic_ids) if topic_ids is not None else None,
     )
     if not data.topics:
@@ -226,13 +307,12 @@ def build_evaluation_bundle(
     if any(topic.rag_output is None for topic in data.topics):
         raise EvaluationError("every selected topic must have a completed RAG output")
 
-    rag_config = load_rag_generation_config(Path(rag_config_path))
-    identity_path = rag_config.work_dir / "generation_identity.json"
-    if not identity_path.is_file():
-        raise EvaluationError(f"{identity_path}: generation identity is missing")
-
     ordered_topic_ids = tuple(topic.topic_id for topic in data.topics)
-    support_rows = _selected_support_rows(rag_config, identity_path, ordered_topic_ids)
+    support_rows = _selected_support_rows(
+        rag_source,
+        identity_path if identity_path is not None else accepted_binding_path,
+        ordered_topic_ids,
+    )
 
     ragdoll = ragdoll_identity(Path(repository_root))
     tasks = _support_tasks(support_rows, ordered_topic_ids)
@@ -280,9 +360,12 @@ def build_evaluation_bundle(
     manifest = _manifest(
         data=data,
         rag_config=rag_config,
-        rag_config_path=Path(rag_config_path),
+        rag_config_path=(None if rag_config_path is None else Path(rag_config_path)),
         retrieval_config_path=Path(retrieval_config_path),
         identity_path=identity_path,
+        rag_artifact_source=rag_source,
+        accepted_binding=accepted_binding,
+        accepted_binding_path=accepted_binding_path,
         ordered_topic_ids=ordered_topic_ids,
         requested_topic_ids=topic_ids,
         ragdoll=ragdoll,
@@ -313,10 +396,16 @@ def _require_private_directory(path: Path) -> None:
 
 
 def _selected_support_rows(
-    rag_config: Any, identity_path: Path, ordered_topic_ids: Sequence[str]
+    rag_source: RagArtifactSource,
+    evidence_binding_path: Path | None,
+    ordered_topic_ids: Sequence[str],
 ) -> list[dict[str, Any]]:
+    if evidence_binding_path is None:
+        raise EvaluationError("RAG evidence binding is missing")
     rows = selected_evidence_support_rows(
-        rag_config.output_path, rag_config.handoff_manifest_path, identity_path
+        rag_source.output_path,
+        rag_source.handoff_manifest_path,
+        evidence_binding_path,
     )
     by_topic: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -748,10 +837,13 @@ def _nugget_availability(
 def _manifest(
     *,
     data: DebugReportData,
-    rag_config: Any,
-    rag_config_path: Path,
+    rag_config: Any | None,
+    rag_config_path: Path | None,
     retrieval_config_path: Path,
-    identity_path: Path,
+    identity_path: Path | None,
+    rag_artifact_source: RagArtifactSource,
+    accepted_binding: AcceptedRunBinding | None,
+    accepted_binding_path: Path | None,
     ordered_topic_ids: Sequence[str],
     requested_topic_ids: Sequence[str] | None,
     ragdoll: Mapping[str, str],
@@ -770,9 +862,15 @@ def _manifest(
     gold_nuggets_path: Path | None,
     created_utc: str | None,
 ) -> dict[str, Any]:
-    identity = json.loads(identity_path.read_text(encoding="utf-8"))
-    selected_contexts = _selected_topic_contexts(identity, identity_path)
-    evidence = _handoff_evidence_counts(rag_config)
+    identity: Mapping[str, Any] = {}
+    if identity_path is not None:
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        selected_contexts = _selected_topic_contexts(identity, identity_path)
+    elif accepted_binding is not None:
+        selected_contexts = dict(accepted_binding.topic_context_sha256s)
+    else:
+        raise EvaluationError("RAG provenance identity is missing")
+    evidence = _handoff_evidence_counts(rag_artifact_source.handoff_manifest_path)
     labels = _labels_by_citation(judgments)
     topics = [_topic_projection(topic, evidence, labels) for topic in data.topics]
     fully_judged = judge_report["missing"] == 0
@@ -794,22 +892,24 @@ def _manifest(
         },
         "configs": {
             "retrieval": _file_receipt(retrieval_config_path),
-            "rag": _file_receipt(rag_config_path),
+            "rag": None if rag_config_path is None else _file_receipt(rag_config_path),
         },
-        "identities": {
-            "run_id": rag_config.run_id,
-            "team_id": rag_config.team_id,
-            "run_desc": rag_config.run_desc,
-            "handoff_manifest_sha256": identity.get("handoff_manifest_sha256"),
-            "handoff_schema_version": identity.get("handoff_schema_version"),
-            "prompt_contract_version": identity.get("prompt_contract_version"),
-            "generation_identity_version": identity.get("identity_version"),
-            "generation_identity_sha256": _file_receipt(identity_path)["sha256"],
-            "selected_topic_context_sha256s": {
-                topic_id: selected_contexts[topic_id] for topic_id in ordered_topic_ids
-            },
+        "identities": _identity_projection(
+            rag_artifact_source,
+            identity=identity,
+            identity_path=identity_path,
+            accepted_binding=accepted_binding,
+            selected_contexts=selected_contexts,
+            ordered_topic_ids=ordered_topic_ids,
+        ),
+        "sources": {
+            **dict(sorted(data.source_sha256s.items())),
+            **(
+                {}
+                if accepted_binding_path is None
+                else {"rag/accepted_run_binding.json": _file_receipt(accepted_binding_path)["sha256"]}
+            ),
         },
-        "sources": dict(sorted(data.source_sha256s.items())),
         "artifacts": {
             name: _file_receipt(path, relative_to=work_dir) for name, path in sorted(derived.items())
         },
@@ -883,6 +983,58 @@ def _total_labels(per_topic: Mapping[str, Mapping[str, int]]) -> dict[str, int]:
     return totals
 
 
+def _identity_projection(
+    rag_source: RagArtifactSource,
+    *,
+    identity: Mapping[str, Any],
+    identity_path: Path | None,
+    accepted_binding: AcceptedRunBinding | None,
+    selected_contexts: Mapping[str, str],
+    ordered_topic_ids: Sequence[str],
+) -> dict[str, Any]:
+    base = {
+        "run_id": rag_source.run_id,
+        "team_id": rag_source.team_id,
+        "run_desc": rag_source.run_desc,
+        "handoff_manifest_sha256": (
+            identity.get("handoff_manifest_sha256")
+            if identity_path is not None
+            else accepted_binding.handoff_manifest_sha256
+        ),
+        "handoff_schema_version": (
+            identity.get("handoff_schema_version")
+            if identity_path is not None
+            else accepted_binding.handoff_schema_version
+        ),
+        "selected_topic_context_sha256s": {
+            topic_id: selected_contexts[topic_id] for topic_id in ordered_topic_ids
+        },
+    }
+    if identity_path is not None:
+        base.update(
+            {
+                "prompt_contract_version": identity.get("prompt_contract_version"),
+                "generation_identity_version": identity.get("identity_version"),
+                "generation_identity_sha256": _file_receipt(identity_path)["sha256"],
+            }
+        )
+    else:
+        assert accepted_binding is not None
+        base.update(
+            {
+                "binding_kind": accepted_binding.schema_version,
+                "source_identity_available": accepted_binding.source_identity_available,
+                "source_identity_sha256": accepted_binding.source_identity_sha256,
+                "source_identity_reason": accepted_binding.source_identity_reason,
+                "generation_identity_sha256": accepted_binding.source_identity_sha256,
+                "submission_sha256": accepted_binding.submission_sha256,
+                "bundle_metadata_sha256": accepted_binding.bundle_metadata_sha256,
+                "models": list(accepted_binding.models),
+            }
+        )
+    return base
+
+
 def _selected_topic_contexts(identity: Mapping[str, Any], path: Path) -> dict[str, str]:
     """Normalize the generation identity's selected-topic list into a mapping."""
     selected = identity.get("selected_topics")
@@ -904,11 +1056,11 @@ def _selected_topic_contexts(identity: Mapping[str, Any], path: Path) -> dict[st
     return contexts
 
 
-def _handoff_evidence_counts(rag_config: Any) -> dict[str, dict[str, int]]:
+def _handoff_evidence_counts(handoff_manifest_path: Path) -> dict[str, dict[str, int]]:
     """Count authenticated selected evidence per topic straight from the handoff."""
     from trec_rag.generation_handoff import load_generation_handoff
 
-    handoff = load_generation_handoff(rag_config.handoff_manifest_path)
+    handoff = load_generation_handoff(handoff_manifest_path)
     counts: dict[str, dict[str, int]] = {}
     for topic in handoff.topics:
         counts[topic.topic_id] = {
