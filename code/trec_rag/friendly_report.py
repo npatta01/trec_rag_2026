@@ -16,8 +16,10 @@ from __future__ import annotations
 import html
 import os
 import re
+import secrets
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -267,6 +269,124 @@ def assert_publishable(page: str, denylist: Sequence[str] = ()) -> None:
                 f"refusing to write the report: it contains a private input value "
                 f"({value[:24]!r})"
             )
+
+
+_ALLOWLISTED_NODE_SELECTORS = frozenset(
+    {
+        ("blockquote", "narrative"),
+        ("p", "subnarrative-text"),
+        ("p", "response-text"),
+        ("q", "judgment-statement"),
+    }
+)
+_VOID_HTML_ELEMENTS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
+
+class _AllowlistedNodeRedactor(HTMLParser):
+    """Build a scan-only page with only known presentation-text nodes redacted."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.parts: list[str] = []
+        self._target_tag: str | None = None
+        self._target_stack: list[str] = []
+        self.malformed = False
+        self._sentinel = f"friendly-report-allowlisted-{secrets.token_urlsafe(24)}"
+
+    @staticmethod
+    def _is_allowlisted(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
+        classes = {
+            class_name
+            for name, value in attrs
+            if name == "class"
+            for class_name in str(value or "").split()
+        }
+        return any((tag, class_name) in _ALLOWLISTED_NODE_SELECTORS for class_name in classes)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        raw = self.get_starttag_text() or f"<{tag}>"
+        if self._target_tag is not None:
+            if tag not in _VOID_HTML_ELEMENTS and not raw.rstrip().endswith("/>"):
+                self._target_stack.append(tag)
+            return
+        self.parts.append(raw)
+        if self._is_allowlisted(tag, attrs):
+            self.parts.append(self._sentinel)
+            self._target_tag = tag
+            self._target_stack = [tag]
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._target_tag is None:
+            self.parts.append(self.get_starttag_text() or f"<{tag}/>")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(f"</{tag}>")
+            return
+        if not self._target_stack or self._target_stack[-1] != tag:
+            self.malformed = True
+            return
+        self._target_stack.pop()
+        if not self._target_stack:
+            self.parts.append(f"</{tag}>")
+            self._target_tag = None
+
+    def handle_data(self, data: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(f"<!{decl}>")
+
+    def handle_pi(self, data: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(f"<?{data}>")
+
+    def handle_unknown_decl(self, data: str) -> None:
+        if self._target_tag is None:
+            self.parts.append(f"<![{data}]>")
+
+
+def _redact_allowlisted_nodes(page: str) -> str:
+    """Redact only exact allowlisted DOM nodes for the dynamic-input scan."""
+    parser = _AllowlistedNodeRedactor()
+    parser.feed(page)
+    parser.close()
+    if parser.malformed or parser._target_tag is not None:
+        # A malformed page must remain fully visible to the denylist. Never let an
+        # unclosed or mismatched allowlisted node hide a later template leak.
+        return page
+    return "".join(parser.parts)
 
 
 # ---------------------------------------------------------------------------
@@ -791,7 +911,13 @@ def write_report(
     """Render, scan, and only then write — atomically, so a failure never corrupts a
     previously valid report."""
     page = render_report(build_presentation(manifest, commands=commands))
-    assert_publishable(page, denylist)
+    # Generic patterns must inspect the actual page: allowlisted response text is still
+    # forbidden when it contains credentials, paths, hashes, or provider/runtime fields.
+    assert_publishable(page, denylist=())
+    # Dynamic evidence values are checked on a DOM-aware projection. Only the exact
+    # allowlisted narrative/subnarrative/answer nodes are replaced; template text and
+    # every other location remain visible to the full run-specific denylist.
+    assert_publishable(_redact_allowlisted_nodes(page), denylist)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = page.encode("utf-8")

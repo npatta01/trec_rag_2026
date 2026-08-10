@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from copy import deepcopy
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Sequence
@@ -1036,6 +1037,36 @@ class PrivacyTests(EvaluationCase):
             from trec_rag.friendly_report import assert_publishable
 
             assert_publishable(page + evidence, denylist_from_bundle(bundle.work_dir))
+
+    def test_allowlisted_evidence_reuse_passes_but_template_leak_fails(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(
+            iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values())
+        )
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = f"The answer repeats {evidence}."
+        manifest["topics"][0]["subnarratives"][0] = f"The subnarrative repeats {evidence}."
+        denylist = denylist_from_bundle(bundle.work_dir)
+        output = fixture.root / "allowlisted-evidence.html"
+
+        write_report(manifest, output, denylist=denylist)
+        self.assertTrue(output.is_file())
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+        with patch.object(
+            friendly_report,
+            "render_report",
+            side_effect=lambda view: original_render_report(view) + f"<aside>{evidence}</aside>",
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / "non-allowlisted-evidence.html",
+                    denylist=denylist,
+                )
 
     def test_html_escaped_private_text_is_rejected(self) -> None:
         from trec_rag.friendly_report import assert_publishable
