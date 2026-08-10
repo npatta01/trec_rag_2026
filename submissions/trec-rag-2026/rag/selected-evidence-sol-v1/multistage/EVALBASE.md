@@ -8,8 +8,10 @@ Use this sheet with the exact sibling file
 | Field | Response |
 |---|---|
 | Task | Retrieval-Augmented Generation (`RAG`) |
+| Evalbase organization | `(NP Labs) NP` |
+| Embedded `metadata.team_id` | `NP` |
 | Submission file | `multistage/rag_output_trec_rag_2026.jsonl` |
-| SHA-256 | `72200f7a0e3be19f9c7e8f23d3845f894f5e95e26caff2986ae16f848b4dee00` |
+| SHA-256 | `ff384a62069062709abfe9cbfbcce2ba89c4f63ad857b917101488296e11677a` |
 | Runtag | `rag26-ms1-final` |
 | Manual or automatic | `automatic` |
 | Submission purpose | `real run` |

@@ -12,6 +12,8 @@
     "expected_output_filename": "rag_output_trec_rag_2026.jsonl",
     "maximum_runs_per_task": 10,
     "evalbase_priority_required": true,
+    "evalbase_organization_name": "NP Labs",
+    "team_id": "NP",
     "submission_url": "https://ir.nist.gov/evalbase/conf/trec-2026"
   },
   "source": {
@@ -30,9 +32,9 @@
       "run_desc": "Selected-evidence retrieval with bounded multi-stage Sol and Luna answer generation.",
       "path": "multistage/rag_output_trec_rag_2026.jsonl",
       "evalbase_response_path": "multistage/EVALBASE.md",
-      "bytes": 1090428,
+      "bytes": 1089595,
       "line_count": 119,
-      "sha256": "72200f7a0e3be19f9c7e8f23d3845f894f5e95e26caff2986ae16f848b4dee00",
+      "sha256": "ff384a62069062709abfe9cbfbcce2ba89c4f63ad857b917101488296e11677a",
       "provider_call_count": 1158,
       "provider_calls_by_model": {
         "openai/gpt-5.6-luna": 894,
@@ -64,9 +66,9 @@
       "run_desc": "Selected-evidence retrieval with single-pass GPT-5.6 Sol answer generation.",
       "path": "singlepass/rag_output_trec_rag_2026.jsonl",
       "evalbase_response_path": "singlepass/EVALBASE.md",
-      "bytes": 607721,
+      "bytes": 606888,
       "line_count": 119,
-      "sha256": "a33c60325c198cf90178d5b4c6c1b04209f7d39de278736b6817a8c5666c02a0",
+      "sha256": "91f757eb12291c118fe21e0828f0e607bba90460616e3405bd88f62eb67ab808",
       "provider_call_count": 121,
       "provider_calls_by_model": {
         "openai/gpt-5.6-sol": 121

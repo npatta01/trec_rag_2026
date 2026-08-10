@@ -9,7 +9,7 @@ experiment:
   mode: create
 
 submission:
-  team_id: castorini
+  team_id: NP
   run_desc: Selected-evidence retrieval with GPT-5.6 Sol answer generation.
 
 inputs:
