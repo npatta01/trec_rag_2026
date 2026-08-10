@@ -48,6 +48,9 @@ _FAILURES_FILENAME = "failures.json"
 _CRASH_FALLBACK_WARNING = (
     "operation-screen call was crash-consumed; published validated draft fallback"
 )
+_PLANNER_DEADLINE_FALLBACK_WARNING = (
+    "consumed planner response was deterministically normalized and strictly revalidated"
+)
 TopicRunner = Callable[..., Awaitable[Path]]
 
 
@@ -210,6 +213,14 @@ async def _run_multistage_locked(
                             "topic_id": topic.topic_id,
                             "kind": "operation_screen_crash_fallback",
                             "message": _CRASH_FALLBACK_WARNING,
+                        }
+                    )
+                if isinstance(state.get("planner_fallback"), dict):
+                    warnings.append(
+                        {
+                            "topic_id": topic.topic_id,
+                            "kind": "planner_deadline_fallback",
+                            "message": _PLANNER_DEADLINE_FALLBACK_WARNING,
                         }
                     )
             except Exception as exc:

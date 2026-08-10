@@ -56,11 +56,13 @@ from trec_rag.bounded_splice import (
 )
 from trec_rag.narrative_blueprint import (
     BLUEPRINT_CONTRACT_VERSION,
+    BlueprintValidationError,
     BlueprintProjection,
     NarrativeBlueprint,
     load_blueprint_state,
     planner_response_schema,
     project_blueprint,
+    recover_blueprint_for_deadline,
     render_blueprint_writer_context,
     render_planner_prompt,
     serialize_blueprint_state,
@@ -2003,6 +2005,7 @@ def _bounded_manifest(
         "draft": _bounded_candidate_summary(root, "draft", draft) if draft is not None else None,
         "final": _bounded_candidate_summary(root, "final", final) if final is not None else None,
         "operation_screen": state.get("operation_screen"),
+        "planner_fallback": state.get("planner_fallback"),
         "failure": state.get("failure"),
     }
     return manifest
@@ -2127,7 +2130,20 @@ async def _run_bounded_revision_with_generators(
                 json.dumps(_bounded_manifest(root, state, topic=topic, draft=None, final=None), indent=2) + "\n",
             )
             raise RuntimeError(state["failure"])
-        blueprint = validate_blueprint(topic, planner_payload)
+        try:
+            blueprint = validate_blueprint(topic, planner_payload)
+        except BlueprintValidationError as exc:
+            blueprint, fallback_actions = recover_blueprint_for_deadline(
+                topic,
+                planner_payload,
+            )
+            if not fallback_actions:
+                raise
+            state["planner_fallback"] = {
+                "validator_error": str(exc),
+                "actions": list(fallback_actions),
+            }
+            state["failure"] = None
         projection = project_blueprint(topic, blueprint)
         writer_context = render_blueprint_writer_context(topic, blueprint, projection)
         planner_state = serialize_blueprint_state(

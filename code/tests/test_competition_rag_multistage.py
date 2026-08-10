@@ -139,6 +139,7 @@ def _write_completed_topic(
     topic: GenerationTopic,
     *,
     operation_screen_crash_fallback: bool = False,
+    planner_fallback: dict[str, object] | None = None,
 ) -> Path:
     root = _bounded_private_root(config, topic)
     final_path = root / "evaluation/final/submission.jsonl"
@@ -165,6 +166,7 @@ def _write_completed_topic(
         "operation_screen": {
             "crash_fallback": operation_screen_crash_fallback,
         },
+        "planner_fallback": planner_fallback,
         "stage_hashes": {
             "evaluation/final/submission.jsonl": sha256(final_bytes).hexdigest(),
         },
@@ -310,6 +312,63 @@ def test_crash_consumed_screen_fallback_publishes_with_durable_warning(
         }
     ]
     assert "topic rag2026-0: warning: operation-screen call was crash-consumed" in (
+        capsys.readouterr().err
+    )
+
+
+def test_deadline_planner_fallback_publishes_with_durable_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handoff = _handoff()
+    config = _config(tmp_path)
+
+    async def fake_topic_runner(
+        runner_config: RagGenerationConfig,
+        runner_handoff: GenerationHandoff,
+        topic: GenerationTopic,
+        **_kwargs: object,
+    ) -> Path:
+        return _write_completed_topic(
+            runner_config,
+            runner_handoff,
+            topic,
+            planner_fallback=(
+                {
+                    "validator_error": "target_words total must be within 850-950",
+                    "actions": ["target_words_scaled"],
+                }
+                if topic == handoff.topics[0]
+                else None
+            ),
+        )
+
+    asyncio.run(
+        run_multistage_generation(
+            config,
+            handoff,
+            api_key="fixture-key",
+            topic_runner=fake_topic_runner,
+        )
+    )
+
+    report = json.loads(
+        (config.work_dir / "failures.json").read_text(encoding="utf-8")
+    )
+    assert config.output_path.is_file()
+    assert report["failure_count"] == 0
+    assert report["warning_count"] == 1
+    assert report["warnings"] == [
+        {
+            "topic_id": "rag2026-0",
+            "kind": "planner_deadline_fallback",
+            "message": (
+                "consumed planner response was deterministically normalized "
+                "and strictly revalidated"
+            ),
+        }
+    ]
+    assert "topic rag2026-0: warning: consumed planner response" in (
         capsys.readouterr().err
     )
 

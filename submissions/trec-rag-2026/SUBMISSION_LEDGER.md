@@ -16,6 +16,17 @@ The priority order is a recommendation: submit the combo run first, breadth
 second, and narrative-only third. The organizer permits up to ten runs per
 task and uses the submitted priority to choose runs for manual assessment.
 
+## RAG task
+
+| Priority | Submission | Run ID | Status | Upload file | SHA-256 | Topics | Portal notes |
+|---:|---|---|---|---|---|---:|---|
+| 1 | Selected-evidence multi-stage Sol + Luna | `rag26-ms1-final` | Ready to upload | [`multistage/rag_output_trec_rag_2026.jsonl`](rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl) | `72200f7a0e3be19f9c7e8f23d3845f894f5e95e26caff2986ae16f848b4dee00` | 119 | [`multistage/EVALBASE.md`](rag/selected-evidence-sol-v1/multistage/EVALBASE.md) |
+| 2 | Selected-evidence single-pass Sol | `rag26-ss1` | Ready to upload | [`singlepass/rag_output_trec_rag_2026.jsonl`](rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl) | `a33c60325c198cf90178d5b4c6c1b04209f7d39de278736b6817a8c5666c02a0` | 119 | [`singlepass/EVALBASE.md`](rag/selected-evidence-sol-v1/singlepass/EVALBASE.md) |
+
+Submit both RAG runs. The suggested priority puts the bounded multi-stage run
+first and the independently generated single-pass run second; no post-hoc gold,
+qrel, or RAGDoll score was used to choose that order.
+
 ## Architecture and provenance
 
 - [`ARCHITECTURE.md`](retrieval/cache-first-candidate-core-v1/ARCHITECTURE.md)
@@ -26,16 +37,21 @@ task and uses the submitted priority to choose runs for manual assessment.
 - [`retrieval-baseline-runs-manifest.json`](retrieval/cache-first-candidate-core-v1/retrieval-baseline-runs-manifest.json)
   authenticates scorer and implementation identities, topic-level cutoff
   statistics, input matrices, and run-file receipts.
+- [`rag/selected-evidence-sol-v1/README.md`](rag/selected-evidence-sol-v1/README.md)
+  explains the two RAG generation strategies and their shared sealed handoff.
+- [`rag/selected-evidence-sol-v1/metadata.json`](rag/selected-evidence-sol-v1/metadata.json)
+  records the RAG artifact hashes, generation costs, warnings, and privacy
+  review without retaining prompts, evidence passages, or provider responses.
 
 ## Submission procedure
 
 For each row above:
 
 1. Verify the local upload file against the recorded SHA-256.
-2. Upload that exact `r_output_trec_rag_2026.tsv` to the Retrieval task.
+2. Upload that exact file to the matching Retrieval or RAG task.
 3. Copy the dropdown and text-area responses from its `EVALBASE.md`.
-4. Confirm the run tag shown by Evalbase exactly matches the run file's sixth
-   column.
+4. Confirm the run tag shown by Evalbase exactly matches the Retrieval file's
+   sixth column or the RAG file's `metadata.run_id`.
 5. After submission, record the confirmation below in a follow-up commit.
 
 ## Evalbase confirmations
@@ -45,3 +61,5 @@ For each row above:
 | `r26-narr-facet-v1` | — | — | Not yet submitted | — |
 | `r26-facet-breadth-v1` | — | — | Not yet submitted | — |
 | `r26-narrative-v1` | — | — | Not yet submitted | — |
+| `rag26-ms1-final` | — | — | Not yet submitted | — |
+| `rag26-ss1` | — | — | Not yet submitted | — |
