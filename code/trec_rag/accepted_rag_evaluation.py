@@ -15,10 +15,63 @@ from trec_rag.generation_handoff import PROMPT_CONTRACT_VERSION, load_generation
 
 
 ACCEPTED_BINDING_SCHEMA_VERSION = "accepted_rag_evaluation_binding_v1"
+ACCEPTED_BUNDLE_METADATA_SCHEMA_VERSION = "trec-rag-2026-rag-submission-bundle-v1"
 MISSING_SOURCE_IDENTITY_REASON = "original generation identity was not preserved"
 SINGLEPASS_IDENTITY_VERSION = 6
 MULTISTAGE_IDENTITY_VERSION = 1
 MULTISTAGE_TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v8_screen_liveness"
+
+
+@dataclass(frozen=True)
+class ArtifactSnapshot:
+    """One immutable read of a source file, including its observed path identity."""
+
+    path: Path
+    data: bytes
+    sha256: str
+    identity: tuple[int, int, int, int, int, int]
+
+    @classmethod
+    def capture(cls, path: Path, *, maximum: int | None = None) -> "ArtifactSnapshot":
+        path = Path(path)
+        try:
+            with path.open("rb") as source:
+                before = _file_identity(source)
+                data = source.read(None if maximum is None else maximum + 1)
+                after = _file_identity(source)
+        except OSError as error:
+            raise ValueError(f"{path}: cannot read source snapshot") from error
+        if maximum is not None and len(data) > maximum:
+            raise ValueError(f"{path}: source exceeds bounded snapshot limit")
+        if before != after:
+            raise ValueError(f"{path}: source changed while capturing snapshot")
+        # Keep symlink spelling so a target swap is detected by verify_current; resolving
+        # here would silently turn a path replacement into an unrelated pathname check.
+        return cls(path.absolute(), data, _digest(data), before)
+
+    def verify_current(self) -> None:
+        """Fail closed if the path no longer names the bytes that were consumed."""
+        try:
+            with self.path.open("rb") as source:
+                before = _file_identity(source)
+                data = source.read()
+                after = _file_identity(source)
+        except OSError as error:
+            raise ValueError(f"{self.path}: source changed after snapshot") from error
+        if before != after or before != self.identity or data != self.data:
+            raise ValueError(f"{self.path}: source changed after snapshot")
+
+
+def _file_identity(source: Any) -> tuple[int, int, int, int, int, int]:
+    stat_result = os.fstat(source.fileno())
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_nlink,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+        stat_result.st_ctime_ns,
+    )
 
 
 @dataclass(frozen=True)
@@ -40,6 +93,22 @@ class AcceptedRunBinding:
     source_identity_available: bool
     source_identity_sha256: str | None
     source_identity_reason: str | None
+    submission_snapshot: ArtifactSnapshot | None = None
+    bundle_metadata_snapshot: ArtifactSnapshot | None = None
+    handoff_snapshot: ArtifactSnapshot | None = None
+    source_identity_snapshot: ArtifactSnapshot | None = None
+    handoff: Any | None = None
+
+    def verify_sources(self) -> None:
+        """Verify every accepted path still names the snapshot consumed for the binding."""
+        for snapshot in (
+            self.submission_snapshot,
+            self.bundle_metadata_snapshot,
+            self.handoff_snapshot,
+            self.source_identity_snapshot,
+        ):
+            if snapshot is not None:
+                snapshot.verify_current()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -75,9 +144,10 @@ def _require_sha256(value: object, field: str, path: Path) -> str:
     return value
 
 
-def _load_json(path: Path) -> tuple[dict[str, Any], bytes]:
+def _load_json(path: Path, source: bytes | None = None) -> tuple[dict[str, Any], bytes]:
     try:
-        source = path.read_bytes()
+        if source is None:
+            source = path.read_bytes()
     except OSError as error:
         raise ValueError(f"{path}: cannot read JSON") from error
     try:
@@ -89,9 +159,10 @@ def _load_json(path: Path) -> tuple[dict[str, Any], bytes]:
     return value, source
 
 
-def _load_submission(path: Path) -> tuple[list[dict[str, Any]], bytes]:
+def _load_submission(path: Path, source: bytes | None = None) -> tuple[list[dict[str, Any]], bytes]:
     try:
-        source = path.read_bytes()
+        if source is None:
+            source = path.read_bytes()
     except OSError as error:
         raise ValueError(f"{path}: cannot read accepted submission") from error
     rows: list[dict[str, Any]] = []
@@ -109,6 +180,26 @@ def _load_submission(path: Path) -> tuple[list[dict[str, Any]], bytes]:
             raise ValueError(f"{path}:{number}: row is not a JSON object")
         rows.append(value)
     return rows, source
+
+
+def load_generation_handoff_snapshot(snapshot: ArtifactSnapshot) -> Any:
+    """Authenticate a handoff from captured bytes without reopening its source path."""
+    if not isinstance(snapshot, ArtifactSnapshot):
+        raise TypeError("snapshot must be an ArtifactSnapshot")
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", prefix="trec-rag-handoff-", suffix=".json", delete=False) as handle:
+            temporary = Path(handle.name)
+            os.chmod(handle.fileno(), 0o600)
+            handle.write(snapshot.data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return load_generation_handoff(temporary)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{snapshot.path}: invalid generation handoff snapshot") from error
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _topic_contexts_from_handoff(handoff: Any, path: Path) -> tuple[tuple[str, ...], dict[str, str]]:
@@ -241,10 +332,19 @@ def build_accepted_run_binding(
     submission_path = Path(submission_path)
     bundle_metadata_path = Path(bundle_metadata_path)
     handoff_manifest_path = Path(handoff_manifest_path)
-    records, submission_bytes = _load_submission(submission_path)
-    metadata, metadata_bytes = _load_json(bundle_metadata_path)
+    submission_snapshot = ArtifactSnapshot.capture(submission_path)
+    metadata_snapshot = ArtifactSnapshot.capture(bundle_metadata_path)
+    handoff_snapshot = ArtifactSnapshot.capture(handoff_manifest_path)
+    records, submission_bytes = _load_submission(submission_path, submission_snapshot.data)
+    metadata, metadata_bytes = _load_json(bundle_metadata_path, metadata_snapshot.data)
+    metadata_schema = metadata.get("schema_version")
+    if type(metadata_schema) is not str or metadata_schema != ACCEPTED_BUNDLE_METADATA_SCHEMA_VERSION:
+        raise ValueError(
+            f"{bundle_metadata_path}: schema_version must be "
+            f"{ACCEPTED_BUNDLE_METADATA_SCHEMA_VERSION}"
+        )
     run = _metadata_run(metadata, submission_path)
-    handoff = load_generation_handoff(handoff_manifest_path)
+    handoff = load_generation_handoff_snapshot(handoff_snapshot)
     handoff_topic_ids, topic_contexts = _topic_contexts_from_handoff(
         handoff, handoff_manifest_path
     )
@@ -324,9 +424,11 @@ def build_accepted_run_binding(
     source_identity_available = False
     source_identity_sha256: str | None = None
     source_identity_reason: str | None = MISSING_SOURCE_IDENTITY_REASON
+    source_identity_snapshot: ArtifactSnapshot | None = None
     if source_identity_path is not None:
         source_identity_path = Path(source_identity_path)
-        source_payload, source_bytes = _load_json(source_identity_path)
+        source_identity_snapshot = ArtifactSnapshot.capture(source_identity_path)
+        source_payload, source_bytes = _load_json(source_identity_path, source_identity_snapshot.data)
         _topic_ids_from_source_identity(
             source_payload,
             source_identity_path,
@@ -371,6 +473,11 @@ def build_accepted_run_binding(
         source_identity_available=source_identity_available,
         source_identity_sha256=source_identity_sha256,
         source_identity_reason=source_identity_reason,
+        submission_snapshot=submission_snapshot,
+        bundle_metadata_snapshot=metadata_snapshot,
+        handoff_snapshot=handoff_snapshot,
+        source_identity_snapshot=source_identity_snapshot,
+        handoff=handoff,
     )
 
 
@@ -420,12 +527,15 @@ def write_accepted_run_binding(binding: AcceptedRunBinding, output_path: Path) -
 
 
 __all__ = [
+    "ACCEPTED_BUNDLE_METADATA_SCHEMA_VERSION",
     "ACCEPTED_BINDING_SCHEMA_VERSION",
     "AcceptedRunBinding",
+    "ArtifactSnapshot",
     "MISSING_SOURCE_IDENTITY_REASON",
     "MULTISTAGE_IDENTITY_VERSION",
     "MULTISTAGE_TRIAL_CONTRACT_VERSION",
     "SINGLEPASS_IDENTITY_VERSION",
     "build_accepted_run_binding",
+    "load_generation_handoff_snapshot",
     "write_accepted_run_binding",
 ]

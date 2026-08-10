@@ -193,6 +193,22 @@ def test_accepted_binding_records_missing_source_identity(tmp_path: Path) -> Non
     assert binding.topic_context_sha256s == paths.topic_context_sha256s
 
 
+@pytest.mark.parametrize("schema_version", [None, "wrong-schema", 1, True])
+def test_accepted_binding_requires_exact_bundle_metadata_schema_version(
+    tmp_path: Path, schema_version: object
+) -> None:
+    paths = build_accepted_fixture(tmp_path)
+    metadata = json.loads(paths.bundle_metadata.read_text(encoding="utf-8"))
+    if schema_version is None:
+        metadata.pop("schema_version")
+    else:
+        metadata["schema_version"] = schema_version
+    paths.bundle_metadata.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schema_version.*trec-rag-2026-rag-submission-bundle-v1"):
+        build_accepted_run_binding(paths.submission, paths.bundle_metadata, paths.handoff)
+
+
 @pytest.mark.parametrize("mutation", ["submission_hash", "run_id", "handoff_hash"])
 def test_accepted_binding_rejects_receipt_mismatch(tmp_path: Path, mutation: str) -> None:
     paths = build_accepted_fixture(tmp_path, mutation=mutation)

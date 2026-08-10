@@ -14,6 +14,7 @@ import threading
 import time
 import unittest
 from copy import deepcopy
+from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Sequence
@@ -287,6 +288,10 @@ class CliContractTests(EvaluationCase):
             bundle.manifest["sources"]["rag/rag_output_trec_rag_2026.jsonl"],
             bundle.manifest["identities"]["submission_sha256"],
         )
+        self.assertEqual(
+            bundle.manifest["sources"]["rag/accepted_bundle_metadata.json"],
+            sha256(fixture.accepted_bundle_metadata.read_bytes()).hexdigest(),
+        )
 
     def test_accepted_mode_does_not_claim_missing_generation_identity(self) -> None:
         fixture = self.accepted_fixture(ONE_TOPIC)
@@ -362,6 +367,81 @@ class CliContractTests(EvaluationCase):
                 judge=None,
                 judge_settings=settings(),
             )
+
+    def test_accepted_mode_rejects_handoff_changed_after_support_materialization(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        real_support_rows = offline_module._selected_support_rows
+
+        def support_then_replace(*args: Any, **kwargs: Any) -> Any:
+            rows = real_support_rows(*args, **kwargs)
+            original = fixture.accepted_handoff.read_bytes()
+            fixture.accepted_handoff.write_bytes(original[:-1] + b"X")
+            return rows
+
+        with patch.object(offline_module, "_selected_support_rows", side_effect=support_then_replace):
+            with self.assertRaisesRegex(ValueError, "handoff.*(?:changed|snapshot|bound)"):
+                build_evaluation_bundle(
+                    retrieval_config_path=fixture.retrieval_config,
+                    accepted_submission_path=fixture.rag_output,
+                    accepted_bundle_metadata_path=fixture.bundle_metadata,
+                    handoff_manifest_path=fixture.handoff,
+                    work_dir=fixture.root / "accepted-work",
+                    repository_root=REPOSITORY_ROOT,
+                    cache_root=fixture.root / "accepted-cache",
+                    judge=None,
+                    judge_settings=settings(),
+                )
+
+    def test_accepted_mode_rejects_metadata_changed_after_binding(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        real_loader = offline_module.load_debug_report_data
+
+        def load_then_replace(*args: Any, **kwargs: Any) -> Any:
+            result = real_loader(*args, **kwargs)
+            metadata = json.loads(fixture.accepted_bundle_metadata.read_text(encoding="utf-8"))
+            metadata["provider"] = "changed-after-binding"
+            fixture.accepted_bundle_metadata.write_text(json.dumps(metadata), encoding="utf-8")
+            return result
+
+        with patch.object(offline_module, "load_debug_report_data", side_effect=load_then_replace):
+            with self.assertRaisesRegex(ValueError, "metadata|snapshot|bound"):
+                build_evaluation_bundle(
+                    retrieval_config_path=fixture.retrieval_config,
+                    accepted_submission_path=fixture.rag_output,
+                    accepted_bundle_metadata_path=fixture.bundle_metadata,
+                    handoff_manifest_path=fixture.handoff,
+                    work_dir=fixture.root / "accepted-work",
+                    repository_root=REPOSITORY_ROOT,
+                    cache_root=fixture.root / "accepted-cache",
+                    judge=None,
+                    judge_settings=settings(),
+                )
+
+    def test_accepted_mode_rejects_source_identity_changed_after_binding(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        identity_path = write_generation_identity(fixture)
+        real_loader = offline_module.load_debug_report_data
+
+        def load_then_replace(*args: Any, **kwargs: Any) -> Any:
+            result = real_loader(*args, **kwargs)
+            original = identity_path.read_bytes()
+            identity_path.write_bytes(original[:-1] + b"X")
+            return result
+
+        with patch.object(offline_module, "load_debug_report_data", side_effect=load_then_replace):
+            with self.assertRaisesRegex(ValueError, "source identity|snapshot|bound"):
+                build_evaluation_bundle(
+                    retrieval_config_path=fixture.retrieval_config,
+                    accepted_submission_path=fixture.rag_output,
+                    accepted_bundle_metadata_path=fixture.bundle_metadata,
+                    handoff_manifest_path=fixture.handoff,
+                    source_identity_path=identity_path,
+                    work_dir=fixture.root / "accepted-work",
+                    repository_root=REPOSITORY_ROOT,
+                    cache_root=fixture.root / "accepted-cache",
+                    judge=None,
+                    judge_settings=settings(),
+                )
 
     def test_accepted_mode_rejects_wrong_run_description(self) -> None:
         fixture = self.accepted_fixture(ONE_TOPIC)

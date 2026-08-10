@@ -372,6 +372,61 @@ def test_selected_evidence_support_rows_accept_accepted_binding_schema(
     }
 
 
+def test_selected_support_does_not_mix_submission_parse_and_hash_snapshots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _ = _ragdoll_cli_args(tmp_path)
+    submission = Path(args[1])
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {
+            "58": [
+                ("climbmix-a", "Generator-visible passage A."),
+                ("climbmix-b", "Generator-visible passage B."),
+            ]
+        },
+    )
+    manifest = json.loads(handoff.read_text(encoding="utf-8"))
+    binding_path = tmp_path / "accepted-binding.json"
+    binding_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "accepted_rag_evaluation_binding_v1",
+                "run_id": "dev-spike",
+                "run_desc": "development spike",
+                "team_id": "local-baseline",
+                "provider": "test-provider",
+                "models": ["test/model"],
+                "submission_sha256": sha256(submission.read_bytes()).hexdigest(),
+                "bundle_metadata_sha256": "b" * 64,
+                "handoff_schema_version": manifest["schema_version"],
+                "handoff_manifest_sha256": manifest["manifest_sha256"],
+                "topic_ids": ["58"],
+                "topic_context_sha256s": {
+                    topic["topic_id"]: topic["context_sha256"]
+                    for topic in manifest["topics"]
+                },
+                "source_identity_available": False,
+                "source_identity_sha256": None,
+                "source_identity_reason": "original generation identity was not preserved",
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_support_inputs = ragdoll_io._support_inputs
+
+    def parse_then_replace(
+        path: Path, *, raw: bytes | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
+        result = real_support_inputs(path, raw=raw)
+        submission.write_bytes(submission.read_bytes().replace(b"Answer", b"Changed"))
+        return result
+
+    monkeypatch.setattr(ragdoll_io, "_support_inputs", parse_then_replace)
+    with pytest.raises(ValueError, match="submission sha256|bound bytes|source changed"):
+        ragdoll_io.selected_evidence_support_rows(submission, handoff, binding_path)
+
+
 def test_cli_can_gate_completed_support_judgments(tmp_path: Path) -> None:
     args, _ = _ragdoll_cli_args(tmp_path)
     handoff = _write_selected_evidence_handoff(

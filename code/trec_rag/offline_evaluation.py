@@ -296,6 +296,10 @@ def build_evaluation_bundle(
             provider=accepted_binding.provider,
             model=", ".join(accepted_binding.models),
             accepted_submission_sha256=accepted_binding.submission_sha256,
+            submission_snapshot=accepted_binding.submission_snapshot,
+            output_snapshot=accepted_binding.submission_snapshot,
+            handoff_snapshot=accepted_binding.handoff_snapshot,
+            handoff=accepted_binding.handoff,
         )
 
     data = load_debug_report_data(
@@ -360,6 +364,11 @@ def build_evaluation_bundle(
         {topic.topic_id: topic.narrative for topic in data.topics},
     )
 
+    # All accepted sources were captured before any phase began.  Reject a path replacement
+    # before sealing, even though every derived object above was built from the snapshots.
+    if accepted_binding is not None:
+        accepted_binding.verify_sources()
+
     manifest = _manifest(
         data=data,
         rag_config=rag_config,
@@ -388,6 +397,8 @@ def build_evaluation_bundle(
         gold_nuggets_path=gold_nuggets_path,
         created_utc=created_utc,
     )
+    if accepted_binding is not None:
+        accepted_binding.verify_sources()
     manifest_path = work_dir / "evaluation_manifest.json"
     _atomic_write(manifest_path, canonical_bytes(manifest) + b"\n")
     return EvaluationBundle(work_dir=work_dir, manifest_path=manifest_path, manifest=manifest)
@@ -410,6 +421,9 @@ def _selected_support_rows(
         rag_source.output_path,
         rag_source.handoff_manifest_path,
         evidence_binding_path,
+        submission_snapshot=rag_source.submission_snapshot,
+        handoff_snapshot=rag_source.handoff_snapshot,
+        handoff=rag_source.handoff,
     )
     by_topic: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -939,7 +953,10 @@ def _manifest(
         selected_contexts = dict(accepted_binding.topic_context_sha256s)
     else:
         raise EvaluationError("RAG provenance identity is missing")
-    evidence = _handoff_evidence_counts(rag_artifact_source.handoff_manifest_path)
+    evidence = _handoff_evidence_counts(
+        rag_artifact_source.handoff_manifest_path,
+        handoff=rag_artifact_source.handoff,
+    )
     if accepted_binding is not None:
         report_submission_sha256 = data.source_sha256s.get(
             "rag/rag_output_trec_rag_2026.jsonl"
@@ -981,6 +998,24 @@ def _manifest(
         ),
         "sources": {
             **dict(sorted(data.source_sha256s.items())),
+            **(
+                {}
+                if accepted_binding is None
+                else {
+                    "rag/accepted_bundle_metadata.json": (
+                        accepted_binding.bundle_metadata_snapshot.sha256
+                        if accepted_binding.bundle_metadata_snapshot is not None
+                        else accepted_binding.bundle_metadata_sha256
+                    ),
+                    **(
+                        {}
+                        if accepted_binding.source_identity_snapshot is None
+                        else {
+                            "rag/source_identity.json": accepted_binding.source_identity_snapshot.sha256
+                        }
+                    ),
+                }
+            ),
             **(
                 {}
                 if accepted_binding_path is None
@@ -1144,11 +1179,16 @@ def _selected_topic_contexts(identity: Mapping[str, Any], path: Path) -> dict[st
     return contexts
 
 
-def _handoff_evidence_counts(handoff_manifest_path: Path) -> dict[str, dict[str, int]]:
+def _handoff_evidence_counts(
+    handoff_manifest_path: Path,
+    *,
+    handoff: Any | None = None,
+) -> dict[str, dict[str, int]]:
     """Count authenticated selected evidence per topic straight from the handoff."""
     from trec_rag.generation_handoff import load_generation_handoff
 
-    handoff = load_generation_handoff(handoff_manifest_path)
+    if handoff is None:
+        handoff = load_generation_handoff(handoff_manifest_path)
     counts: dict[str, dict[str, int]] = {}
     for topic in handoff.topics:
         counts[topic.topic_id] = {

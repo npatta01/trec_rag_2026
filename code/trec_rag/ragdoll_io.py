@@ -22,6 +22,10 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from trec_rag.accepted_rag_evaluation import (
+    ArtifactSnapshot,
+    load_generation_handoff_snapshot,
+)
 from trec_rag.topics import load_narrative_topics
 
 GOLD_NUGGET_IMPORTANCE = frozenset({"vital", "okay"})
@@ -75,18 +79,20 @@ class EvidenceBinding:
     bundle_metadata_sha256: str | None
 
 
-def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
-    with path.open(encoding="utf-8") as handle:
-        for number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise ValueError(f"{path}:{number}: invalid JSON") from error
-            if not isinstance(row, dict):
-                raise ValueError(f"{path}:{number}: row is not a JSON object")
-            yield row
+def _read_jsonl(path: Path, raw: bytes | None = None) -> Iterator[dict[str, Any]]:
+    if raw is None:
+        with path.open("rb") as handle:
+            raw = handle.read()
+    for number, line in enumerate(raw.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"{path}:{number}: invalid JSON") from error
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}:{number}: row is not a JSON object")
+        yield row
 
 
 def _write_jsonl(path: Path, rows: Sequence[dict[str, object]]) -> int:
@@ -381,16 +387,21 @@ def selected_evidence_support_rows(
     submission_path: Path,
     handoff_manifest_path: Path,
     evidence_binding_path: Path,
+    *,
+    submission_snapshot: ArtifactSnapshot | None = None,
+    handoff_snapshot: ArtifactSnapshot | None = None,
+    handoff: Any | None = None,
 ) -> list[dict[str, object]]:
     """Attach exactly the topic-owned selected passages shown to this generation run."""
     from trec_rag.generation_handoff import (
         HANDOFF_SCHEMA_VERSION,
         PROMPT_CONTRACT_VERSION,
-        load_generation_handoff,
     )
 
-    records, topic_docids = _support_inputs(submission_path)
-    handoff = load_generation_handoff(handoff_manifest_path)
+    submission_snapshot = submission_snapshot or ArtifactSnapshot.capture(submission_path)
+    handoff_snapshot = handoff_snapshot or ArtifactSnapshot.capture(handoff_manifest_path)
+    records, topic_docids = _support_inputs(submission_path, raw=submission_snapshot.data)
+    handoff = handoff or load_generation_handoff_snapshot(handoff_snapshot)
     binding = load_evidence_binding(evidence_binding_path)
     if binding.handoff_schema_version != HANDOFF_SCHEMA_VERSION:
         raise ValueError(
@@ -408,10 +419,7 @@ def selected_evidence_support_rows(
             f"{handoff_manifest_path}"
         )
     if binding.submission_sha256 is not None:
-        try:
-            submission_digest = sha256(submission_path.read_bytes()).hexdigest()
-        except OSError as error:
-            raise ValueError(f"{submission_path}: cannot read bound submission") from error
+        submission_digest = submission_snapshot.sha256
         if submission_digest != binding.submission_sha256:
             raise ValueError(
                 f"{evidence_binding_path}: submission sha256 does not match bound bytes"
@@ -491,12 +499,17 @@ def selected_evidence_support_rows(
         documents_by_topic[topic_id] = {
             docid: "\n\n".join(rows) for docid, rows in passages.items()
         }
-    return _assemble_support_rows(
+    rows = _assemble_support_rows(
         submission_path,
         records=records,
         topic_docids=topic_docids,
         documents_by_topic=documents_by_topic,
     )
+    # Parsing, support materialization, and digest checks all describe the same bytes.  A
+    # replacement at any phase is still rejected before callers can seal a bundle.
+    submission_snapshot.verify_current()
+    handoff_snapshot.verify_current()
+    return rows
 
 
 def _load_generation_identity(path: Path) -> dict[str, Any]:
@@ -559,8 +572,10 @@ def _load_generation_identity(path: Path) -> dict[str, Any]:
 
 def _support_inputs(
     submission_path: Path,
+    *,
+    raw: bytes | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
-    records = list(_read_jsonl(submission_path))
+    records = list(_read_jsonl(submission_path, raw=raw))
     if not records:
         raise ValueError(f"{submission_path}: no submission records")
 

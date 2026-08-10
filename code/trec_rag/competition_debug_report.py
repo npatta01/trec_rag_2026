@@ -22,6 +22,10 @@ from types import MappingProxyType
 from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 import zipfile
 
+from trec_rag.accepted_rag_evaluation import (
+    ArtifactSnapshot,
+    load_generation_handoff_snapshot,
+)
 from trec_rag.competition_rag import (
     load_rag_generation_config,
     validate_submission_record,
@@ -251,6 +255,10 @@ class RagArtifactSource:
     provider: str
     model: str
     accepted_submission_sha256: str | None = None
+    submission_snapshot: ArtifactSnapshot | None = None
+    output_snapshot: ArtifactSnapshot | None = None
+    handoff_snapshot: ArtifactSnapshot | None = None
+    handoff: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -543,7 +551,13 @@ def _attach_rag_outputs(
     expected_handoff = (data.output_dir / "generation_handoff_manifest.json").resolve()
     if source.handoff_manifest_path.resolve() != expected_handoff:
         raise ValueError("RAG handoff manifest path is incompatible with the retrieval export")
-    handoff = load_generation_handoff(source.handoff_manifest_path)
+    if source.handoff_snapshot is not None:
+        source.handoff_snapshot.verify_current()
+    handoff = source.handoff or (
+        load_generation_handoff_snapshot(source.handoff_snapshot)
+        if source.handoff_snapshot is not None
+        else load_generation_handoff(source.handoff_manifest_path)
+    )
     configured_topics = select_generation_topics(handoff, source.topic_ids)
     configured_ids = tuple(topic.topic_id for topic in configured_topics)
     if configured_ids != tuple(topic.id for topic in exported_topics):
@@ -558,11 +572,17 @@ def _attach_rag_outputs(
     }
     output_parent = _safe_directory(source.output_path.parent, "RAG output directory")
     output_path = _safe_file(source.output_path, output_parent)
-    with _open_hashed_snapshot(output_path, _MAX_JSONL_BYTES) as (
-        output_raw,
-        output_sha256,
-    ):
+    if source.output_snapshot is not None:
+        source.output_snapshot.verify_current()
+        output_raw = source.output_snapshot.data
+        output_sha256 = source.output_snapshot.sha256
         rows = _decode_jsonl(output_raw, "RAG output")
+    else:
+        with _open_hashed_snapshot(output_path, _MAX_JSONL_BYTES) as (
+            output_raw,
+            output_sha256,
+        ):
+            rows = _decode_jsonl(output_raw, "RAG output")
     if (
         source.accepted_submission_sha256 is not None
         and output_sha256 != source.accepted_submission_sha256
@@ -610,10 +630,16 @@ def _attach_rag_outputs(
         )
 
     sources = dict(data.source_sha256s)
-    sources["rag/generation_handoff_manifest.json"] = sha256(
-        serialize_generation_handoff(handoff)
-    ).hexdigest()
+    sources["rag/generation_handoff_manifest.json"] = (
+        source.handoff_snapshot.sha256
+        if source.handoff_snapshot is not None
+        else sha256(serialize_generation_handoff(handoff)).hexdigest()
+    )
     sources["rag/rag_output_trec_rag_2026.jsonl"] = output_sha256
+    if source.output_snapshot is not None:
+        source.output_snapshot.verify_current()
+    if source.handoff_snapshot is not None:
+        source.handoff_snapshot.verify_current()
     return replace(
         data,
         rag_config_path=(
