@@ -2220,10 +2220,10 @@ harness, tracked as the `ragdoll` submodule. Neither is on the competition path.
 ### `competition_evaluation_report.py`
 
 Builds a private, reproducible evaluation bundle and standalone friendly HTML report from one
-completed retrieval config and its matching completed RAG config. It validates the authenticated
-handoff and generation identity before deriving support tasks, keeps retrieval metrics separate
-from answer/citation metrics, and reports qrels or gold-dependent metrics as unavailable when the
-required inputs are absent.
+completed retrieval config plus either its matching completed RAG config or authenticated
+accepted RAG artifacts. It validates the authenticated handoff and generation identity before
+deriving support tasks, keeps retrieval metrics separate from answer/citation metrics, and
+reports qrels or gold-dependent metrics as unavailable when the required inputs are absent.
 
 The durable cache under `cache/ragdoll_support_judge/` is keyed by the effective statement,
 selected evidence, pinned RAGDoll prompt contract/revision, and judge settings—not config paths,
@@ -2232,6 +2232,85 @@ present. Start cache-only, use `--run-judge --judge-limit 1` for a one-call prob
 then resume against the same cache. Do not run concurrent judging commands against one cache;
 provider failures and detected label conflicts are counted in the private receipt and remain
 resumable. External or legacy judgment files cannot be imported.
+
+#### Accepted Evalbase RAG preflight (119 topics)
+
+The two Evalbase-accepted JSONLs are immutable inputs, not outputs to regenerate:
+
+- `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl`
+- `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl`
+- `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json`
+
+Accepted mode uses the exact CLI flags `--accepted-rag`, `--accepted-bundle-metadata`,
+`--handoff-manifest`, and (multi-stage only) `--source-identity`. The private main-checkout
+handoff is `/home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json`.
+The preserved multi-stage source identity is
+`/home/npatta01/.codex/worktrees/rag26-ms1-full-run-1786308971/outputs/rag26-ms1-multistage-final/work/multistage_generation_identity.json`.
+The single-pass source identity is unavailable by provenance; do not invent a historical
+generation identity from the accepted post-run binding.
+
+Use the same private cache for all four phases: cache-only inventory, one-task probe, bounded
+full resume, and final cache-only replay. The cache-only phase makes zero hosted calls and
+must record `completed_judgments`, `missing_judgments`, `failed_judgments`,
+`conflicting_judgments`, `reused_from_cache`, `hosted_calls`, and `fully_judged` before any
+probe. If it is already fully judged with zero missing/failed/conflicting rows, skip the probe.
+
+Run the inventory from the repository root. The single-pass command is:
+
+```bash
+.venv/bin/python -m trec_rag.competition_evaluation_report \
+  --retrieval-config /home/npatta01/data/competitions/trec_rag_2026/configs/rag26_competition_retrieval_v2.yaml \
+  --accepted-rag submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl \
+  --accepted-bundle-metadata submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json \
+  --handoff-manifest /home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json \
+  --work-dir /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ss1 \
+  --cache-dir /home/npatta01/data/competitions/trec_rag_2026/cache/ragdoll_support_judge \
+  --output /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ss1/evaluation_report.html
+```
+
+Repeat that command for multi-stage with its accepted path and source identity:
+
+```bash
+.venv/bin/python -m trec_rag.competition_evaluation_report \
+  --retrieval-config /home/npatta01/data/competitions/trec_rag_2026/configs/rag26_competition_retrieval_v2.yaml \
+  --accepted-rag submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl \
+  --accepted-bundle-metadata submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json \
+  --handoff-manifest /home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json \
+  --source-identity /home/npatta01/.codex/worktrees/rag26-ms1-full-run-1786308971/outputs/rag26-ms1-multistage-final/work/multistage_generation_identity.json \
+  --work-dir /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ms1-final \
+  --cache-dir /home/npatta01/data/competitions/trec_rag_2026/cache/ragdoll_support_judge \
+  --output /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ms1-final/evaluation_report.html
+```
+
+After reviewing each cache-only receipt, the one-task probe reruns the same command with
+`--run-judge --judge-limit 1 --judge-workers 1`. This is the exact one-worker bound and at
+most one hosted call. Require `hosted_calls: 1`, `failed_judgments: 0`,
+`conflicting_judgments: 0`, and an increase in `completed_judgments`; stop on any mismatch.
+Then resume the same cache with `--run-judge --judge-workers 4` and no limit. Four is the
+maximum concurrent worker bound; cached tasks never occupy workers, and the same command is
+safe to resume after interruption. `--judge-limit` and non-default `--judge-workers` require
+`--run-judge`; never run concurrent commands against one cache.
+
+Once the full resume reports no failed or conflicting judgments, replay each run cache-only
+without `--run-judge` into a fresh private replay work directory. Completion requires
+`hosted_calls: 0`, `missing_judgments: 0`, `failed_judgments: 0`,
+`conflicting_judgments: 0`, and `fully_judged: true`. A partial output must not be called
+complete. Qrels-based retrieval metrics remain unavailable without matching qrels, and nugget
+coverage remains unavailable without released gold nuggets and complete assignments; never
+render unavailable as zero or treat generated claims as gold.
+
+The hosted payload is minimized to one generated statement, cited selected-evidence text, and
+narrative/source metadata for that task. No unrelated topic data, retrieval TSV, full-text ZIP,
+qrels, gold nuggets, credentials, or provider events are sent. Private work, raw events,
+judgments, manifests, and detailed reports remain outside git. Only HTML written by
+`trec_rag.friendly_report.write_report` after its privacy scan may be copied to the existing
+tailnet-only portal; never use a new listener or public URL. The approved derived filenames are
+`trec-rag-2026-ragdoll-rag26-ss1.html` and
+`trec-rag-2026-ragdoll-rag26-ms1-final.html`, served only through the existing tailnet-only
+mapping at:
+
+- `https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html`
+- `https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html`
 
 ### `retrieval_nugget_coverage.py`
 

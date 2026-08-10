@@ -1514,6 +1514,52 @@ class ReportWordingTests(EvaluationCase):
         self.assertIn("not the exact invocation", page)
 
 
+class AcceptedWorkflowDocumentationTests(unittest.TestCase):
+    """Both operator-facing docs must describe the same accepted-run preflight."""
+
+    REQUIRED_TEXT = (
+        "--accepted-rag",
+        "--accepted-bundle-metadata",
+        "--handoff-manifest",
+        "--source-identity",
+        "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json",
+        "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl",
+        "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl",
+        "/home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json",
+        "/home/npatta01/.codex/worktrees/rag26-ms1-full-run-1786308971/outputs/rag26-ms1-multistage-final/work/multistage_generation_identity.json",
+        "cache-only",
+        "one-task probe",
+        "--judge-limit 1",
+        "--judge-workers 1",
+        "--judge-workers 4",
+        "bounded",
+        "full resume",
+        "cache-only replay",
+        "completed_judgments",
+        "missing_judgments",
+        "qrels",
+        "gold nuggets",
+        "unavailable",
+        "partial",
+        "must not",
+        "one generated statement",
+        "selected-evidence",
+        "no unrelated topic data",
+        "tailnet-only",
+    )
+
+    def test_accepted_workflow_documentation(self) -> None:
+        documentation = (
+            REPOSITORY_ROOT / ".agents/skills/trec-rag-competition-debug-report/SKILL.md",
+            REPOSITORY_ROOT / "code/trec_rag/README.md",
+        )
+        for path in documentation:
+            content = path.read_text(encoding="utf-8").lower()
+            for required in self.REQUIRED_TEXT:
+                with self.subTest(document=path.name, required=required):
+                    self.assertIn(required, content)
+
+
 class ReceiptContractTests(EvaluationCase):
     """The stdout receipt must expose everything the documented workflow checks."""
 
