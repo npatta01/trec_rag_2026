@@ -411,16 +411,16 @@
 <body id="reports-index">
   <header class="topbar">
     <div class="shell topbar-inner">
-      <a class="brand" href="/reports/index.html">
+      <a class="brand" href="index.html">
         <div class="brand-mark" aria-hidden="true">R</div>
         <span>Reports Home</span>
       </a>
       <nav class="nav" aria-label="Report navigation">
-        <a href="/reports/2026-competition-architecture.html">Architecture</a>
-        <a href="/reports/trec-rag-briefing-report.html">2026 Briefing</a>
-        <a href="/reports/experiments/all_topic_tethered_facet_validation_v1/report.html">Latest Experiment</a>
-        <a href="/reports/trec-rag-2025-writeups/interactive-writeup.html">2025 Writeups</a>
-        <a href="../experiment.md">Experiment history</a>
+        <a href="../index.html">Project Hub</a>
+        <a href="2026-competition-architecture.html">Architecture</a>
+        <a href="../submissions/trec-rag-2026/SUBMISSION_LEDGER.md">Accepted submissions</a>
+        <a href="trec-rag-briefing-report.html">2026 Briefing</a>
+        <a href="trec-rag-2025-writeups/interactive-writeup.html">2025 Writeups</a>
         <a href="#reading-path">Reading Path</a>
       </nav>
     </div>
@@ -430,30 +430,31 @@
     <section class="hero">
       <div class="shell hero-grid">
         <div>
-          <h1>TREC RAG Reports for builders and first-time readers.</h1>
+          <h1>Final 2026 submission architecture and supporting reports.</h1>
           <p class="lede">
-            Start with the 2026 briefing to understand the current task, ClimbMix, samples, and submission shape.
-            Then use the 2025 writeups as the technique library for retrieval, evidence selection, citation support, and evaluation.
+            Start with the accepted system: one frozen authenticated source, then
+            Frozen source → Retrieval submissions + RAG submissions. Use the briefing,
+            experiments, and 2025 writeups as supporting context rather than unfinished work.
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="/reports/2026-competition-architecture.html">See the 2026 architecture</a>
-            <a class="button primary" href="/reports/trec-rag-briefing-report.html">Open the 2026 briefing</a>
-            <a class="button" href="/reports/trec-rag-2025-writeups/interactive-writeup.html">Explore the 2025 writeups</a>
+            <a class="button primary" href="2026-competition-architecture.html">Open the final architecture</a>
+            <a class="button" href="../submissions/trec-rag-2026/SUBMISSION_LEDGER.md">Accepted submissions</a>
+            <a class="button" href="../index.html">Project artifact hub</a>
           </div>
         </div>
         <div class="hero-visual" aria-label="Report navigation overview">
           <div class="mini-flow">
             <div class="flow-row">
               <div class="flow-num">1</div>
-              <div><strong>Understand the current task</strong><span>Read the 2026 guide for ClimbMix, sample docs, nuggets, and output formats.</span></div>
+              <div><strong>Understand the final approach</strong><span>Trace the frozen source into three Retrieval runs and two RAG runs.</span></div>
             </div>
             <div class="flow-row">
               <div class="flow-num">2</div>
-              <div><strong>Steal good system ideas</strong><span>Use the 2025 report for hybrid retrieval, reranking, evidence cards, and citation-first generation.</span></div>
+              <div><strong>Verify the accepted files</strong><span>Use the ledger for exact paths, run IDs, priorities, hashes, and validator links.</span></div>
             </div>
             <div class="flow-row">
               <div class="flow-num">3</div>
-              <div><strong>Turn it into experiments</strong><span>Build a baseline ladder, track coverage, and compare support and completeness separately.</span></div>
+              <div><strong>Browse supporting evidence</strong><span>Use the briefing, experiment reports, and prior-year method library for context.</span></div>
             </div>
           </div>
         </div>
@@ -464,30 +465,30 @@
       <div class="shell">
         <div class="section-head">
           <h2>Available Reports</h2>
-          <p>Five report surfaces, one reading path: the supported 2026 architecture, current task context, merged experiment evidence, last year's method library, and a historical architecture synthesis.</p>
+          <p>The final architecture is the canonical 2026 handoff. The briefing, merged experiment evidence, last year's method library, and historical architecture synthesis preserve supporting context.</p>
         </div>
         <div class="reports-grid">
           <article class="report-card">
-            <span class="label">current track</span>
+            <span class="label gold">Final 2026 submission architecture</span>
             <div>
-              <h3>TREC RAG 2026 Briefing</h3>
-              <p>Explains the competition, ClimbMix, sample documents, organizer nuggets, answer JSON, evaluation framing, and a practical 2026 build strategy.</p>
+              <h3>TREC RAG 2026 Competition Architecture</h3>
+              <p>One frozen authenticated source branches into three cache-first Retrieval submissions and two selected-evidence RAG submissions, with exact limits, run IDs, validation, and accepted status.</p>
             </div>
             <div class="report-actions">
-              <a class="button primary" href="/reports/trec-rag-briefing-report.html">Open briefing</a>
-              <a class="button" href="/reports/trec-rag-briefing-report.html#samples">Jump to samples</a>
+              <a class="button primary" href="2026-competition-architecture.html">Open architecture guide</a>
+              <a class="button" href="2026-competition-architecture.html#accepted-artifacts">See the five files</a>
             </div>
           </article>
 
           <article class="report-card">
-            <span class="label gold">supported 2026 architecture</span>
+            <span class="label">task context</span>
             <div>
-              <h3>TREC RAG 2026 Competition Architecture</h3>
-              <p>Narrative → Retrieval → Handoff → Generation, explained as one visual story with separate system maps, a candidate funnel, exact limits, and source notes.</p>
+              <h3>TREC RAG 2026 Briefing</h3>
+              <p>Explains the competition, ClimbMix, sample documents, organizer nuggets, answer JSON, evaluation framing, and the original build strategy.</p>
             </div>
             <div class="report-actions">
-              <a class="button primary" href="2026-competition-architecture.html">Open architecture guide</a>
-              <a class="button" href="2026-competition-architecture.html#whole-system">Start with the system map</a>
+              <a class="button primary" href="trec-rag-briefing-report.html">Open briefing</a>
+              <a class="button" href="trec-rag-briefing-report.html#samples">Jump to samples</a>
             </div>
           </article>
 
@@ -498,8 +499,8 @@
               <p>A detailed interactive review of 15 team writeups, including reader paths, leaderboards, architecture panels, implementation recipes, and failure diagnosis.</p>
             </div>
             <div class="report-actions">
-              <a class="button primary" href="/reports/trec-rag-2025-writeups/interactive-writeup.html">Open writeups</a>
-              <a class="button" href="/reports/trec-rag-2025-writeups/interactive-writeup.html#idea-bank">Jump to playbook</a>
+              <a class="button primary" href="trec-rag-2025-writeups/interactive-writeup.html">Open writeups</a>
+              <a class="button" href="trec-rag-2025-writeups/interactive-writeup.html#idea-bank">Jump to playbook</a>
             </div>
           </article>
 
@@ -517,7 +518,7 @@
               <p>The portable canonical v3 report explains why RRF remains selected, where the DUAL arms regressed, and what the Topic 31/300 evidence supports next.</p>
             </div>
             <div class="report-actions">
-              <a class="button primary" href="/reports/experiments/all_topic_tethered_facet_validation_v1/report.html">Open experiment report</a>
+              <a class="button primary" href="experiments/all_topic_tethered_facet_validation_v1/report.html">Open experiment report</a>
               <a class="button" href="../experiment.md">Experiment history</a>
             </div>
           </article>
@@ -534,18 +535,18 @@
         <div class="route-grid">
           <article class="route-card">
             <span class="label">10-minute path</span>
-            <h3>Start with the briefing</h3>
-            <p>Read the orientation, ClimbMix, sample docs, and answer JSON sections. This gives you the task shape without drowning you in methods.</p>
+            <h3>Start with the final architecture</h3>
+            <p>Read the whole-system map, candidate core, two RAG strategies, and accepted-artifact section for the completed project in one pass.</p>
           </article>
           <article class="route-card">
-            <span class="label coral">builder path</span>
-            <h3>Use the 2025 writeups as the technique library</h3>
-            <p>Open the pipeline, reusable playbook, implementation kit, and team dossiers when you are deciding what to build next.</p>
+            <span class="label coral">artifact path</span>
+            <h3>Audit the accepted submissions</h3>
+            <p>Open the ledger for the exact five files, hashes, run identities, priority order, and repo-local validation workflow.</p>
           </article>
           <article class="route-card">
-            <span class="label gold">audit path</span>
-            <h3>Check claims and sources</h3>
-            <p>Use the 2026 appendix for official local data references, then use the 2025 source audit and failure diagnosis to understand risk.</p>
+            <span class="label gold">context path</span>
+            <h3>Read the preserved research</h3>
+            <p>Use the briefing for task context and the 2025 reports as a method library. Historical experiments remain provenance, not a backlog.</p>
           </article>
         </div>
       </div>

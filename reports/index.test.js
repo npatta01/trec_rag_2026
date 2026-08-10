@@ -17,10 +17,14 @@ const html = fs.readFileSync(htmlPath, "utf8");
 const requiredSignals = [
   "TREC RAG Reports",
   "Reports Home",
-  "Five report surfaces",
+  "Final 2026 submission architecture",
+  "Frozen source → Retrieval submissions + RAG submissions",
+  "Accepted submissions",
+  "../index.html",
+  "../submissions/trec-rag-2026/SUBMISSION_LEDGER.md",
   "TREC RAG 2026 Briefing",
   "TREC RAG 2026 Competition Architecture",
-  "Narrative → Retrieval → Handoff → Generation",
+  "one frozen authenticated source",
   "2026-competition-architecture.html",
   "TREC RAG 2025 Writeups",
   "Promising 2025 RAG Architecture",
@@ -29,9 +33,9 @@ const requiredSignals = [
   "All-topic tethered-facet validation",
   "Experiment history",
   "reports-index",
-  "Start with the briefing",
-  "Use the 2025 writeups as the technique library",
-  "reports/trec-rag-briefing-report.html",
+  "Start with the final architecture",
+  "Audit the accepted submissions",
+  "trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
   "experiments/all_topic_tethered_facet_validation_v1/report.html",
   "../experiment.md",
@@ -61,6 +65,8 @@ for (const signal of forbiddenSignals) {
 }
 
 const linkedFiles = [
+  "../index.html",
+  "../submissions/trec-rag-2026/SUBMISSION_LEDGER.md",
   "2026-competition-architecture.html",
   "trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
