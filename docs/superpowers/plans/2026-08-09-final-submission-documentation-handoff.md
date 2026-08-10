@@ -575,6 +575,11 @@ generation, evaluation, hosted-model calls, or publication.
 - Documentation tests: the six `node` commands in Task 5 all passed. The root
   hub, report collection, final architecture, briefing, 2025 architecture, and
   interactive-writeup checks each emitted their expected pass message.
+- Repository suite: after creating the ignored worktree-local `.venv` from the
+  lockfile and installing the locked `transformers==5.13.0` test dependency,
+  `.venv/bin/python -m pytest` completed with 3,184 passed and 19 skipped in
+  109.32 seconds. The test scratch created by the clone fixtures was removed
+  after the run.
 - Link integrity: a repository-relative HTML link check, excluding embedded
   script and style source, resolved all 195 checked links.
 - Canonical render: `quarto render
