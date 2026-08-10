@@ -1138,6 +1138,38 @@ class PrivacyTests(EvaluationCase):
                     denylist=denylist_from_bundle(bundle.work_dir),
                 )
 
+    def test_renderer_live_answer_after_citations_is_rejected(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values()))
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = f"The answer repeats {evidence}."
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+
+        def render_with_post_citation_copy(view: Any) -> str:
+            page = original_render_report(view)
+            source = view.topics[0]["answer"][0]["text"]
+            citation_tail = "</span></span></p></div>"
+            self.assertIn(citation_tail, page)
+            return page.replace(
+                citation_tail,
+                f"</span></span>{source}</p></div>",
+                1,
+            )
+
+        with patch.object(
+            friendly_report, "render_report", side_effect=render_with_post_citation_copy
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / "post-citation-answer-leak.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
     def test_privacy_parser_fails_closed_on_unexpected_sink_markup(self) -> None:
         from trec_rag.friendly_report import assert_publishable
 
@@ -1149,6 +1181,21 @@ class PrivacyTests(EvaluationCase):
         for page in malformed:
             with self.subTest(page=page), self.assertRaises(ReportPrivacyError):
                 assert_publishable(page)
+
+        lexical_tails = (
+            "<p>safe<",
+            "<p>safe<!--",
+            "<p>safe<!DOCTYPE",
+            "<p>safe<?pi",
+            "<p>safe</p extra>",
+            "<p>safe</p/>",
+        )
+        for page in lexical_tails:
+            with self.subTest(lexical_tail=page), self.assertRaises(ReportPrivacyError):
+                assert_publishable(page)
+
+        assert_publishable("<!doctype html><!-- valid comment --><p>valid</p>")
+        assert_publishable('<p class="response-text">a valid zero-citation answer</p>')
 
     def test_citation_subtree_is_not_allowlisted(self) -> None:
         from trec_rag.friendly_report import assert_publishable

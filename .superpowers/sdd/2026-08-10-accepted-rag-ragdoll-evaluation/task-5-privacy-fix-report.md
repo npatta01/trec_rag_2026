@@ -270,3 +270,100 @@ The owned files were committed as `850dd29c` (`fix: enforce sink-aware report
 privacy`) after the clean-source run. The temporary suite directory was private
 scratch only and was removed; no hosted call, cache write, portal copy, or
 accepted-artifact change occurred.
+
+## Fix Round 3 — permanent citation boundary and lexical completion
+
+Round 3 closes the remaining parser gaps. Within each `p.response-text`, the
+first direct `span.citations` permanently sets `citations_seen` until that `p`
+closes. Once the citation subtree closes, only ordinary whitespace data may
+occur; non-whitespace text, entities, comments, declarations, processing
+instructions, or any start tag fail closed and are never redacted. A renderer
+copy of the live `view.topics[0]["answer"][0]["text"]` inserted immediately
+after the citation chrome is therefore rejected from the actual rendered page.
+The state resets only when that response paragraph closes, preserving valid
+multi-answer reports and zero-citation response paragraphs.
+
+The parser now also checks raw lexical completion before and after
+`HTMLParser.close()`, rejects literal `<` recovered as data, and validates raw
+end tags against the strict `</tag>` grammar. Attributes, trailing slashes,
+extra tokens, incomplete comments/declarations/processing instructions, and
+unfinished tails cannot be silently normalized by the permissive stdlib parser.
+Valid emitted doctype/comments, void elements, and normal start/end tags remain
+accepted. No decoded-before-parse operation or global replacement was added.
+
+Round 3 adversarial TDD coverage includes the exact review pages:
+
+```text
+<p>safe<
+<p>safe<!--
+<p>safe<!DOCTYPE
+<p>safe<?pi
+<p>safe</p extra>
+<p>safe</p/>
+```
+
+It also covers a live post-citation answer copy, citation entities/comments/
+tags, valid doctype/comment markup, and a valid zero-citation response.
+
+RED/GREEN evidence:
+
+```text
+RED: the live post-citation renderer copy was accepted by the prior parser;
+     the six lexical pages with permissive end tags/tails were not all rejected.
+GREEN: PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py \
+  -k 'post_citation or privacy_parser_fails_closed' -q
+       1 passed, 117 deselected, 9 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_offline_evaluation.py -q
+       118 passed, 123 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py code/tests/test_ragdoll_io.py \
+  code/tests/test_accepted_rag_evaluation.py \
+  code/tests/test_competition_cache_bundle_offline_replay.py -q
+       194 passed, 123 subtests passed
+```
+
+Both accepted-artifact reports were replayed privately with no `--run-judge`
+under:
+`/home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/task5-privacy-fix-round3/`.
+No report or adjacent private evaluation file was copied to the portal:
+
+| run | topics | tasks | hosted calls | cache hits / misses / writes | failed / conflicts | report bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `rag26-ss1` | 119 | 3,155 | 0 | 0 / 3,155 / 0 | 0 / 0 | 2,914,417 |
+| `rag26-ms1-final` | 119 | 7,008 | 0 | 0 / 7,008 / 0 | 0 / 0 | 5,475,990 |
+
+Both reports are mode `0600`; manifests preserve the exact 119-topic order;
+failed and conflicting judgments are zero; and cache writes are zero.
+
+Round 3 self-review:
+
+- The complete dynamic evidence denylist and existing length policy remain
+  unchanged. Only approved pre-citation text is redacted; post-citation data
+  is preserved or causes a fail-closed error.
+- Per-response citation state prevents a later answer copy from being treated
+  as allowlisted text while still admitting zero-citation answers.
+- Raw tail checks and strict end-tag validation reject all six review pages
+  without rejecting the real renderer's doctype/comments/void tags.
+- The Round 2 implementation was committed as `850dd29c`; its report
+  amendment was finalized in `97232e55`. Round 3's final amended commit and
+  clean-source full-suite result are recorded below.
+
+Final committed-source verification:
+
+```text
+TMPDIR=/tmp/trec-rag-round3-suite.F6Ujs9 \
+  PYTHONPATH=code .venv/bin/python -m pytest -q
+3241 passed, 19 skipped, 156 subtests passed in 1:51
+
+PYTHONPATH=code .venv/bin/python -m py_compile \
+  code/trec_rag/friendly_report.py code/tests/test_offline_evaluation.py
+git diff --check
+```
+
+The implementation was committed as `f65de8cb` before this clean-source run;
+the final report amendment is included in the amended commit below. The
+private temporary suite directory was removed after verification. No hosted
+calls, cache writes, accepted-artifact changes, or portal copies occurred.

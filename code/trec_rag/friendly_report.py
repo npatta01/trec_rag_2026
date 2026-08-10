@@ -359,6 +359,7 @@ class _PrivacyHTMLParser(HTMLParser):
         self.sink_index: int | None = None
         self.sink_kind: str | None = None
         self.citation_index: int | None = None
+        self.citations_seen = False
         self.failed_reason: str | None = None
         self._pending_endtag: str | None = None
         self._encoded_tag_text = False
@@ -378,6 +379,15 @@ class _PrivacyHTMLParser(HTMLParser):
         return (
             self.redact_sinks
             and self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        )
+
+    def _response_after_citations(self) -> bool:
+        return (
+            self.sink_kind == "response"
+            and self.sink_index is not None
+            and self.citations_seen
             and self.citation_index is None
         )
 
@@ -399,11 +409,15 @@ class _PrivacyHTMLParser(HTMLParser):
         in_sink = self.sink_index is not None
         in_citations = self.citation_index is not None
         if in_sink and not in_citations:
-            if self.sink_kind == "response" and tag == "span" and self._has_class(attrs, "citations"):
+            if self._response_after_citations():
+                self._fail("no markup is allowed after the response citations")
+            elif self.sink_kind == "response" and tag == "span" and self._has_class(attrs, "citations"):
                 if empty:
                     self._fail("the citations boundary cannot be self-closing")
                 elif self.sink_index != len(self.stack) - 1:
                     self._fail("the citations boundary must be a direct response child")
+                else:
+                    self.citations_seen = True
             elif tag not in _APPROVED_INLINE_TAGS:
                 self._fail(f"unexpected {tag} descendant in approved report text")
         elif not in_sink:
@@ -468,8 +482,13 @@ class _PrivacyHTMLParser(HTMLParser):
         if self.sink_index == frame_index:
             self.sink_index = None
             self.sink_kind = None
+            self.citations_seen = False
 
     def handle_data(self, data: str) -> None:
+        if "<" in data:
+            self._fail("literal '<' recovered as HTML data")
+        if self._response_after_citations() and data.strip():
+            self._fail("non-whitespace response text follows the citations")
         self.parts.append(self.sentinel if self._redacting_text() else data)
         decoded = html.unescape(data)
         self.visible_parts.append(decoded)
@@ -479,6 +498,8 @@ class _PrivacyHTMLParser(HTMLParser):
     def handle_entityref(self, name: str) -> None:
         raw = f"&{name};"
         decoded = html.unescape(raw)
+        if self._response_after_citations():
+            self._fail("an entity follows the response citations")
         self.parts.append(self.sentinel if self._redacting_text() else raw)
         self.visible_parts.append(decoded)
         if decoded == "<":
@@ -491,6 +512,8 @@ class _PrivacyHTMLParser(HTMLParser):
     def handle_charref(self, name: str) -> None:
         raw = f"&#{name};"
         decoded = html.unescape(raw)
+        if self._response_after_citations():
+            self._fail("a character reference follows the response citations")
         self.parts.append(self.sentinel if self._redacting_text() else raw)
         self.visible_parts.append(decoded)
         if decoded == "<":
@@ -501,12 +524,18 @@ class _PrivacyHTMLParser(HTMLParser):
             self.compact_visible_parts.append(decoded)
 
     def handle_comment(self, data: str) -> None:
+        if self.sink_index is not None and self.citation_index is None:
+            self._fail("a comment is not allowed in approved response text")
         self.parts.append(f"<!--{data}-->")
 
     def handle_decl(self, decl: str) -> None:
+        if self.sink_index is not None and self.citation_index is None:
+            self._fail("a declaration is not allowed in approved response text")
         self.parts.append(f"<!{decl}>")
 
     def handle_pi(self, data: str) -> None:
+        if self.sink_index is not None and self.citation_index is None:
+            self._fail("a processing instruction is not allowed in approved response text")
         self.parts.append(f"<?{data}>")
 
     def parse_starttag(self, i: int) -> int:
@@ -520,15 +549,23 @@ class _PrivacyHTMLParser(HTMLParser):
         self._pending_endtag = (
             self.rawdata[i : raw_end + 1] if raw_end is not None else None
         )
+        if self._pending_endtag is not None and re.fullmatch(
+            r"</[A-Za-z][A-Za-z0-9:-]*>", self._pending_endtag
+        ) is None:
+            self._fail("malformed end tag")
         if self.rawdata[i + 2 : i + 3] == ">":
             self._fail("missing end-tag name")
-        result = super().parse_endtag(i)
-        if result < 0:
-            self._fail("malformed or unclosed end tag")
-        self._pending_endtag = None
+        try:
+            result = super().parse_endtag(i)
+            if result < 0:
+                self._fail("malformed or unclosed end tag")
+        finally:
+            self._pending_endtag = None
         return result
 
     def close(self) -> None:
+        if self.rawdata:
+            self._fail("incomplete trailing HTML construct")
         super().close()
         if self.stack:
             self._fail("unclosed HTML element")
@@ -539,6 +576,8 @@ def _parse_privacy_html(page: str, *, redact_sinks: bool) -> _PrivacyHTMLParser:
     parser = _PrivacyHTMLParser(redact_sinks=redact_sinks, sentinel=sentinel)
     try:
         _RAW_HTMLPARSER_FEED(parser, page)
+        if parser.rawdata:
+            parser._fail("incomplete trailing HTML construct")
         parser.close()
     except Exception as error:
         raise ReportPrivacyError("refusing to write the report: malformed HTML") from error
