@@ -49,7 +49,7 @@
 - Consumes: existing repository-relative paths to the architecture report, submission ledger, bundle READMEs, skills, report index, code README, configs, and official submodules.
 - Produces: one dependency-free root page whose internal repository links resolve and whose content contains no private path or secret signal.
 
-- [ ] **Step 1: Write the failing root-page smoke test**
+- [x] **Step 1: Write the failing root-page smoke test**
 
 Create `index.test.js` with a small `assert` helper, require `index.html`, and check the exact content contract:
 
@@ -94,7 +94,7 @@ console.log("root artifact hub smoke test passed");
 
 Add a repository-relative link list in the test and resolve each path from the repository root with `fs.existsSync`.
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -104,7 +104,7 @@ node index.test.js
 
 Expected: FAIL with `root index.html should exist`.
 
-- [ ] **Step 3: Implement the standalone artifact hub**
+- [x] **Step 3: Implement the standalone artifact hub**
 
 Create `index.html` with this semantic structure and exact card labels:
 
@@ -154,11 +154,11 @@ Create `index.html` with this semantic structure and exact card labels:
 
 Adapt the proven `music-crs-2026` visual grammar: six accent-colored cards, system fonts, a three/two/one-column responsive grid, visible keyboard focus, dark/light variables, reduced-motion handling, and print-safe layout. Populate every card with the exact relative links listed in the approved design.
 
-- [ ] **Step 4: Run the root smoke test and verify GREEN**
+- [x] **Step 4: Run the root smoke test and verify GREEN**
 
 Run `node index.test.js` and require `root artifact hub smoke test passed`.
 
-- [ ] **Step 5: Commit the root hub**
+- [x] **Step 5: Commit the root hub**
 
 ```bash
 git add index.html index.test.js
@@ -181,7 +181,7 @@ git commit -m "docs: add final submission artifact hub"
 - Consumes: the five immutable organizer files, their committed metadata/hashes, the user-confirmed Evalbase acceptance, and the repo-local validator command.
 - Produces: consistent accepted status, explicit unknown confirmation metadata, one key-artifact map for people, and one for future agents.
 
-- [ ] **Step 1: Extend the smoke test with failing final-status assertions**
+- [x] **Step 1: Extend the smoke test with failing final-status assertions**
 
 In `index.test.js`, read the five Markdown files and assert:
 
@@ -196,11 +196,11 @@ assert(read("submissions/trec-rag-2026/rag/selected-evidence-sol-v1/README.md").
 
 Also assert that `AGENTS.md` links the root hub, final architecture source/render, submission ledger, both bundle READMEs, validation skill, official contract, and code README.
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run `node index.test.js` and require failure on the new status/artifact-map assertions.
 
-- [ ] **Step 3: Update the submission ledger without fabricating portal metadata**
+- [x] **Step 3: Update the submission ledger without fabricating portal metadata**
 
 Change each run-table status from `Ready to upload` to `Accepted by Evalbase`. Replace the confirmation table with these exact rows:
 
@@ -214,11 +214,11 @@ Change each run-table status from `Ready to upload` to `Accepted by Evalbase`. R
 
 Keep all file links, hashes, row/topic counts, priorities, and Evalbase response links unchanged. Retitle `Submission procedure` to `Submitted-file verification` and describe how to revalidate the exact accepted bytes rather than instructing a future upload.
 
-- [ ] **Step 4: Update the two bundle READMEs**
+- [x] **Step 4: Update the two bundle READMEs**
 
 Lead each README with `All files in this bundle were uploaded and accepted by Evalbase.` Rename `Upload files` to `Accepted files`. Preserve the priority tables, architecture explanation, privacy boundary, and validation counts. Replace imperative upload language with archival verification language and link the root hub, final architecture report, and submission ledger.
 
-- [ ] **Step 5: Add the human and agent artifact maps**
+- [x] **Step 5: Add the human and agent artifact maps**
 
 Add `## Final Project Artifacts` immediately after the README introduction with links to:
 
@@ -236,11 +236,11 @@ code/trec_rag/README.md
 
 Add `## Completed Project and Key Artifacts` near the top of `AGENTS.md`. State that the project is complete, the five organizer files are accepted and immutable, historical plans are records rather than a backlog, the QMD is canonical, and future agents should start at the root hub/ledger/final architecture. Replace the stale sequential architecture orientation with the frozen-source two-branch invariants from the approved spec. Retain the existing safety and environment rules that remain useful for reproducibility.
 
-- [ ] **Step 6: Run the smoke test and verify GREEN**
+- [x] **Step 6: Run the smoke test and verify GREEN**
 
 Run `node index.test.js` and require success.
 
-- [ ] **Step 7: Commit accepted status and artifact maps**
+- [x] **Step 7: Commit accepted status and artifact maps**
 
 ```bash
 git add README.md AGENTS.md index.test.js \
@@ -276,7 +276,7 @@ git commit -m "docs: record accepted TREC RAG submissions"
 - Consumes: final Retrieval architecture/metadata, final RAG README/metadata, frozen source-run contracts, and only aggregate privacy-reviewed evidence.
 - Produces: one canonical QMD and one self-contained rendered HTML report with nine accessible final-state diagrams and direct links to exact checked-in artifacts.
 
-- [ ] **Step 1: Rewrite the architecture test for the final story and verify RED**
+- [x] **Step 1: Rewrite the architecture test for the final story and verify RED**
 
 Replace the old figure list with:
 
@@ -327,7 +327,7 @@ Retain tests for embedded/local runtime assets, dark-mode SVG support, `role="im
 
 Run `node reports/2026-competition-architecture.test.js`; expect failure because renamed figures and final concepts do not yet exist.
 
-- [ ] **Step 2: Author the final QMD narrative**
+- [x] **Step 2: Author the final QMD narrative**
 
 Keep the existing Quarto YAML contract and use these exact top-level sections:
 
@@ -346,7 +346,7 @@ Keep the existing Quarto YAML contract and use these exact top-level sections:
 
 For each of the nine visual sections, include in order: a one-sentence takeaway, figure with full alt description, direct SVG link, explanatory prose, `**Text equivalent:**`, and `<details><summary>Implementation notes and sources</summary>` with repository-relative source links. Include the exact run IDs and final aggregate counts from committed metadata. Do not include any official test narrative ID/text, passage, prompt, provider response, or generated answer.
 
-- [ ] **Step 3: Replace the nine diagram views**
+- [x] **Step 3: Replace the nine diagram views**
 
 Use the existing SVG accessibility/theme template. For example, the candidate-core figure begins with this complete accessibility and palette contract before its labeled shapes:
 
@@ -379,11 +379,11 @@ Give the nine diagrams these questions/content boundaries:
 
 Delete only the five superseded SVG filenames listed as rename/replace targets. Update the asset README table with the new names, reader questions, exact source files, and concise text equivalents. Preserve its conceptual-geometry and privacy explanation.
 
-- [ ] **Step 4: Add small final-artifact report styles**
+- [x] **Step 4: Add small final-artifact report styles**
 
 Extend `report.css` with responsive `.artifact-grid`, `.artifact-card`, `.status-accepted`, and `.branch-note` classes using existing guide variables. Keep print, reduced-motion, focus, dark/light, and figure rules intact.
 
-- [ ] **Step 5: Render the canonical source**
+- [x] **Step 5: Render the canonical source**
 
 Run:
 
@@ -393,7 +393,7 @@ quarto render reports/2026-competition-architecture.qmd
 
 Expected: exit 0 and a regenerated `reports/2026-competition-architecture.html` identifying Quarto as generator with all runtime dependencies embedded/local.
 
-- [ ] **Step 6: Run the architecture smoke test and verify GREEN**
+- [x] **Step 6: Run the architecture smoke test and verify GREEN**
 
 Run:
 
@@ -403,7 +403,7 @@ node reports/2026-competition-architecture.test.js
 
 Require `2026 competition architecture smoke test passed`.
 
-- [ ] **Step 7: Commit the final architecture source, assets, test, and render**
+- [x] **Step 7: Commit the final architecture source, assets, test, and render**
 
 ```bash
 git add reports/2026-competition-architecture.qmd \
@@ -425,7 +425,7 @@ git commit -m "docs: document final TREC RAG architecture"
 - Consumes: the root artifact hub, final architecture report, accepted submission ledger, and existing historical reports.
 - Produces: a reports collection page that leads with the final architecture and offers obvious paths back to the whole-project hub and accepted files.
 
-- [ ] **Step 1: Update report-index expectations and verify RED**
+- [x] **Step 1: Update report-index expectations and verify RED**
 
 Change the test to require:
 
@@ -442,11 +442,11 @@ for (const signal of [
 
 Retain the historical report links and forbidden secret/draft-marker checks. Run `node reports/index.test.js` and expect failure on the new copy/links.
 
-- [ ] **Step 2: Update the report index**
+- [x] **Step 2: Update the report index**
 
 Change the hero primary action to the final architecture, add secondary actions for the root hub and accepted ledger, update the architecture card copy to the frozen-source two-branch story, and retain the briefing/2025/experiment cards as supporting context. Use relative links consistently so the page works from the repository root and a static host.
 
-- [ ] **Step 3: Run both navigation smoke tests**
+- [x] **Step 3: Run both navigation smoke tests**
 
 ```bash
 node index.test.js
@@ -455,7 +455,7 @@ node reports/index.test.js
 
 Require both pass.
 
-- [ ] **Step 4: Commit report navigation**
+- [x] **Step 4: Commit report navigation**
 
 ```bash
 git add reports/index.html reports/index.test.js
@@ -473,7 +473,7 @@ git commit -m "docs: connect final reports and submissions"
 - Consumes: the completed documentation tree and immutable organizer files.
 - Produces: reproducible final validation evidence without model calls, publication, or private-data access.
 
-- [ ] **Step 1: Revalidate all five accepted files**
+- [x] **Step 1: Revalidate all five accepted files**
 
 Run the exact combined validator:
 
@@ -489,7 +489,7 @@ python3 .agents/skills/validate-trec-rag-2026-submissions/scripts/validate_submi
 
 Expected: three Retrieval `PASS` results with 4,246 rows, 119 topics, depth 1–121; two RAG `PASS` results with 119/119 valid reports and no extras/duplicates.
 
-- [ ] **Step 2: Verify immutable hashes and filenames**
+- [x] **Step 2: Verify immutable hashes and filenames**
 
 Run `sha256sum` on the five exact organizer files and compare with ledger/metadata values:
 
@@ -501,7 +501,7 @@ f42a794418cf692721adcd53df232ca0a3536d13d9cd137d90eb9821562e199d  breadth
 a33c60325c198cf90178d5b4c6c1b04209f7d39de278736b6817a8c5666c02a0  singlepass
 ```
 
-- [ ] **Step 3: Run all documentation smoke tests**
+- [x] **Step 3: Run all documentation smoke tests**
 
 ```bash
 node index.test.js
@@ -514,7 +514,7 @@ node reports/trec-rag-2025-writeups/interactive-writeup.test.js
 
 Require six passes.
 
-- [ ] **Step 4: Check the rendered pages at desktop and mobile widths**
+- [x] **Step 4: Check the rendered pages at desktop and mobile widths**
 
 Capture both self-contained pages through the repository's private-profile Chrome wrapper:
 
@@ -529,7 +529,7 @@ python3 code/tools/run_headless_chrome.py --url "file://$repo_root/reports/2026-
 
 Inspect all four paths with the image-view tool for clipped text, horizontal overflow, unreadable cards/diagrams, missing content, or broken layout. Keep the temporary screenshots out of git.
 
-- [ ] **Step 5: Run final repository checks**
+- [x] **Step 5: Run final repository checks**
 
 ```bash
 git diff --check
@@ -539,7 +539,7 @@ git diff --stat 88a163bf..HEAD
 
 Confirm only scoped documentation, tests, SVG assets, generated architecture HTML, the approved spec, and this plan changed. Confirm all five organizer-file hashes still match and no ignored/private path is staged.
 
-- [ ] **Step 6: Record verification evidence and commit the completed plan**
+- [x] **Step 6: Record verification evidence and commit the completed plan**
 
 Append a `## Verification Evidence` section containing the exact commands, pass counts, hash comparison, Quarto version, and responsive QA result; mark plan checkboxes complete.
 
@@ -547,3 +547,46 @@ Append a `## Verification Evidence` section containing the exact commands, pass 
 git add docs/superpowers/plans/2026-08-09-final-submission-documentation-handoff.md
 git commit -m "docs: record final handoff verification"
 ```
+
+## Verification Evidence
+
+Verified from the final worktree on 2026-08-09 without retrieval, reranking,
+generation, evaluation, hosted-model calls, or publication.
+
+- Submission contract: pinned `trec-rag-data` revision
+  `a6255c3af2b4595789640546c1c96bff02f46871` and pinned
+  `trec-rag-skills` revision `f281e8800ae20088ebed4b85c075e71fc37d28b0`
+  matched their upstream default-branch heads. The official topics file SHA-256
+  was `72dc2f413a97ad7d9f5d57d6c67df6602a8431130a71d1b45e25e7714f17b6e6`
+  and contained 119 narratives.
+- Five-file preflight: the combined
+  `.agents/skills/validate-trec-rag-2026-submissions/scripts/validate_submission.py`
+  command in Task 5 returned three Retrieval `PASS` results, each with 4,246
+  rows, 119 topics, and depth 1–121, plus two RAG `PASS` results, each with
+  119/119 valid reports, no extras, and no duplicates.
+- Immutable bytes: `sha256sum` returned, in ledger order,
+  `29bc0c29dd51a752d49c734db456926ef94ad5202102cabd92d7fbf3e9dd15e8`,
+  `f42a794418cf692721adcd53df232ca0a3536d13d9cd137d90eb9821562e199d`,
+  `80985a42e43333085975c27d88a1da82cc11cba6dd576c3fd506839c016f2feb`,
+  `72200f7a0e3be19f9c7e8f23d3845f894f5e95e26caff2986ae16f848b4dee00`,
+  and `a33c60325c198cf90178d5b4c6c1b04209f7d39de278736b6817a8c5666c02a0`.
+  `git diff --name-only 88a163bf -- 'submissions/**/*.tsv'
+  'submissions/**/*.jsonl' 'submissions/**/metadata.json'` returned no paths.
+- Documentation tests: the six `node` commands in Task 5 all passed. The root
+  hub, report collection, final architecture, briefing, 2025 architecture, and
+  interactive-writeup checks each emitted their expected pass message.
+- Link integrity: a repository-relative HTML link check, excluding embedded
+  script and style source, resolved all 195 checked links.
+- Canonical render: `quarto render
+  reports/2026-competition-architecture.qmd` completed with Quarto 1.9.38, and
+  the architecture smoke test passed against the regenerated HTML.
+- Responsive QA: Chrome captures at 1440×1000 and 390×844 were inspected for
+  the root hub and architecture report. Additional tall desktop captures were
+  inspected across all nine diagrams and the accepted-artifact cards. No
+  clipped text, horizontal overflow, unreadable cards or diagrams, missing
+  content, or broken layout was observed. Screenshots remained temporary and
+  outside git.
+- Repository hygiene: `git diff --check` passed. The final diff from
+  `88a163bf` contains only the approved documentation, tests, diagram assets,
+  generated architecture HTML, specification, and plan; no ignored/private
+  output was added.
