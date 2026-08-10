@@ -112,3 +112,60 @@ after commit:
 PYTHONPATH=code TMPDIR=<fresh-private-temp-dir> .venv/bin/python -m pytest -q
 3234 passed, 19 skipped, 139 subtests passed
 ```
+
+## Fix Round 1 — adversarial findings
+
+Round 1 addressed all three important findings in the amended fix commit
+recorded by the handoff:
+
+1. `PrivacyDenylist` now separates always-forbidden identifiers (references,
+   segment document IDs, and caller extras) from selected passage text. The
+   identifier set is scanned against every raw, decoded, and browser-visible
+   projection of the actual unredacted page, so a response containing
+   `doc-original` is rejected even though response text is allowlisted. Passage
+   values retain the complete existing length policy and are only collision-
+   exempted in the explicit model projection.
+2. The permissive HTML node parser was removed. The dynamic scan now deep-copies
+   the validated `Presentation`, replaces only `narrative`, `subnarratives`,
+   answer `text` (which also covers repeated judgment statement text), and
+   renders that model through the same `render_report` function. Renderer tags,
+   attributes, chrome, metrics, and template output remain intact. Regressions
+   inject passage text in nested tags/attributes inside a response node and in
+   a non-allowlisted template location; both fail closed.
+3. Generic patterns now run over raw HTML, HTML-decoded HTML, and a
+   browser-visible/plain projection. Block-level boundaries are retained so a
+   preceding answer number cannot concatenate with a leaked `/home/...` path,
+   while inline formatting such as `OPEN<strong>ROUTER</strong>` remains joined
+   and is caught. Formatted-answer regressions cover credentials and paths;
+   direct projection regressions cover credentials, paths, and hashes.
+
+TDD RED/GREEN evidence for this round:
+
+```text
+RED: 6 new adversarial cases failed before the implementation (identifier in
+      response, split raw/decoded/plain generic terms, and nested renderer leak).
+GREEN: PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py -k 'privacy or generic_patterns_scan' -q
+       10 passed, 104 deselected, 6 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_offline_evaluation.py -q
+114 passed, 112 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py code/tests/test_ragdoll_io.py \
+  code/tests/test_accepted_rag_evaluation.py -q
+175 passed, 110 subtests passed
+```
+
+The final Round 1 real cache-only replay used the same private root and again
+succeeded for both runs with zero hosted calls and zero cache writes. Receipts
+remain `3,155` and `7,008` tasks over the exact 119-topic order; both reports
+remain mode `0600` and no portal copy exists. The committed-source full suite,
+compile, diff, and final commit checks all pass.
+
+Final clean-source full-suite result after this round:
+
+```text
+PYTHONPATH=code TMPDIR=<fresh-private-temp-dir> .venv/bin/python -m pytest -q
+3237 passed, 19 skipped, 145 subtests passed
+```

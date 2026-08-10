@@ -1038,6 +1038,72 @@ class PrivacyTests(EvaluationCase):
 
             assert_publishable(page + evidence, denylist_from_bundle(bundle.work_dir))
 
+    def test_response_docid_leak_is_rejected_inside_allowlisted_text(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = "The answer cites doc-original."
+        with self.assertRaises(ReportPrivacyError):
+            write_report(
+                manifest,
+                fixture.root / "response-docid-leak.html",
+                denylist=denylist_from_bundle(bundle.work_dir),
+            )
+
+    def test_generic_patterns_scan_raw_decoded_and_plain_projections(self) -> None:
+        from trec_rag.friendly_report import assert_publishable
+
+        formatted_leaks = (
+            "OPEN<strong>ROUTER</strong>",
+            "OPEN&#x3c;strong&#x3e;ROUTER&#x3c;/strong&#x3e;",
+            "/ho<strong>me</strong>/private/report",
+            "a1b2c3<strong>d4e5f6</strong>7890",
+        )
+        for leaked in formatted_leaks:
+            with self.subTest(leaked=leaked), self.assertRaises(ReportPrivacyError):
+                assert_publishable(f"<p>{leaked}</p>")
+
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        for leaked in ("OPEN**ROUTER**", "/ho**me**/private/report"):
+            manifest = deepcopy(bundle.manifest)
+            manifest["topics"][0]["answer"][0]["text"] = leaked
+            with self.subTest(formatted_answer=leaked), self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / f"formatted-{len(leaked)}.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
+    def test_renderer_injected_nested_attribute_leak_is_rejected(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values()))
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+
+        def render_with_nested_leak(view: Any) -> str:
+            page = original_render_report(view)
+            marker = '<p class="response-text">'
+            self.assertIn(marker, page)
+            return page.replace(
+                marker,
+                f'{marker}<span data-leak="{evidence}"><strong>{evidence}</strong></span>',
+                1,
+            )
+
+        with patch.object(
+            friendly_report, "render_report", side_effect=render_with_nested_leak
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    bundle.manifest,
+                    fixture.root / "nested-renderer-leak.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
     def test_allowlisted_evidence_reuse_passes_but_template_leak_fails(self) -> None:
         fixture = self.run_fixture(ONE_TOPIC)
         bundle = self.build(fixture, judge=RecordingJudge("FS"))
@@ -1048,6 +1114,9 @@ class PrivacyTests(EvaluationCase):
         manifest["topics"][0]["answer"][0]["text"] = f"The answer repeats {evidence}."
         manifest["topics"][0]["subnarratives"][0] = f"The subnarrative repeats {evidence}."
         denylist = denylist_from_bundle(bundle.work_dir)
+        self.assertIn("doc-original", denylist.identifiers)
+        self.assertIn(evidence, denylist.passage_texts)
+        self.assertNotIn(evidence, denylist.identifiers)
         output = fixture.root / "allowlisted-evidence.html"
 
         write_report(manifest, output, denylist=denylist)

@@ -18,8 +18,8 @@ import os
 import re
 import secrets
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -223,14 +223,36 @@ def build_presentation(manifest: Mapping[str, Any], *, commands: Sequence[str] =
 # ---------------------------------------------------------------------------
 
 
-def denylist_from_bundle(work_dir: Path, extra: Iterable[str] = ()) -> tuple[str, ...]:
-    """Collect concrete private values that must never appear in the page.
+@dataclass(frozen=True)
+class PrivacyDenylist(Sequence[str]):
+    """Separate always-forbidden identifiers from collision-safe passage text."""
+
+    identifiers: tuple[str, ...]
+    passage_texts: tuple[str, ...]
+
+    def _values(self) -> tuple[str, ...]:
+        return self.identifiers + self.passage_texts
+
+    def __len__(self) -> int:
+        return len(self.identifiers) + len(self.passage_texts)
+
+    def __getitem__(self, index: int | slice) -> str | tuple[str, ...]:
+        return self._values()[index]
+
+
+def denylist_from_bundle(work_dir: Path, extra: Iterable[str] = ()) -> PrivacyDenylist:
+    """Collect concrete private values, separating identifiers from passages.
 
     The values come from the bundle's own derived artifacts — document identifiers,
-    evidence passages, prompts, and full digests — so the scan catches a leak of this
-    run's real data rather than only matching generic regexes.
+    evidence passages, prompts, and full digests — so the scan catches a leak of
+    this run's real data rather than only matching generic regexes. Identifiers
+    are always scanned against the unredacted page; passage text may recur in the
+    explicitly allowlisted response/narrative fields.
     """
-    values: set[str] = {value for value in extra if isinstance(value, str) and value.strip()}
+    identifiers: set[str] = {
+        value for value in extra if isinstance(value, str) and value.strip()
+    }
+    passage_texts: set[str] = set()
     support_input = Path(work_dir) / "support_input.jsonl"
     if support_input.is_file():
         import json
@@ -240,26 +262,48 @@ def denylist_from_bundle(work_dir: Path, extra: Iterable[str] = ()) -> tuple[str
                 continue
             row = json.loads(line)
             for docid in row.get("references", []):
-                values.add(str(docid))
+                identifiers.add(str(docid))
             for docid, text in (row.get("segments") or {}).items():
-                values.add(str(docid))
-                values.add(str(text))
-    return tuple(sorted(value for value in values if len(value) >= 6))
+                identifiers.add(str(docid))
+                passage_texts.add(str(text))
+    return PrivacyDenylist(
+        identifiers=tuple(sorted(value for value in identifiers if len(value) >= 6)),
+        passage_texts=tuple(sorted(value for value in passage_texts if len(value) >= 6)),
+    )
 
 
-def assert_publishable(page: str, denylist: Sequence[str] = ()) -> None:
-    for pattern, description in _PRIVATE_PATTERNS:
-        match = re.search(pattern, page, flags=re.IGNORECASE)
-        if match is not None:
-            raise ReportPrivacyError(
-                f"refusing to write the report: it contains {description} ({match.group(0)[:24]!r})"
-            )
+_BLOCK_HTML_TAGS = re.compile(
+    r"</?(?:address|article|aside|blockquote|br|dd|details|div|dl|dt|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tr|ul)\b[^>]*>",
+    flags=re.IGNORECASE,
+)
+
+
+def _privacy_projections(page: str) -> tuple[str, str, str]:
     decoded = html.unescape(page)
-    plain = re.sub(r"<br\s*/?>", "\n", decoded, flags=re.IGNORECASE)
+    plain = _BLOCK_HTML_TAGS.sub("\n", decoded)
     plain = re.sub(r"<[^>]+>", "", plain)
-    projections = (page, decoded, plain)
+    return page, decoded, plain
+
+
+def _denylist_values(denylist: Sequence[str] | PrivacyDenylist) -> tuple[str, ...]:
+    if isinstance(denylist, PrivacyDenylist):
+        return denylist._values()
+    return tuple(denylist)
+
+
+def assert_publishable(
+    page: str, denylist: Sequence[str] | PrivacyDenylist = ()
+) -> None:
+    projections = _privacy_projections(page)
+    for pattern, description in _PRIVATE_PATTERNS:
+        for projection in projections:
+            match = re.search(pattern, projection, flags=re.IGNORECASE)
+            if match is not None:
+                raise ReportPrivacyError(
+                    f"refusing to write the report: it contains {description} ({match.group(0)[:24]!r})"
+                )
     normalized_projections = tuple(" ".join(projection.split()) for projection in projections)
-    for value in denylist:
+    for value in _denylist_values(denylist):
         normalized_value = " ".join(value.split()) if value else ""
         if value and (
             any(value in projection for projection in projections)
@@ -269,124 +313,6 @@ def assert_publishable(page: str, denylist: Sequence[str] = ()) -> None:
                 f"refusing to write the report: it contains a private input value "
                 f"({value[:24]!r})"
             )
-
-
-_ALLOWLISTED_NODE_SELECTORS = frozenset(
-    {
-        ("blockquote", "narrative"),
-        ("p", "subnarrative-text"),
-        ("p", "response-text"),
-        ("q", "judgment-statement"),
-    }
-)
-_VOID_HTML_ELEMENTS = frozenset(
-    {
-        "area",
-        "base",
-        "br",
-        "col",
-        "embed",
-        "hr",
-        "img",
-        "input",
-        "link",
-        "meta",
-        "param",
-        "source",
-        "track",
-        "wbr",
-    }
-)
-
-
-class _AllowlistedNodeRedactor(HTMLParser):
-    """Build a scan-only page with only known presentation-text nodes redacted."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=False)
-        self.parts: list[str] = []
-        self._target_tag: str | None = None
-        self._target_stack: list[str] = []
-        self.malformed = False
-        self._sentinel = f"friendly-report-allowlisted-{secrets.token_urlsafe(24)}"
-
-    @staticmethod
-    def _is_allowlisted(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
-        classes = {
-            class_name
-            for name, value in attrs
-            if name == "class"
-            for class_name in str(value or "").split()
-        }
-        return any((tag, class_name) in _ALLOWLISTED_NODE_SELECTORS for class_name in classes)
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        raw = self.get_starttag_text() or f"<{tag}>"
-        if self._target_tag is not None:
-            if tag not in _VOID_HTML_ELEMENTS and not raw.rstrip().endswith("/>"):
-                self._target_stack.append(tag)
-            return
-        self.parts.append(raw)
-        if self._is_allowlisted(tag, attrs):
-            self.parts.append(self._sentinel)
-            self._target_tag = tag
-            self._target_stack = [tag]
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if self._target_tag is None:
-            self.parts.append(self.get_starttag_text() or f"<{tag}/>")
-
-    def handle_endtag(self, tag: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(f"</{tag}>")
-            return
-        if not self._target_stack or self._target_stack[-1] != tag:
-            self.malformed = True
-            return
-        self._target_stack.pop()
-        if not self._target_stack:
-            self.parts.append(f"</{tag}>")
-            self._target_tag = None
-
-    def handle_data(self, data: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(data)
-
-    def handle_entityref(self, name: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(f"&{name};")
-
-    def handle_charref(self, name: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(f"&#{name};")
-
-    def handle_comment(self, data: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(f"<!--{data}-->")
-
-    def handle_decl(self, decl: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(f"<!{decl}>")
-
-    def handle_pi(self, data: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(f"<?{data}>")
-
-    def handle_unknown_decl(self, data: str) -> None:
-        if self._target_tag is None:
-            self.parts.append(f"<![{data}]>")
-
-
-def _redact_allowlisted_nodes(page: str) -> str:
-    """Redact only exact allowlisted DOM nodes for the dynamic-input scan."""
-    parser = _AllowlistedNodeRedactor()
-    parser.feed(page)
-    parser.close()
-    if parser.malformed or parser._target_tag is not None:
-        # A malformed page must remain fully visible to the denylist. Never let an
-        # unclosed or mismatched allowlisted node hide a later template leak.
-        return page
-    return "".join(parser.parts)
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +394,18 @@ def render_report(view: Presentation) -> str:
         ]
     )
     return _PAGE.format(style=_STYLE, body=body)
+
+
+def _privacy_scan_view(view: Presentation) -> Presentation:
+    """Clone the model and redact only text fields explicitly published by the template."""
+    scan_view = deepcopy(view)
+    sentinel = f"friendly-report-allowlisted-{secrets.token_urlsafe(24)}"
+    for topic in scan_view.topics:
+        topic["narrative"] = sentinel
+        topic["subnarratives"] = [sentinel for _ in topic["subnarratives"]]
+        for answer in topic["answer"]:
+            answer["text"] = sentinel
+    return scan_view
 
 
 def _render_hero(view: Presentation) -> str:
@@ -905,19 +843,29 @@ def write_report(
     manifest: Mapping[str, Any],
     output_path: Path,
     *,
-    denylist: Sequence[str] = (),
+    denylist: Sequence[str] | PrivacyDenylist = (),
     commands: Sequence[str] = (),
 ) -> Path:
     """Render, scan, and only then write — atomically, so a failure never corrupts a
     previously valid report."""
-    page = render_report(build_presentation(manifest, commands=commands))
+    view = build_presentation(manifest, commands=commands)
+    page = render_report(view)
+    if isinstance(denylist, PrivacyDenylist):
+        identifiers = denylist.identifiers
+        passage_texts = denylist.passage_texts
+    else:
+        # Keep legacy callers fail-closed while the bundle API uses the split type.
+        identifiers = tuple(denylist)
+        passage_texts = identifiers
     # Generic patterns must inspect the actual page: allowlisted response text is still
     # forbidden when it contains credentials, paths, hashes, or provider/runtime fields.
-    assert_publishable(page, denylist=())
-    # Dynamic evidence values are checked on a DOM-aware projection. Only the exact
-    # allowlisted narrative/subnarrative/answer nodes are replaced; template text and
-    # every other location remain visible to the full run-specific denylist.
-    assert_publishable(_redact_allowlisted_nodes(page), denylist)
+    # Identifiers are always forbidden and therefore scan every projection of the real page.
+    assert_publishable(page, denylist=identifiers)
+    # Passage values are checked against a second render from a model-level projection.
+    # The same renderer preserves every tag, attribute, and template/chrome field while
+    # replacing only the exact allowlisted presentation-model text fields.
+    scan_page = render_report(_privacy_scan_view(view))
+    assert_publishable(scan_page, denylist=passage_texts)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = page.encode("utf-8")
