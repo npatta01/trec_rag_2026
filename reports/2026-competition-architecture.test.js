@@ -28,14 +28,102 @@ const normalizedQmd = qmd.replace(/\s+/g, " ");
 const html = fs.readFileSync(htmlPath, "utf8");
 const reportCss = fs.readFileSync(path.join(assetRoot, "report.css"), "utf8");
 
-for (const token of ["--guide-code-ink", "--guide-code-bg", "--guide-code-border"]) {
-  assert(reportCss.includes(token), `report CSS should define ${token}`);
+function normalizeCss(value) {
+  return value.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ").trim();
+}
+
+function extractRule(source, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}\\s*\\{([^{}]*)\\}`, "m").exec(source);
+  assert(match, `CSS should define the ${selector} rule`);
+  return normalizeCss(match[1]);
+}
+
+function assertRule(source, selector, declarations, label) {
+  const actual = extractRule(source, selector);
+  const expected = normalizeCss(declarations);
+  assert(actual === expected, `${label || selector} declarations changed: ${actual}`);
+}
+
+function assertScopedToken(source, scope, token, value) {
+  const declarations = extractRule(source, scope);
+  assert(
+    new RegExp(`(?:^|; )${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: ${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:;|$)`).test(declarations),
+    `${scope} should set ${token} to ${value}`,
+  );
+}
+
+assertScopedToken(reportCss, ":root", "--guide-code-ink", "#6f3488");
+assertScopedToken(reportCss, ":root", "--guide-code-bg", "#f3e8f7");
+assertScopedToken(reportCss, ":root", "--guide-code-border", "#d8b9e3");
+assertScopedToken(reportCss, "body.quarto-dark", "--guide-code-ink", "#f0cfff");
+assertScopedToken(reportCss, "body.quarto-dark", "--guide-code-bg", "#2c2332");
+assertScopedToken(reportCss, "body.quarto-dark", "--guide-code-border", "#765484");
+
+const inlineCodeSelector = ":not(pre) > code:not(.sourceCode)";
+const darkInlineCodeSelector = "body.quarto-dark :not(pre) > code:not(.sourceCode)";
+const plainDarkCodeSelector = "body.quarto-dark pre > code:not(.sourceCode)";
+const inlineCodeDeclarations = `
+  border: 1px solid var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+`;
+const darkInlineCodeDeclarations = `
+  border-color: var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+`;
+const plainDarkCodeDeclarations = "color: var(--guide-ink);";
+
+assertRule(reportCss, inlineCodeSelector, inlineCodeDeclarations, "light inline-code");
+assertRule(reportCss, darkInlineCodeSelector, darkInlineCodeDeclarations, "dark inline-code");
+assertRule(reportCss, plainDarkCodeSelector, plainDarkCodeDeclarations, "dark plain fenced code");
+assert(
+  !extractRule(reportCss, plainDarkCodeSelector).includes("background"),
+  "dark plain fenced code must not add a background declaration",
+);
+
+for (const selector of [inlineCodeSelector, darkInlineCodeSelector]) {
+  assert(
+    !/(?:^|[\s>])pre(?:[\s>]|$)/.test(selector) &&
+      !/(?:^|[\s>])\.sourceCode(?:[\s>]|$)/.test(selector),
+    `${selector} must exclude code blocks`,
+  );
+}
+
+for (const match of reportCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  const selector = normalizeCss(match[1]);
+  const declarations = normalizeCss(match[2]);
+  if (/\bbackground(?:-color)?\s*:/.test(declarations)) {
+    assert(
+      !/(?:^|[\s>])pre(?:[\s>]|$)|(?:^|[\s>])\.sourceCode(?:[\s>]|$)|(?:^|[\s>])code\s+span/.test(selector),
+      `report CSS must not add code-block or syntax-token backgrounds: ${selector}`,
+    );
+  }
+}
+
+for (const [scope, token, value] of [
+  [":root", "--guide-code-ink", "#6f3488"],
+  [":root", "--guide-code-bg", "#f3e8f7"],
+  [":root", "--guide-code-border", "#d8b9e3"],
+  ["body.quarto-dark", "--guide-code-ink", "#f0cfff"],
+  ["body.quarto-dark", "--guide-code-bg", "#2c2332"],
+  ["body.quarto-dark", "--guide-code-border", "#765484"],
+]) {
+  assertScopedToken(html, scope, token, value);
+}
+for (const [selector, declarations] of [
+  [inlineCodeSelector, inlineCodeDeclarations],
+  [darkInlineCodeSelector, darkInlineCodeDeclarations],
+  [plainDarkCodeSelector, plainDarkCodeDeclarations],
+]) {
+  const canonical = normalizeCss(`${selector} { ${declarations} }`);
+  assert(normalizeCss(html).includes(canonical), `rendered HTML should contain ${selector} declarations`);
 }
 assert(
-  reportCss.includes("body.quarto-dark :not(pre) > code:not(.sourceCode)"),
-  "dark mode should explicitly theme inline code without changing code blocks",
+  !/body\.quarto-dark[^{}]*\{[^{}]*--guide-code-bg:\s*#f8f9fa/.test(reportCss),
+  "dark inline-code background must not regress to Bootstrap light gray",
 );
-assert(html.includes("--guide-code-bg"), "rendered HTML should contain canonical code tokens");
 
 assert(
   /body\.quarto-dark\s*\{/.test(reportCss),
