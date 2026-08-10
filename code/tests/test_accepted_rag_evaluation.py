@@ -13,6 +13,7 @@ from trec_rag.accepted_rag_evaluation import (
     build_accepted_run_binding,
     write_accepted_run_binding,
 )
+import trec_rag.ragdoll_io as ragdoll_io
 from trec_rag.generation_handoff import (
     SOURCE_CONTRACT,
     EvidenceGroup,
@@ -188,6 +189,7 @@ def test_accepted_binding_records_missing_source_identity(tmp_path: Path) -> Non
     assert binding.run_id == "accepted-single"
     assert binding.source_identity_available is False
     assert binding.source_identity_reason == "original generation identity was not preserved"
+    assert binding.topic_ids == ("topic-a", "topic-b")
     assert binding.topic_context_sha256s == paths.topic_context_sha256s
 
 
@@ -206,7 +208,7 @@ def test_accepted_binding_rejects_mismatched_preserved_multistage_identity(
     handoff = json.loads(paths.handoff.read_text(encoding="utf-8"))
     identity = {
         "identity_version": 1,
-        "trial_contract_version": "bounded_revision_v1",
+        "trial_contract_version": "bounded_narrative_revision_trial_v8_screen_liveness",
         "handoff_schema_version": handoff["schema_version"],
         "handoff_manifest_sha256": handoff["manifest_sha256"],
         "submission_run_id": "accepted-single",
@@ -228,6 +230,71 @@ def test_accepted_binding_rejects_mismatched_preserved_multistage_identity(
             paths.handoff,
             source_identity_path=identity_path,
         )
+
+
+def test_accepted_binding_rejects_missing_or_changed_multistage_contract_fields(
+    tmp_path: Path,
+) -> None:
+    paths = build_accepted_fixture(tmp_path)
+    handoff = json.loads(paths.handoff.read_text(encoding="utf-8"))
+    identity = {
+        "identity_version": 1,
+        "trial_contract_version": "bounded_narrative_revision_trial_v8_screen_liveness",
+        "handoff_schema_version": handoff["schema_version"],
+        "handoff_manifest_sha256": handoff["manifest_sha256"],
+        "submission_run_id": "accepted-single",
+        "topics": [
+            {"topic_id": topic_id, "context_sha256": digest}
+            for topic_id, digest in paths.topic_context_sha256s.items()
+        ],
+    }
+    for field, value in (
+        ("identity_version", None),
+        ("identity_version", 2),
+        ("trial_contract_version", None),
+        ("trial_contract_version", "wrong-contract"),
+    ):
+        candidate = dict(identity)
+        if value is None:
+            candidate.pop(field)
+        else:
+            candidate[field] = value
+        source_path = tmp_path / f"identity-{field}-{value}.json"
+        source_path.write_text(json.dumps(candidate), encoding="utf-8")
+        with pytest.raises(ValueError, match="source identity"):
+            build_accepted_run_binding(
+                paths.submission,
+                paths.bundle_metadata,
+                paths.handoff,
+                source_identity_path=source_path,
+            )
+
+
+def test_selected_support_rejects_submission_answer_mutation_after_binding(
+    tmp_path: Path,
+) -> None:
+    paths = build_accepted_fixture(tmp_path)
+    binding = build_accepted_run_binding(paths.submission, paths.bundle_metadata, paths.handoff)
+    binding_path = write_accepted_run_binding(binding, tmp_path / "binding.json")
+    records = [json.loads(line) for line in paths.submission.read_text().splitlines()]
+    records[0]["answer"][0]["text"] = "Mutated after binding."
+    mutated = _write_jsonl(tmp_path / "mutated.jsonl", records)
+
+    with pytest.raises(ValueError, match="submission.*(?:sha256|bytes)"):
+        ragdoll_io.selected_evidence_support_rows(mutated, paths.handoff, binding_path)
+
+
+def test_selected_support_rejects_submission_topic_reorder_after_binding(
+    tmp_path: Path,
+) -> None:
+    paths = build_accepted_fixture(tmp_path)
+    binding = build_accepted_run_binding(paths.submission, paths.bundle_metadata, paths.handoff)
+    binding_path = write_accepted_run_binding(binding, tmp_path / "binding.json")
+    records = [json.loads(line) for line in paths.submission.read_text().splitlines()]
+    reordered = _write_jsonl(tmp_path / "reordered.jsonl", list(reversed(records)))
+
+    with pytest.raises(ValueError, match="topic order|sha256|bytes"):
+        ragdoll_io.selected_evidence_support_rows(reordered, paths.handoff, binding_path)
 
 
 def test_write_accepted_binding_is_canonical_and_private(tmp_path: Path) -> None:

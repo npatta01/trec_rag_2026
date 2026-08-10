@@ -11,11 +11,14 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-from trec_rag.generation_handoff import load_generation_handoff
+from trec_rag.generation_handoff import PROMPT_CONTRACT_VERSION, load_generation_handoff
 
 
 ACCEPTED_BINDING_SCHEMA_VERSION = "accepted_rag_evaluation_binding_v1"
 MISSING_SOURCE_IDENTITY_REASON = "original generation identity was not preserved"
+SINGLEPASS_IDENTITY_VERSION = 6
+MULTISTAGE_IDENTITY_VERSION = 1
+MULTISTAGE_TRIAL_CONTRACT_VERSION = "bounded_narrative_revision_trial_v8_screen_liveness"
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,7 @@ class AcceptedRunBinding:
     bundle_metadata_sha256: str
     handoff_schema_version: str
     handoff_manifest_sha256: str
+    topic_ids: tuple[str, ...]
     topic_context_sha256s: Mapping[str, str]
     source_identity_available: bool
     source_identity_sha256: str | None
@@ -49,6 +53,7 @@ class AcceptedRunBinding:
             "bundle_metadata_sha256": self.bundle_metadata_sha256,
             "handoff_schema_version": self.handoff_schema_version,
             "handoff_manifest_sha256": self.handoff_manifest_sha256,
+            "topic_ids": list(self.topic_ids),
             "topic_context_sha256s": dict(sorted(self.topic_context_sha256s.items())),
             "source_identity_available": self.source_identity_available,
             "source_identity_sha256": self.source_identity_sha256,
@@ -156,6 +161,10 @@ def _topic_ids_from_source_identity(
     source_run_id = source.get("submission_run_id")
     topic_items = source.get("topics")
     if source_run_id is not None or topic_items is not None:
+        if source.get("identity_version") != MULTISTAGE_IDENTITY_VERSION:
+            raise ValueError("accepted source identity does not match multi-stage identity version")
+        if source.get("trial_contract_version") != MULTISTAGE_TRIAL_CONTRACT_VERSION:
+            raise ValueError("accepted source identity does not match multi-stage trial contract")
         if not isinstance(source_run_id, str) or not source_run_id.strip():
             raise ValueError(f"{source_path}: accepted source identity has no submission_run_id")
         if source_run_id != run_id:
@@ -187,6 +196,10 @@ def _topic_ids_from_source_identity(
     # identity alongside an accepted file.  It is not synthesized when missing.
     source_run_id = source.get("run_id")
     selected_items = source.get("selected_topics")
+    if source.get("identity_version") != SINGLEPASS_IDENTITY_VERSION:
+        raise ValueError("accepted source identity does not match single-pass identity version")
+    if source.get("prompt_contract_version") != PROMPT_CONTRACT_VERSION:
+        raise ValueError("accepted source identity does not match single-pass prompt contract")
     if not isinstance(source_run_id, str) or source_run_id != run_id:
         raise ValueError(f"accepted source identity does not match submission run_id")
     if source.get("handoff_schema_version") != handoff_schema_version:
@@ -347,6 +360,7 @@ def build_accepted_run_binding(
         bundle_metadata_sha256=_digest(metadata_bytes),
         handoff_schema_version=handoff.schema_version,
         handoff_manifest_sha256=handoff.manifest_sha256,
+        topic_ids=handoff_topic_ids,
         topic_context_sha256s=dict(topic_contexts),
         source_identity_available=source_identity_available,
         source_identity_sha256=source_identity_sha256,
@@ -403,6 +417,9 @@ __all__ = [
     "ACCEPTED_BINDING_SCHEMA_VERSION",
     "AcceptedRunBinding",
     "MISSING_SOURCE_IDENTITY_REASON",
+    "MULTISTAGE_IDENTITY_VERSION",
+    "MULTISTAGE_TRIAL_CONTRACT_VERSION",
+    "SINGLEPASS_IDENTITY_VERSION",
     "build_accepted_run_binding",
     "write_accepted_run_binding",
 ]
