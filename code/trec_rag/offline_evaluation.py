@@ -17,6 +17,7 @@ import os
 import platform
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -326,6 +327,7 @@ def build_evaluation_bundle(
         settings=judge_settings,
         ragdoll=ragdoll,
         judge_limit=judge_limit,
+        judge_workers=judge_workers,
     )
 
     derived: dict[str, Path] = {}
@@ -373,6 +375,7 @@ def build_evaluation_bundle(
         judge_settings=judge_settings,
         judge_report=judge_report,
         judge_limit=judge_limit,
+        judge_workers=judge_workers,
         cache=cache,
         derived=derived,
         work_dir=work_dir,
@@ -477,6 +480,7 @@ def _resolve_judgments(
     settings: JudgeSettings,
     ragdoll: Mapping[str, str],
     judge_limit: int | None = None,
+    judge_workers: int = 1,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Reuse validated cache entries and call the judge only for validated misses.
 
@@ -486,50 +490,101 @@ def _resolve_judgments(
     only the remaining misses call the judge. A failed call still consumes the limit, so a
     broken probe stops instead of burning the rest of the quota.
     """
-    judgments: list[dict[str, Any]] = []
-    hosted_calls = 0
+    if type(judge_workers) is not int or judge_workers < 1:
+        raise EvaluationError("judge_workers must be a positive integer")
+    if judge_limit is not None and (type(judge_limit) is not int or judge_limit < 1):
+        raise EvaluationError("judge_limit must be a positive integer")
+
+    # Resolve every cache hit on the controller first. A miss is selected at most once by
+    # identity, so repeated task payloads cannot consume multiple probe calls. Nothing is
+    # submitted until this pass completes, which makes --judge-limit a strict bound even
+    # when a worker pool is wider than the probe quota.
+    identities: list[JudgeIdentity] = []
+    labels: list[str | None] = []
+    label_sources: list[str] = []
     reused = 0
-    missing = 0
+    skipped_by_limit = 0
+    selected: list[tuple[int, Mapping[str, Any], JudgeIdentity]] = []
+    selected_by_digest: dict[str, int] = {}
+    for index, task in enumerate(tasks):
+        identity = _judge_identity(task, settings=settings, ragdoll=ragdoll)
+        identities.append(identity)
+        entry = cache.read(identity)
+        if entry is not None:
+            labels.append(entry.support_label)
+            label_sources.append("cache")
+            reused += 1
+            continue
+        labels.append(None)
+        label_sources.append("missing")
+        if judge is None:
+            continue
+        digest = identity.digest
+        if digest in selected_by_digest:
+            # The selected call will populate all tasks sharing this identity.
+            continue
+        if judge_limit is not None and len(selected) >= judge_limit:
+            skipped_by_limit += 1
+            continue
+        selected_by_digest[digest] = index
+        selected.append((index, task, identity))
+
+    # Hosted calls may run concurrently, but all outcomes are consumed and all cache writes
+    # happen below on this controller thread. Collecting in declared order also keeps conflict
+    # handling and the resulting support_judgments.jsonl deterministic across worker counts.
+    outcomes: list[JudgeOutcome | None] = []
+    if selected and judge is not None:
+        with ThreadPoolExecutor(max_workers=judge_workers) as executor:
+            futures = [executor.submit(judge, task) for _, task, _ in selected]
+            for future in futures:
+                try:
+                    outcomes.append(future.result())
+                except Exception:
+                    outcomes.append(None)
+
+    hosted_calls = len(selected)
     failed = 0
     conflicts = 0
-    skipped_by_limit = 0
-    for task in tasks:
-        identity = _judge_identity(task, settings=settings, ragdoll=ragdoll)
-        entry = cache.read(identity)
+    outcome_by_digest: dict[str, tuple[JudgeOutcome | None, str | None, str]] = {}
+    for (_, _, identity), outcome in zip(selected, outcomes, strict=True):
         label: str | None = None
-        source = "cache"
-        if entry is not None:
-            label = entry.support_label
-            reused += 1
-        elif judge is not None:
-            if judge_limit is not None and hosted_calls >= judge_limit:
-                skipped_by_limit += 1
-                missing += 1
-                continue
-            hosted_calls += 1
+        source = "missing"
+        if outcome is not None and (
+            outcome.status == "completed" and outcome.support_label in SUPPORT_LABELS
+        ):
+            label = outcome.support_label
             try:
-                outcome: JudgeOutcome | None = judge(task)
-            except Exception:
-                failed += 1
-                outcome = None
-            if outcome is not None and (
-                outcome.status == "completed" and outcome.support_label in SUPPORT_LABELS
-            ):
-                label = outcome.support_label
-                try:
-                    cache.put(identity, support_label=label)
-                    source = "judge"
-                except JudgeCacheConflict:
-                    existing = cache.read(identity)
-                    if existing is None:
-                        failed += 1
-                        label = None
-                    else:
-                        label = existing.support_label
-                        source = "cache_conflict"
-                        conflicts += 1
-            elif outcome is not None:
-                failed += 1
+                cache.put(identity, support_label=label)
+                source = "judge"
+            except JudgeCacheConflict:
+                existing = cache.read(identity)
+                if existing is None:
+                    failed += 1
+                    label = None
+                else:
+                    label = existing.support_label
+                    source = "cache_conflict"
+                    conflicts += 1
+        else:
+            failed += 1
+        outcome_by_digest[identity.digest] = (outcome, label, source)
+
+    # Apply each completed outcome to all same-identity task rows. This is what lets a probe
+    # report progress for duplicate statement/citation tasks while still making one hosted call.
+    for index, identity in enumerate(identities):
+        if labels[index] is not None:
+            continue
+        selected_outcome = outcome_by_digest.get(identity.digest)
+        if selected_outcome is None:
+            continue
+        _, label, source = selected_outcome
+        labels[index] = label
+        label_sources[index] = source
+
+    judgments: list[dict[str, Any]] = []
+    missing = 0
+    for index, task in enumerate(tasks):
+        label = labels[index]
         if label is None:
             missing += 1
             continue
@@ -542,8 +597,8 @@ def _resolve_judgments(
                 "statement": metadata.get("statement"),
                 "citation": metadata.get("citation"),
                 "metadata": dict(metadata.get("source", {})),
-                "cache_entry_sha256": identity.digest,
-                "label_source": source,
+                "cache_entry_sha256": identities[index].digest,
+                "label_source": label_sources[index],
             }
         )
     report = {
@@ -851,6 +906,7 @@ def _manifest(
     judge_settings: JudgeSettings,
     judge_report: Mapping[str, int],
     judge_limit: int | None,
+    judge_workers: int,
     cache: JudgeCache,
     derived: Mapping[str, Path],
     work_dir: Path,
@@ -940,6 +996,7 @@ def _manifest(
             "reused_from_cache": judge_report["reused_from_cache"],
             "skipped_by_judge_limit": judge_report["skipped_by_judge_limit"],
             "judge_limit": judge_limit,
+            "judge_workers": judge_workers,
         },
         "cache": dict(cache.stats()),
         "metric_definitions": {

@@ -10,6 +10,8 @@ import json
 import re
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
@@ -92,6 +94,43 @@ class RecordingJudge:
         if label is None:
             return JudgeOutcome(status="failed", error="fixture failure")
         return JudgeOutcome(status="completed", support_label=label)
+
+
+class ConcurrencyRecordingJudge:
+    """A deterministic fixture judge that records concurrent hosted calls."""
+
+    def __init__(self, label: str = "FS", delay: float = 0.01) -> None:
+        self.label = label
+        self.delay = delay
+        self.calls: list[str] = []
+        self.active = 0
+        self.max_active = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, task: dict[str, Any]) -> JudgeOutcome:
+        task_id = str(task["task_id"])
+        with self._lock:
+            self.calls.append(task_id)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(self.delay)
+            return JudgeOutcome(status="completed", support_label=self.label)
+        finally:
+            with self._lock:
+                self.active -= 1
+
+
+class ControllerRecordingCache(JudgeCache):
+    """Cache fixture that proves writes stay on the resolver/controller thread."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.put_thread_names: list[str] = []
+
+    def put(self, identity: Any, *, support_label: str) -> str:
+        self.put_thread_names.append(threading.current_thread().name)
+        return super().put(identity, support_label=support_label)
 
 
 class Headings(HTMLParser):
@@ -936,6 +975,27 @@ class RenderTests(EvaluationCase):
         self.assertNotIn("http://", page)
         self.assertNotIn("https://", page)
 
+    def test_render_is_independent_of_worker_count(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        one = self.build(
+            fixture,
+            judge=RecordingJudge("FS"),
+            work_dir=fixture.root / "one-worker",
+            cache_root=fixture.root / "one-worker-cache",
+            judge_workers=1,
+        )
+        many = self.build(
+            fixture,
+            judge=ConcurrencyRecordingJudge("FS"),
+            work_dir=fixture.root / "many-workers",
+            cache_root=fixture.root / "many-workers-cache",
+            judge_workers=2,
+        )
+        self.assertEqual(
+            render_report(build_presentation(one.manifest)),
+            render_report(build_presentation(many.manifest)),
+        )
+
 
 class PrivacyTests(EvaluationCase):
     def test_dynamic_docid_leak_is_rejected(self) -> None:
@@ -1252,6 +1312,95 @@ class JudgeLimitTests(EvaluationCase):
         self.assertEqual(bundle.manifest["judge"]["skipped_by_judge_limit"], 0)
         self.assertTrue(bundle.manifest["judgments"]["fully_judged"])
 
+    def test_judge_workers_bound_concurrency_and_preserve_order(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        judge = ConcurrencyRecordingJudge()
+        bundle = self.build(fixture, judge=judge, judge_workers=2)
+        rows = _rows(bundle.work_dir / "support_judgments.jsonl")
+        expected = [
+            row["task_id"] for row in _rows(bundle.work_dir / "support_tasks.jsonl")
+        ]
+        self.assertEqual(judge.max_active, 2)
+        self.assertEqual([row["task_id"] for row in rows], expected)
+        self.assertEqual(bundle.manifest["judge"]["judge_workers"], 2)
+
+    def test_cache_writes_are_owned_by_the_controller_thread(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        baseline = self.build(fixture, judge=None, work_dir=fixture.root / "baseline")
+        tasks = _rows(baseline.work_dir / "support_tasks.jsonl")
+        cache = ControllerRecordingCache(fixture.root / "controller-cache")
+        judgments, report = _resolve_judgments(
+            tasks,
+            cache=cache,
+            judge=ConcurrencyRecordingJudge(),
+            settings=settings(),
+            ragdoll=ragdoll_identity(REPOSITORY_ROOT),
+            judge_workers=3,
+        )
+        self.assertEqual(report["completed"], len(judgments))
+        self.assertTrue(cache.put_thread_names)
+        self.assertEqual(
+            set(cache.put_thread_names),
+            {threading.current_thread().name},
+        )
+
+    def test_probe_limit_preselects_one_miss_even_with_four_workers(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        judge = ConcurrencyRecordingJudge()
+        bundle = self.build(fixture, judge=judge, judge_limit=1, judge_workers=4)
+        self.assertEqual(bundle.manifest["judge"]["hosted_calls"], 1)
+        self.assertEqual(len(judge.calls), 1)
+        self.assertEqual(bundle.manifest["judge"]["judge_workers"], 4)
+
+    def test_cached_tasks_never_occupy_workers(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        cache_root = fixture.root / "cache"
+        seed = self.build(fixture, judge=RecordingJudge("FS"), cache_root=cache_root)
+        task_ids = {row["task_id"] for row in _rows(seed.work_dir / "support_tasks.jsonl")}
+        judge = ConcurrencyRecordingJudge("PS")
+        bundle = self.build(
+            fixture,
+            judge=judge,
+            cache_root=cache_root,
+            work_dir=fixture.root / "resume",
+            judge_workers=4,
+        )
+        self.assertEqual(judge.calls, [])
+        self.assertEqual(bundle.manifest["judge"]["reused_from_cache"], len(task_ids))
+        self.assertEqual(bundle.manifest["judge"]["hosted_calls"], 0)
+
+    def test_failed_calls_are_not_cached_and_resume_retries_only_failures(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        cache_root = fixture.root / "cache"
+        first = RecordingJudge([None, "FS", None, "FS", None, "FS"])
+        # Keep the label sequence deterministic while exercising resumability. The two
+        # default-answer topics intentionally share cache identities, so there are five
+        # unique judge calls for seven materialized tasks.
+        partial = self.build(fixture, judge=first, cache_root=cache_root, judge_workers=1)
+        self.assertEqual(partial.manifest["judge"]["failed"], 3)
+        self.assertEqual(partial.manifest["cache"]["writes"], 2)
+
+        retry = RecordingJudge("PS")
+        complete = self.build(
+            fixture,
+            judge=retry,
+            cache_root=cache_root,
+            work_dir=fixture.root / "retry",
+            judge_workers=2,
+        )
+        self.assertEqual(len(retry.calls), 3)
+        self.assertEqual(
+            complete.manifest["judge"]["reused_from_cache"],
+            partial.manifest["judge"]["completed"],
+        )
+        self.assertEqual(complete.manifest["judge"]["hosted_calls"], 3)
+        self.assertTrue(complete.manifest["judgments"]["fully_judged"])
+
+    def test_judge_workers_must_be_positive(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        with self.assertRaisesRegex(EvaluationError, "judge_workers"):
+            self.build(fixture, judge=None, judge_workers=0)
+
     def test_cli_rejects_a_limit_without_run_judge(self) -> None:
         with self.assertRaises(SystemExit):
             cli.main(
@@ -1264,6 +1413,24 @@ class JudgeLimitTests(EvaluationCase):
                 [
                     "--retrieval-config", "a.yaml", "--rag-config", "b.yaml",
                     "--run-judge", "--judge-limit", "0",
+                ]
+            )
+
+    def test_cli_rejects_non_default_workers_without_run_judge(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(
+                [
+                    "--retrieval-config", "a.yaml", "--rag-config", "b.yaml",
+                    "--judge-workers", "2",
+                ]
+            )
+
+    def test_cli_rejects_non_positive_workers(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(
+                [
+                    "--retrieval-config", "a.yaml", "--rag-config", "b.yaml",
+                    "--run-judge", "--judge-workers", "0",
                 ]
             )
 
@@ -1298,7 +1465,7 @@ class ReceiptContractTests(EvaluationCase):
         "schema_version", "manifest_path", "report_path", "work_dir", "topic_ids",
         "judgment_tasks", "completed_judgments", "failed_judgments", "missing_judgments",
         "conflicting_judgments", "reused_from_cache", "hosted_calls", "cache", "label_counts", "fully_judged",
-        "judge_limit", "skipped_by_judge_limit", "exact_invocation",
+        "judge_limit", "judge_workers", "skipped_by_judge_limit", "exact_invocation",
     )
 
     def receipt(self, fixture: RunFixture, *extra: str, cache_dir: Path | None = None,
@@ -1324,6 +1491,7 @@ class ReceiptContractTests(EvaluationCase):
         for field in self.REQUIRED:
             with self.subTest(field=field):
                 self.assertIn(field, receipt)
+        self.assertEqual(receipt["judge_workers"], 1)
         self.assertEqual(set(receipt["cache"]), {"hits", "misses", "invalidations", "writes"})
 
     def test_cache_only_receipt_counts_missing_judgments(self) -> None:
@@ -1335,6 +1503,20 @@ class ReceiptContractTests(EvaluationCase):
         self.assertEqual(receipt["failed_judgments"], 0)
         self.assertEqual(receipt["reused_from_cache"], 0)
         self.assertFalse(receipt["fully_judged"])
+
+    def test_receipt_records_effective_non_default_workers(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        with patch.object(cli, "hosted_judge", return_value=RecordingJudge("FS")):
+            receipt = self.receipt(
+                fixture,
+                "--run-judge",
+                "--judge-workers",
+                "2",
+                work="workers",
+            )
+        self.assertEqual(receipt["judge_workers"], 2)
+        manifest = json.loads(Path(receipt["manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["judge"]["judge_workers"], 2)
 
     def test_receipt_fields_track_the_validated_bundle(self) -> None:
         fixture = self.run_fixture(ONE_TOPIC)

@@ -166,6 +166,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "the probe is a cache hit and only remaining misses call the judge."
         ),
     )
+    parser.add_argument(
+        "--judge-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Bound concurrent hosted judge calls to N workers. The default is 1; values "
+            "other than the default require --run-judge."
+        ),
+    )
     arguments = parser.parse_args(argv)
     if arguments.accepted_rag is not None:
         if arguments.accepted_bundle_metadata is None or arguments.handoff_manifest is None:
@@ -190,6 +200,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--judge-limit must be a positive number of hosted calls")
     if arguments.judge_limit is not None and not arguments.run_judge:
         parser.error("--judge-limit only applies with --run-judge, which makes hosted calls")
+    if arguments.judge_workers < 1:
+        parser.error("--judge-workers must be a positive number of workers")
+    if arguments.judge_workers != 1 and not arguments.run_judge:
+        parser.error("--judge-workers only applies with --run-judge, which makes hosted calls")
 
     repository_root = find_repo_root(Path.cwd())
     work_dir = _private_directory(arguments.work_dir)
@@ -217,6 +231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         judge=judge,
         judge_settings=settings,
         judge_limit=arguments.judge_limit,
+        judge_workers=arguments.judge_workers,
     )
 
     output_path = (
@@ -296,6 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "label_counts": bundle.manifest["judgments"]["label_counts"],
                 "fully_judged": bundle.manifest["judgments"]["fully_judged"],
                 "judge_limit": arguments.judge_limit,
+                "judge_workers": arguments.judge_workers,
                 "skipped_by_judge_limit": judge_report["skipped_by_judge_limit"],
                 "exact_invocation": exact_invocation,
             },
