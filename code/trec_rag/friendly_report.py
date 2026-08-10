@@ -348,10 +348,23 @@ class _PrivacyHTMLParser(HTMLParser):
     unbalanced stack makes the caller fail closed rather than guessing at a node.
     """
 
-    def __init__(self, *, redact_sinks: bool, sentinel: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        redact_sinks: bool,
+        sentinel: str = "",
+        expected_sinks: Mapping[str, Sequence[str]] | None = None,
+    ) -> None:
         super().__init__(convert_charrefs=False)
         self.redact_sinks = redact_sinks
         self.sentinel = sentinel
+        self.expected_sinks = (
+            {kind: tuple(values) for kind, values in expected_sinks.items()}
+            if expected_sinks is not None
+            else None
+        )
+        self._seen_sinks: dict[str, int] = {}
+        self._sink_content: list[str] | None = None
         self.parts: list[str] = []
         self.visible_parts: list[str] = []
         self.compact_visible_parts: list[str] = []
@@ -391,6 +404,32 @@ class _PrivacyHTMLParser(HTMLParser):
             and self.citation_index is None
         )
 
+    def _capture_sink_content(self, raw: str) -> None:
+        if self._sink_content is not None:
+            self._sink_content.append(raw)
+
+    def _finish_sink(self) -> None:
+        if self.expected_sinks is None or self.sink_kind is None:
+            return
+        kind = self.sink_kind
+        seen = self._seen_sinks.get(kind, 0)
+        expected = self.expected_sinks.get(kind)
+        if expected is None or seen >= len(expected):
+            self._fail(f"unexpected {kind} privacy sink")
+        else:
+            actual = "".join(self._sink_content or ())
+            if actual != expected[seen]:
+                self._fail(f"{kind} sink does not match expected {kind} rendering")
+        self._seen_sinks[kind] = seen + 1
+
+    def _validate_sink_counts(self) -> None:
+        if self.expected_sinks is None:
+            return
+        for kind, expected in self.expected_sinks.items():
+            seen = self._seen_sinks.get(kind, 0)
+            if seen != len(expected):
+                self._fail(f"expected {kind} sink count {len(expected)}, saw {seen}")
+
     def _visible_start(self, tag: str) -> None:
         if tag in _BLOCK_HTML_TAGS:
             self.visible_parts.append("\n")
@@ -420,6 +459,8 @@ class _PrivacyHTMLParser(HTMLParser):
                     self.citations_seen = True
             elif tag not in _APPROVED_INLINE_TAGS:
                 self._fail(f"unexpected {tag} descendant in approved report text")
+            else:
+                self._capture_sink_content(raw)
         elif not in_sink:
             sink_kind = next(
                 (
@@ -435,6 +476,12 @@ class _PrivacyHTMLParser(HTMLParser):
                 else:
                     self.sink_index = len(self.stack)
                     self.sink_kind = sink_kind
+                    self._sink_content = []
+                    if self.expected_sinks is not None:
+                        expected = self.expected_sinks.get(sink_kind)
+                        seen = self._seen_sinks.get(sink_kind, 0)
+                        if expected is None or seen >= len(expected):
+                            self._fail(f"unexpected {sink_kind} privacy sink")
 
         if tag == "br":
             self.visible_parts.append("\n")
@@ -475,13 +522,22 @@ class _PrivacyHTMLParser(HTMLParser):
             self._fail(f"mismatched or unexpected end tag {tag!r}")
             return
         frame_index = len(self.stack) - 1
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+            and frame_index != self.sink_index
+        ):
+            self._capture_sink_content(raw)
         self._visible_end(tag)
         self.stack.pop()
         if self.citation_index == frame_index:
             self.citation_index = None
         if self.sink_index == frame_index:
+            self._finish_sink()
             self.sink_index = None
             self.sink_kind = None
+            self._sink_content = None
             self.citations_seen = False
 
     def handle_data(self, data: str) -> None:
@@ -489,6 +545,12 @@ class _PrivacyHTMLParser(HTMLParser):
             self._fail("literal '<' recovered as HTML data")
         if self._response_after_citations() and data.strip():
             self._fail("non-whitespace response text follows the citations")
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        ):
+            self._capture_sink_content(data)
         self.parts.append(self.sentinel if self._redacting_text() else data)
         decoded = html.unescape(data)
         self.visible_parts.append(decoded)
@@ -500,6 +562,12 @@ class _PrivacyHTMLParser(HTMLParser):
         decoded = html.unescape(raw)
         if self._response_after_citations():
             self._fail("an entity follows the response citations")
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        ):
+            self._capture_sink_content(raw)
         self.parts.append(self.sentinel if self._redacting_text() else raw)
         self.visible_parts.append(decoded)
         if decoded == "<":
@@ -514,6 +582,12 @@ class _PrivacyHTMLParser(HTMLParser):
         decoded = html.unescape(raw)
         if self._response_after_citations():
             self._fail("a character reference follows the response citations")
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        ):
+            self._capture_sink_content(raw)
         self.parts.append(self.sentinel if self._redacting_text() else raw)
         self.visible_parts.append(decoded)
         if decoded == "<":
@@ -571,14 +645,24 @@ class _PrivacyHTMLParser(HTMLParser):
             self._fail("unclosed HTML element")
 
 
-def _parse_privacy_html(page: str, *, redact_sinks: bool) -> _PrivacyHTMLParser:
+def _parse_privacy_html(
+    page: str,
+    *,
+    redact_sinks: bool,
+    expected_sinks: Mapping[str, Sequence[str]] | None = None,
+) -> _PrivacyHTMLParser:
     sentinel = f"friendly-report-allowlisted-{secrets.token_urlsafe(24)}"
-    parser = _PrivacyHTMLParser(redact_sinks=redact_sinks, sentinel=sentinel)
+    parser = _PrivacyHTMLParser(
+        redact_sinks=redact_sinks,
+        sentinel=sentinel,
+        expected_sinks=expected_sinks,
+    )
     try:
         _RAW_HTMLPARSER_FEED(parser, page)
         if parser.rawdata:
             parser._fail("incomplete trailing HTML construct")
         parser.close()
+        parser._validate_sink_counts()
     except Exception as error:
         raise ReportPrivacyError("refusing to write the report: malformed HTML") from error
     if parser.failed_reason is not None:
@@ -598,8 +682,18 @@ def _privacy_projections(page: str) -> tuple[str, str, str, str]:
     )
 
 
-def _dynamic_scan_projection(page: str) -> str:
-    return "".join(_parse_privacy_html(page, redact_sinks=True).parts)
+def _dynamic_scan_projection(
+    page: str,
+    *,
+    expected_sinks: Mapping[str, Sequence[str]] | None = None,
+) -> str:
+    return "".join(
+        _parse_privacy_html(
+            page,
+            redact_sinks=True,
+            expected_sinks=expected_sinks,
+        ).parts
+    )
 
 
 def _denylist_values(denylist: Sequence[str] | PrivacyDenylist) -> tuple[str, ...]:
@@ -661,6 +755,33 @@ def _excerpt(text: str, limit: int = JUDGMENT_EXCERPT_CHARACTERS) -> str:
         return _escape(collapsed)
     head = collapsed[:limit].rsplit(" ", 1)[0].rstrip(",;:.")
     return _escape(f"{head}…")
+
+
+def _expected_sink_values(view: Presentation) -> Mapping[str, Sequence[str]]:
+    """Return the exact field renderings authorized in each privacy sink.
+
+    These queues mirror the renderer's declared topic/answer/citation order.  The
+    dynamic privacy pass consumes one value per actual sink and compares its raw
+    rendered content before redacting it, so a class name alone never authorizes a
+    copied private passage.
+    """
+    expected: dict[str, list[str]] = {
+        "narrative": [],
+        "subnarrative": [],
+        "response": [],
+        "judgment": [],
+    }
+    for topic in view.topics:
+        expected["narrative"].append(_inline(str(topic["narrative"])))
+        expected["subnarrative"].extend(
+            _inline(str(text)) for text in topic["subnarratives"]
+        )
+        for item in topic["answer"]:
+            expected["response"].append(_inline(str(item["text"])))
+            expected["judgment"].extend(
+                _excerpt(str(item["text"])) for _citation in item["citations"]
+            )
+    return expected
 
 
 def _paired(metrics: Mapping[str, Any], precision_key: str, recall_key: str) -> tuple[str, str]:
@@ -1171,7 +1292,10 @@ def write_report(
     # Passage values are checked against the actual rendered HTML. The parser preserves
     # every raw tag and attribute and redacts only text events in exact approved sinks.
     # This catches a renderer copying an allowlisted value into an aside or attribute.
-    scan_page = _dynamic_scan_projection(page)
+    scan_page = _dynamic_scan_projection(
+        page,
+        expected_sinks=_expected_sink_values(view),
+    )
     assert_publishable(scan_page, denylist=passage_texts)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
