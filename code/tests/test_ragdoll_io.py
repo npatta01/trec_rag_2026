@@ -211,6 +211,92 @@ def test_cli_support_can_resolve_the_selected_evidence_handoff(tmp_path: Path) -
     }
 
 
+def test_load_evidence_binding_normalizes_single_pass_and_multistage_receipts(
+    tmp_path: Path,
+) -> None:
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {"58": [("climbmix-a", "Selected A.")]},
+    )
+    manifest = json.loads(handoff.read_text(encoding="utf-8"))
+    single = _write_generation_identity(tmp_path / "single.json", handoff)
+
+    single_binding = ragdoll_io.load_evidence_binding(single)
+    assert single_binding.kind == "singlepass"
+    assert single_binding.prompt_contract_version == "selected_evidence_one_shot_v1"
+    assert single_binding.run_id == "dev-spike"
+
+    multistage = tmp_path / "multistage.json"
+    multistage.write_text(
+        json.dumps(
+            {
+                "identity_version": 1,
+                "trial_contract_version": "bounded_revision_v1",
+                "handoff_schema_version": manifest["schema_version"],
+                "handoff_manifest_sha256": manifest["manifest_sha256"],
+                "submission_run_id": "dev-spike-final",
+                "topics": [
+                    {"topic_id": "58", "context_sha256": manifest["topics"][0]["context_sha256"]}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    multistage_binding = ragdoll_io.load_evidence_binding(multistage)
+    assert multistage_binding.kind == "multistage"
+    assert multistage_binding.prompt_contract_version is None
+    assert multistage_binding.source_identity_available is True
+    assert multistage_binding.run_id == "dev-spike-final"
+
+
+def test_selected_evidence_support_rows_accept_accepted_binding_schema(
+    tmp_path: Path,
+) -> None:
+    args, _ = _ragdoll_cli_args(tmp_path)
+    submission = Path(args[1])
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {
+            "58": [
+                ("climbmix-a", "Generator-visible passage A."),
+                ("climbmix-b", "Generator-visible passage B."),
+            ]
+        },
+    )
+    manifest = json.loads(handoff.read_text(encoding="utf-8"))
+    binding_path = tmp_path / "accepted-binding.json"
+    binding_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "accepted_rag_evaluation_binding_v1",
+                "run_id": "dev-spike",
+                "run_desc": "development spike",
+                "team_id": "local-baseline",
+                "provider": "test-provider",
+                "models": ["test/model"],
+                "submission_sha256": "a" * 64,
+                "bundle_metadata_sha256": "b" * 64,
+                "handoff_schema_version": manifest["schema_version"],
+                "handoff_manifest_sha256": manifest["manifest_sha256"],
+                "topic_context_sha256s": {
+                    topic["topic_id"]: topic["context_sha256"] for topic in manifest["topics"]
+                },
+                "source_identity_available": False,
+                "source_identity_sha256": None,
+                "source_identity_reason": "original generation identity was not preserved",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = ragdoll_io.selected_evidence_support_rows(submission, handoff, binding_path)
+
+    assert rows[0]["segments"] == {
+        "climbmix-a": "Generator-visible passage A.",
+        "climbmix-b": "Generator-visible passage B.",
+    }
+
+
 def test_cli_can_gate_completed_support_judgments(tmp_path: Path) -> None:
     args, _ = _ragdoll_cli_args(tmp_path)
     handoff = _write_selected_evidence_handoff(
