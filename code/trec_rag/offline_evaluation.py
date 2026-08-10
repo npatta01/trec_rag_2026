@@ -294,6 +294,7 @@ def build_evaluation_bundle(
             run_desc=accepted_binding.run_desc,
             provider=accepted_binding.provider,
             model=", ".join(accepted_binding.models),
+            submission_sha256=accepted_binding.submission_sha256,
         )
 
     data = load_debug_report_data(
@@ -871,6 +872,14 @@ def _manifest(
     else:
         raise EvaluationError("RAG provenance identity is missing")
     evidence = _handoff_evidence_counts(rag_artifact_source.handoff_manifest_path)
+    if accepted_binding is not None:
+        report_submission_sha256 = data.source_sha256s.get(
+            "rag/rag_output_trec_rag_2026.jsonl"
+        )
+        if report_submission_sha256 != accepted_binding.submission_sha256:
+            raise EvaluationError(
+                "report RAG output digest does not match accepted binding submission_sha256"
+            )
     labels = _labels_by_citation(judgments)
     topics = [_topic_projection(topic, evidence, labels) for topic in data.topics]
     fully_judged = judge_report["missing"] == 0
@@ -959,10 +968,18 @@ def _manifest(
         "validation": {
             "sources_hashed": True,
             "topic_order_matches_export": True,
-            "handoff_bound_to_generation": True,
+            "handoff_bound_to_generation": (
+                identity_path is not None
+                or (accepted_binding is not None and accepted_binding.source_identity_available)
+            ),
             "support_tasks_unique": True,
             "judgments_validated": fully_judged,
             "labels_valid": True,
+            **(
+                {"accepted_submission_bound_to_handoff": True}
+                if accepted_binding is not None
+                else {}
+            ),
         },
         "inputs": {
             "qrels_supplied": qrels_path is not None,
@@ -1016,6 +1033,8 @@ def _identity_projection(
                 "prompt_contract_version": identity.get("prompt_contract_version"),
                 "generation_identity_version": identity.get("identity_version"),
                 "generation_identity_sha256": _file_receipt(identity_path)["sha256"],
+                "source_identity_available": True,
+                "source_identity_reason": None,
             }
         )
     else:

@@ -250,6 +250,7 @@ class RagArtifactSource:
     run_desc: str
     provider: str
     model: str
+    submission_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -413,6 +414,11 @@ class DebugReportData:
     source_sha256s: Mapping[str, str]
 
 
+def rag_included(data: DebugReportData) -> bool:
+    """Return whether validated RAG output is attached, regardless of input mode."""
+    return data.rag_config_path is not None or data.rag_artifact_source is not None
+
+
 @dataclass(frozen=True)
 class DebugReportReceipt:
     schema_version: str
@@ -557,6 +563,11 @@ def _attach_rag_outputs(
         output_sha256,
     ):
         rows = _decode_jsonl(output_raw, "RAG output")
+    if (
+        source.submission_sha256 is not None
+        and output_sha256 != source.submission_sha256
+    ):
+        raise ValueError("RAG output sha256 does not match its accepted binding")
     if len(rows) != len(configured_topics):
         raise ValueError("RAG output topic coverage is incompatible with the RAG config")
 
@@ -3919,7 +3930,7 @@ def build_debug_report(
         schema_version=_REPORT_SCHEMA_VERSION,
         output_path=target,
         topic_ids=tuple(topic.topic_id for topic in data.topics),
-        rag_included=(data.rag_config_path is not None or data.rag_artifact_source is not None),
+        rag_included=rag_included(data),
         source_sha256s=MappingProxyType(dict(sorted(data.source_sha256s.items()))),
     )
 

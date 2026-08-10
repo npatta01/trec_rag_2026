@@ -22,10 +22,11 @@ import weakref
 import pytest
 from websockets.sync.client import ClientConnection, connect
 
-from offline_evaluation_fixture import TopicSpec, build_run
+from offline_evaluation_fixture import TopicSpec, build_accepted_run, build_run
+from trec_rag.accepted_rag_evaluation import build_accepted_run_binding
 import trec_rag.competition_debug_bundle as bundle_module
 import trec_rag.competition_debug_report as debug_report
-from trec_rag.competition_debug_report import load_debug_report_data
+from trec_rag.competition_debug_report import RagArtifactSource, load_debug_report_data
 from trec_rag.friendly_report import ReportPrivacyError
 from trec_rag.offline_evaluation import (
     EvaluationError,
@@ -1478,6 +1479,40 @@ def test_summary_projection_projects_only_safe_counts_and_attention_state(
     assert summary.distributions["depth"] == {"minimum": 1, "median": 1, "maximum": 1}
     assert "narrative" not in {field.name for field in fields(summary.topics[0])}
     assert "docid" not in {field.name for field in fields(summary.topics[0])}
+
+
+def test_accepted_source_debug_bundle_reports_rag_output_supplied(tmp_path: Path) -> None:
+    fixture = build_accepted_run(
+        tmp_path,
+        (TopicSpec("accepted-topic", "accepted narrative"),),
+    )
+    binding = build_accepted_run_binding(
+        fixture.rag_output,
+        fixture.bundle_metadata,
+        fixture.handoff,
+    )
+    source = RagArtifactSource(
+        handoff_manifest_path=fixture.handoff,
+        output_path=fixture.rag_output,
+        topic_ids=binding.topic_ids,
+        team_id=binding.team_id,
+        run_id=binding.run_id,
+        run_desc=binding.run_desc,
+        provider=binding.provider,
+        model=", ".join(binding.models),
+        submission_sha256=binding.submission_sha256,
+    )
+    target = fixture.retrieval_output / "accepted-debug-bundle"
+    receipt = debug_report.build_debug_report_bundle(
+        fixture.retrieval_config,
+        rag_artifact_source=source,
+        output_dir=target,
+    )
+
+    assert receipt.rag_included is True
+    manifest = json.loads(receipt.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["rag_included"] is True
+    assert "RAG output supplied" in receipt.index_path.read_text(encoding="utf-8")
 
 
 def test_summary_projection_counts_generated_queries_nuggets_and_safe_topic_links(

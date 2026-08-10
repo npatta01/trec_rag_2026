@@ -172,6 +172,13 @@ def build_presentation(manifest: Mapping[str, Any], *, commands: Sequence[str] =
 
     judge = manifest["judge"]
     ragdoll = manifest["ragdoll"]
+    identities = manifest["identities"]
+    source_identity_available = identities.get("source_identity_available", True)
+    if type(source_identity_available) is not bool:
+        raise EvaluationError("identities.source_identity_available must be a boolean")
+    source_identity_reason = identities.get("source_identity_reason")
+    if source_identity_reason is not None and not isinstance(source_identity_reason, str):
+        raise EvaluationError("identities.source_identity_reason must be text or null")
     provenance = {
         "ragdoll_version": str(ragdoll["project_version"]),
         "ragdoll_commit": str(ragdoll["commit"])[:7],
@@ -183,6 +190,8 @@ def build_presentation(manifest: Mapping[str, Any], *, commands: Sequence[str] =
         "reused_from_cache": int(judge["reused_from_cache"]),
         "cache": {key: int(value) for key, value in manifest["cache"].items()},
         "run_identity_sha256": str(manifest["identities"]["generation_identity_sha256"])[:7],
+        "source_identity_available": source_identity_available,
+        "source_identity_reason": source_identity_reason,
     }
     return Presentation(
         schema_version=REPORT_SCHEMA_VERSION,
@@ -758,6 +767,14 @@ def _render_provenance(view: Presentation) -> str:
             f'        <span>Judge tasks · <strong>{provenance["judge_tasks"]}</strong></span>',
             f'        <span>Hosted calls · <strong>{provenance["hosted_calls"]}</strong></span>',
             f'        <span>Reused from cache · <strong>{provenance["reused_from_cache"]}</strong></span>',
+            *(
+                [
+                    "        <p class=\"caption\">Original generation identity unavailable — "
+                    f'{_escape(provenance["source_identity_reason"] or "reason not recorded")}.</p>',
+                ]
+                if not provenance["source_identity_available"]
+                else []
+            ),
             "      </div>",
             "    </section>",
         ]

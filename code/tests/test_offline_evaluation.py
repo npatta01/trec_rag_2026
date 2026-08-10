@@ -14,6 +14,7 @@ import unittest
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Sequence
+from unittest.mock import patch
 
 from offline_evaluation_fixture import (
     RunFixture,
@@ -26,6 +27,7 @@ from offline_evaluation_fixture import (
 )
 
 from trec_rag import competition_evaluation_report as cli
+import trec_rag.offline_evaluation as offline_module
 from trec_rag.friendly_report import (
     ReportPrivacyError,
     build_presentation,
@@ -225,6 +227,54 @@ class CliContractTests(EvaluationCase):
             "accepted_rag_evaluation_binding_v1",
         )
         self.assertFalse(bundle.manifest["identities"]["source_identity_available"])
+        self.assertEqual(
+            bundle.manifest["sources"]["rag/rag_output_trec_rag_2026.jsonl"],
+            bundle.manifest["identities"]["submission_sha256"],
+        )
+
+    def test_accepted_mode_does_not_claim_missing_generation_identity(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        bundle = build_evaluation_bundle(
+            retrieval_config_path=fixture.retrieval_config,
+            accepted_submission_path=fixture.rag_output,
+            accepted_bundle_metadata_path=fixture.bundle_metadata,
+            handoff_manifest_path=fixture.handoff,
+            work_dir=fixture.root / "accepted-work",
+            repository_root=REPOSITORY_ROOT,
+            cache_root=fixture.root / "accepted-cache",
+            judge=None,
+            judge_settings=settings(),
+            created_utc="2026-01-01T00:00:00+00:00",
+        )
+        self.assertFalse(bundle.manifest["validation"]["handoff_bound_to_generation"])
+        self.assertTrue(bundle.manifest["validation"]["accepted_submission_bound_to_handoff"])
+        page = render_report(build_presentation(bundle.manifest))
+        self.assertIn("Handoff bound to generation: no", page)
+        self.assertIn("Original generation identity unavailable", page)
+        self.assertIn("original generation identity was not preserved", page)
+
+    def test_accepted_mode_rejects_between_phase_submission_replacement(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        real_loader = offline_module.load_debug_report_data
+
+        def load_then_replace(*args: Any, **kwargs: Any) -> Any:
+            data = real_loader(*args, **kwargs)
+            fixture.rag_output.write_bytes(fixture.rag_output.read_bytes() + b"\n")
+            return data
+
+        with patch.object(offline_module, "load_debug_report_data", side_effect=load_then_replace):
+            with self.assertRaisesRegex(ValueError, "sha256|bound bytes"):
+                build_evaluation_bundle(
+                    retrieval_config_path=fixture.retrieval_config,
+                    accepted_submission_path=fixture.rag_output,
+                    accepted_bundle_metadata_path=fixture.bundle_metadata,
+                    handoff_manifest_path=fixture.handoff,
+                    work_dir=fixture.root / "accepted-work",
+                    repository_root=REPOSITORY_ROOT,
+                    cache_root=fixture.root / "accepted-cache",
+                    judge=None,
+                    judge_settings=settings(),
+                )
 
     def test_accepted_mode_rejects_changed_submission_bytes(self) -> None:
         fixture = self.accepted_fixture(ONE_TOPIC)
