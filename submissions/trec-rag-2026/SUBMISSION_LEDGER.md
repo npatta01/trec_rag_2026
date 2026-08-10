@@ -20,12 +20,15 @@ task and uses the submitted priority to choose runs for manual assessment.
 
 | Priority | Submission | Run ID | Status | Upload file | SHA-256 | Topics | Portal notes |
 |---:|---|---|---|---|---|---:|---|
-| 1 | Selected-evidence multi-stage Sol + Luna | `rag26-ms1-final` | Ready to upload | [`multistage/rag_output_trec_rag_2026.jsonl`](rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl) | `72200f7a0e3be19f9c7e8f23d3845f894f5e95e26caff2986ae16f848b4dee00` | 119 | [`multistage/EVALBASE.md`](rag/selected-evidence-sol-v1/multistage/EVALBASE.md) |
-| 2 | Selected-evidence single-pass Sol | `rag26-ss1` | Ready to upload | [`singlepass/rag_output_trec_rag_2026.jsonl`](rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl) | `a33c60325c198cf90178d5b4c6c1b04209f7d39de278736b6817a8c5666c02a0` | 119 | [`singlepass/EVALBASE.md`](rag/selected-evidence-sol-v1/singlepass/EVALBASE.md) |
+| 1 | Selected-evidence multi-stage Sol + Luna | `rag26-ms1-final` | Ready to upload | [`multistage/rag_output_trec_rag_2026.jsonl`](rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl) | `ff384a62069062709abfe9cbfbcce2ba89c4f63ad857b917101488296e11677a` | 119 | [`multistage/EVALBASE.md`](rag/selected-evidence-sol-v1/multistage/EVALBASE.md) |
+| 2 | Selected-evidence single-pass Sol | `rag26-ss1` | Ready to upload | [`singlepass/rag_output_trec_rag_2026.jsonl`](rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl) | `91f757eb12291c118fe21e0828f0e607bba90460616e3405bd88f62eb67ab808` | 119 | [`singlepass/EVALBASE.md`](rag/selected-evidence-sol-v1/singlepass/EVALBASE.md) |
 
 Submit both RAG runs. The suggested priority puts the bounded multi-stage run
 first and the independently generated single-pass run second; no post-hoc gold,
 qrel, or RAGDoll score was used to choose that order.
+Both JSONLs use the registered Evalbase organization short identifier `NP` as
+`metadata.team_id`; this corresponds to the `NP Labs` organization shown by
+Evalbase.
 
 ## Architecture and provenance
 

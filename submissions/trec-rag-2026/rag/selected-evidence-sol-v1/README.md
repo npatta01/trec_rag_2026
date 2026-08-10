@@ -16,6 +16,9 @@ Start with the repository-wide [`submission ledger`](../../SUBMISSION_LEDGER.md)
 It records the exact hashes and links to the copy/paste portal notes for both
 runs.
 
+Both upload files use `NP`, the registered Evalbase short identifier for the
+`NP Labs` organization, in every record's required `metadata.team_id` field.
+
 ## Shared retrieval and evidence boundary
 
 Both runs consume the authenticated 119-topic handoff produced by
