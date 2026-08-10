@@ -505,6 +505,42 @@ sibling branches.
 
 </details>
 
+# Final analysis reports {#final-analysis-reports}
+
+::: {.takeaway}
+**Takeaway:** The final analysis set keeps the existing Retrieval quality view
+separate from two independent, private RAGDoll citation-support reports.
+:::
+
+The project has one tracked 119-topic Retrieval quality analysis and two
+separate 119-topic RAGDoll citation-support reports, one for each accepted RAG
+run. RAGDoll measures citation support, not official TREC correctness. qrel/gold
+metrics are unavailable, and this evaluation did not influence accepted
+priority: the accepted files and their recorded priorities remain unchanged.
+
+::: {.artifact-grid}
+::: {.artifact-card}
+### Retrieval Quality Analysis
+
+[Retrieval Quality Analysis](2026-retrieval-nugget-coverage.html)<br>
+Existing tracked 119-topic Retrieval coverage analysis.
+:::
+::: {.artifact-card}
+### RAG Analysis: rag26-ss1
+
+[RAG Analysis: rag26-ss1](https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html) · **Private / tailnet**<br>
+Separate 119-topic RAGDoll citation-support report for accepted single-pass
+RAG. It is not an official TREC correctness score.
+:::
+::: {.artifact-card}
+### RAG Analysis: rag26-ms1-final
+
+[RAG Analysis: rag26-ms1-final](https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html) · **Private / tailnet**<br>
+Separate 119-topic RAGDoll citation-support report for accepted multi-stage
+RAG. It is not an official TREC correctness score.
+:::
+:::
+
 # Sources, validation, and scope {#sources}
 
 This report is a reader-facing synthesis of the accepted bundle documentation,

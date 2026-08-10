@@ -28,6 +28,51 @@ const normalizedQmd = qmd.replace(/\s+/g, " ");
 const html = fs.readFileSync(htmlPath, "utf8");
 const reportCss = fs.readFileSync(path.join(assetRoot, "report.css"), "utf8");
 
+const analysisLinks = [
+  ["Retrieval Quality Analysis", "2026-retrieval-nugget-coverage.html"],
+  [
+    "RAG Analysis: rag26-ss1",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html",
+  ],
+  [
+    "RAG Analysis: rag26-ms1-final",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html",
+  ],
+];
+
+for (const [label, href] of analysisLinks) {
+  assert(normalizedQmd.includes(label), `QMD should label ${label}`);
+  const escapedHref = href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const qmdOccurrences = (qmd.match(new RegExp(`\\]\\(${escapedHref}\\)`, "g")) || []).length;
+  const htmlOccurrences = (html.match(new RegExp(`href="${escapedHref}"`, "g")) || []).length;
+  assert(qmdOccurrences === 1, `QMD should link ${href} exactly once`);
+  assert(htmlOccurrences === 1, `rendered report should link ${href} exactly once`);
+}
+for (const href of analysisLinks.slice(1).map(([, target]) => target)) {
+  const hrefIndex = normalizedQmd.indexOf(href);
+  const nearby = normalizedQmd.slice(Math.max(0, hrefIndex - 180), hrefIndex + href.length + 240);
+  assert(
+    nearby.includes("Private / tailnet"),
+    `QMD should mark ${href} as Private / tailnet near the link`,
+  );
+}
+assert(
+  ![...normalizedQmd.matchAll(/href="([^"]+)"/g)].some(([, href]) => /comparison|side[- ]by[- ]side/i.test(href)),
+  "architecture report should not add a comparison or side-by-side report target",
+);
+assert(
+  !/\]\([^)]*(?:comparison|side[- ]by[- ]side)[^)]*\)/i.test(qmd),
+  "architecture source should not add a comparison or side-by-side report target",
+);
+for (const signal of [
+  "separate 119-topic RAGDoll citation-support reports",
+  "RAGDoll measures citation support, not official TREC correctness",
+  "qrel/gold metrics are unavailable",
+  "evaluation did not influence accepted priority",
+]) {
+  assert(normalizedQmd.includes(signal), `QMD should state final-analysis scope: ${signal}`);
+}
+
 function normalizeCss(value) {
   return value.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ").trim();
 }

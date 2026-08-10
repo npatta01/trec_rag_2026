@@ -25,7 +25,7 @@ for (const href of internalHrefs) {
   assert(fs.existsSync(path.resolve(root, target)), `internal link should resolve: ${href}`);
 }
 
-assert((html.match(/<article class="link-card /g) || []).length === 6, "artifact hub should render six cards");
+assert((html.match(/<article class="link-card /g) || []).length === 7, "artifact hub should render seven cards");
 for (const landmark of ["<main", "<header", "<section", "<footer", "aria-label="]) {
   assert(html.includes(landmark), `artifact hub should expose ${landmark}`);
 }
@@ -62,5 +62,35 @@ for (const runId of [
     `ledger should preserve unknown portal metadata for ${runId}`,
   );
 }
+
+const analysisLinks = [
+  ["Retrieval Quality Analysis", "reports/2026-retrieval-nugget-coverage.html"],
+  [
+    "RAG Analysis: rag26-ss1",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html",
+  ],
+  [
+    "RAG Analysis: rag26-ms1-final",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html",
+  ],
+];
+
+for (const [label, href] of analysisLinks) {
+  const occurrences = (html.match(new RegExp(`href="${href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g")) || []).length;
+  assert(occurrences === 1, `artifact hub should link ${href} exactly once`);
+  assert(html.includes(label), `artifact hub should label ${label}`);
+}
+for (const href of analysisLinks.slice(1).map(([, target]) => target)) {
+  const hrefIndex = html.indexOf(`href="${href}"`);
+  const nearby = html.slice(Math.max(0, hrefIndex - 180), hrefIndex + href.length + 240);
+  assert(
+    nearby.includes("Private / tailnet"),
+    `artifact hub should mark ${href} as Private / tailnet near the link`,
+  );
+}
+assert(
+  !hrefs.some((href) => /comparison|side[- ]by[- ]side/i.test(href)),
+  "artifact hub should not add a comparison or side-by-side report target",
+);
 
 console.log("root artifact hub smoke test passed");

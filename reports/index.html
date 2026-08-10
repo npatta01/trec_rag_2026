@@ -345,6 +345,26 @@
       color: var(--gold);
     }
 
+    .analysis-links {
+      display: grid;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .analysis-link {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .access-note {
+      color: var(--gold);
+      font-size: 0.78rem;
+      font-weight: 780;
+      white-space: nowrap;
+    }
+
     .source-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -477,6 +497,19 @@
             <div class="report-actions">
               <a class="button primary" href="2026-competition-architecture.html">Open architecture guide</a>
               <a class="button" href="2026-competition-architecture.html#accepted-artifacts">See the five files</a>
+            </div>
+          </article>
+
+          <article class="report-card">
+            <span class="label gold">final analyses</span>
+            <div>
+              <h3>Retrieval and RAGDoll analyses</h3>
+              <p>These are one existing 119-topic Retrieval quality analysis and two separate 119-topic RAGDoll citation-support reports. RAGDoll is not an official TREC correctness score.</p>
+            </div>
+            <div class="analysis-links">
+              <div class="analysis-link"><a class="button primary" href="2026-retrieval-nugget-coverage.html">Retrieval Quality Analysis</a></div>
+              <div class="analysis-link"><a class="button" href="https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html">RAG Analysis: rag26-ss1</a><span class="access-note">Private / tailnet</span></div>
+              <div class="analysis-link"><a class="button" href="https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html">RAG Analysis: rag26-ms1-final</a><span class="access-note">Private / tailnet</span></div>
             </div>
           </article>
 

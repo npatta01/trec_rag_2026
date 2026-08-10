@@ -79,4 +79,35 @@ for (const linkedFile of linkedFiles) {
   assert(fs.existsSync(path.join(root, linkedFile)), `Linked report should exist: ${linkedFile}`);
 }
 
+const analysisLinks = [
+  ["Retrieval Quality Analysis", "2026-retrieval-nugget-coverage.html"],
+  [
+    "RAG Analysis: rag26-ss1",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html",
+  ],
+  [
+    "RAG Analysis: rag26-ms1-final",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html",
+  ],
+];
+
+const reportHrefs = [...html.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
+for (const [label, href] of analysisLinks) {
+  const occurrences = (html.match(new RegExp(`href="${href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g")) || []).length;
+  assert(occurrences === 1, `reports index should link ${href} exactly once`);
+  assert(html.includes(label), `reports index should label ${label}`);
+}
+for (const href of analysisLinks.slice(1).map(([, target]) => target)) {
+  const hrefIndex = html.indexOf(`href="${href}"`);
+  const nearby = html.slice(Math.max(0, hrefIndex - 180), hrefIndex + href.length + 240);
+  assert(
+    nearby.includes("Private / tailnet"),
+    `reports index should mark ${href} as Private / tailnet near the link`,
+  );
+}
+assert(
+  !reportHrefs.some((href) => /comparison|side[- ]by[- ]side/i.test(href)),
+  "reports index should not add a comparison or side-by-side report target",
+);
+
 console.log("reports index smoke test passed");
