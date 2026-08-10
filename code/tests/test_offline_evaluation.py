@@ -1572,12 +1572,26 @@ class AcceptedWorkflowDocumentationTests(unittest.TestCase):
     )
 
     SCOPE_TEXT = (
-        "manifest.scope.topic_ids",
+        "stdout receipt's top-level `topic_ids`",
+        "receipt's `manifest_path`",
+        "manifest file's `scope.topic_ids`",
         "exact ordered 119 topic ids",
         "rag26-ss1",
         "judgment_tasks: 3155",
         "rag26-ms1-final",
         "judgment_tasks: 7008",
+    )
+
+    IDENTITY_TOTAL_TEXT = (
+        "3155 judgment tasks / 3148 unique judge identities",
+        "7008 judgment tasks / 6974 unique judge identities",
+        "inventory and probe receipts determine actual calls",
+        "hard maxima and do not assume an empty preexisting cache",
+    )
+
+    BOUND_TEXT = (
+        "after one successful new identity probe, `hosted_calls <= 3147` for `rag26-ss1`",
+        "after one successful new identity probe, `hosted_calls <= 6973` for `rag26-ms1-final`",
     )
 
     FINAL_TEXT = (
@@ -1598,12 +1612,11 @@ class AcceptedWorkflowDocumentationTests(unittest.TestCase):
     )
 
     PAYLOAD_TEXT = (
-        "local private task objects retain narrative/source metadata",
-        "hosted prompt contains only one generated statement and cited selected-evidence text",
-        "task_id",
-        "evaluator",
-        "instruction",
-        "no narrative/source metadata or unrelated topic data is in the provider prompt",
+        "private `support_input.jsonl` retains the accepted narrative in row `metadata`",
+        "private `support_tasks.jsonl` `metadata.source` retains `topic_id`, `run_id`, `sentence_index`, `citation_index`, `docid`, and same-topic `sentence_context` (not narrative)",
+        "`task_id`, `evaluator`, and `instruction` are local `run_prompt` arguments/bookkeeping",
+        "provider-visible rendered prompt contains only one generated statement and its cited selected-evidence text",
+        "no narrative/source metadata, unrelated topic data, or `task_id`/`evaluator` fields is in the provider prompt",
     )
 
     def test_accepted_workflow_documentation(self) -> None:
@@ -1619,12 +1632,28 @@ class AcceptedWorkflowDocumentationTests(unittest.TestCase):
                     "1. cache-only inventory",
                     "2. one-task probe",
                 )
+                full_resume = self._subsection(
+                    section,
+                    "3. bounded full resume",
+                    "4. final cache-only replay",
+                )
+                payload_layers = self._subsection(
+                    section,
+                    "payload layers (private versus provider)",
+                    "1. cache-only inventory",
+                )
                 final_replay = self._subsection(section, "4. final cache-only replay")
                 for required in self.SCOPE_TEXT:
                     with self.subTest(phase="cache-only inventory", required=required):
                         self.assertIn(required, inventory)
                     with self.subTest(phase="final cache-only replay", required=required):
                         self.assertIn(required, final_replay)
+                for required in self.IDENTITY_TOTAL_TEXT:
+                    with self.subTest(phase="accepted identity totals", required=required):
+                        self.assertIn(required, inventory)
+                for required in self.BOUND_TEXT:
+                    with self.subTest(phase="post-probe bounds", required=required):
+                        self.assertIn(required, full_resume)
                 for required in self.FINAL_TEXT:
                     with self.subTest(phase="final cache-only replay", required=required):
                         self.assertIn(required, final_replay)
@@ -1633,7 +1662,9 @@ class AcceptedWorkflowDocumentationTests(unittest.TestCase):
                         self.assertIn(required, section)
                 for required in self.PAYLOAD_TEXT:
                     with self.subTest(phase="payload boundary", required=required):
-                        self.assertIn(required, section)
+                        self.assertIn(required, payload_layers)
+                self.assertNotIn("manifest.scope.topic_ids", section)
+                self.assertNotIn("transport/evaluator envelope", section)
                 self.assertNotIn("hosted calls equal only to remaining misses", section)
 
 

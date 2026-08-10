@@ -191,6 +191,69 @@ PYTHONPATH=code .venv/bin/python -m pytest -q
 The fresh full suite started after moving only stale pytest-owned temporary fixtures to
 the recoverable user Trash.
 
+## Fix Round 2
+
+### Reviewer precision findings addressed
+
+- Corrected the scope receipt distinction in both operator documents. The stdout receipt's
+  top-level `topic_ids` is checked first; the JSON manifest named by that receipt's
+  `manifest_path` is then checked at `scope.topic_ids`. The contract test rejects the
+  incorrect `manifest.scope.topic_ids` claim in either accepted-workflow section.
+- Added the accepted identity totals: `3155 judgment tasks / 3148 unique judge identities`
+  for `rag26-ss1`, and `7008 judgment tasks / 6974 unique judge identities` for
+  `rag26-ms1-final`. After one successful new identity probe, the bounded resume hard
+  maxima are `hosted_calls <= 3147` and `hosted_calls <= 6973`, respectively. Inventory
+  and probe receipts determine actual calls; these maxima do not assume an empty cache,
+  and the fresh cache-only replay remains the exact completion authority.
+- Replaced the transport-envelope claim with the three implemented data layers: private
+  `support_input.jsonl` retains the accepted narrative in row `metadata`; private
+  `support_tasks.jsonl` retains only the listed provenance fields in `metadata.source`
+  (including same-topic `sentence_context`, not narrative), while `task_id`, `evaluator`,
+  and `instruction` are local `run_prompt` arguments/bookkeeping; the provider-visible
+  rendered prompt contains only the generated statement and cited selected-evidence text.
+
+### TDD RED and GREEN evidence
+
+The round-2 contract test failed against the old scope wording, missing identity totals and
+bounds, and missing three-layer payload contract:
+
+```text
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py -k accepted_workflow_documentation -q
+36 failed, 1 passed, 109 deselected, 42 subtests passed
+```
+
+After updating both operator documents and tightening the section-anchored assertions:
+
+```text
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py -k accepted_workflow_documentation -q
+1 passed, 109 deselected, 78 subtests passed
+```
+
+### Round-2 verification
+
+```text
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py \
+  code/tests/test_accepted_rag_evaluation.py \
+  code/tests/test_ragdoll_io.py -q
+171 passed, 106 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_competition_debug_report_skill.py -q
+12 passed, 10 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest -q
+3233 passed, 19 skipped, 139 subtests passed in 109.09s
+```
+
+`git diff --check` and targeted compilation passed after the final edits. The full suite
+started from a clean test-temp state; generated pytest and retrieval-shard trees were moved
+to recoverable user Trash under `/home/npatta01/.local/share/Trash/files/`. No hosted calls,
+accepted-artifact edits, report-hub edits, portal edits, or unrelated worktree changes were
+made.
+
 ## Commit
 
-Fix-round commit message: `docs: clarify accepted RAG evaluation preflight`.
+Fix-round 2 commit message: `docs: clarify accepted RAG evaluation precision`.

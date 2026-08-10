@@ -151,13 +151,17 @@ The preserved multi-stage source identity is the private path
 The single-pass binding intentionally records that the original generation identity was not
 preserved; do not invent one from the post-run binding.
 
-Local private task objects retain narrative/source metadata under `metadata.source`, plus one
-generated statement and cited selected-evidence text for reconciliation. The hosted prompt contains
-only one generated statement and cited selected-evidence text. The transport/evaluator envelope
-may carry `task_id`, `evaluator`, and the rendered `instruction`; no narrative/source metadata or
-unrelated topic data is in the provider prompt. Retrieval TSV, full-text archive, qrels, gold
-nuggets, generated-claim-as-gold data, and credentials remain excluded. Keep private work,
-support tasks, raw events, judgments, manifests, and reports outside git.
+#### Payload layers (private versus provider)
+
+Private `support_input.jsonl` retains the accepted narrative in row `metadata`. Private
+`support_tasks.jsonl` `metadata.source` retains `topic_id`, `run_id`, `sentence_index`,
+`citation_index`, `docid`, and same-topic `sentence_context` (not narrative). Its `task_id`,
+`evaluator`, and `instruction` are local `run_prompt` arguments/bookkeeping. The
+provider-visible rendered prompt contains only one generated statement and its cited
+selected-evidence text; no narrative/source metadata, unrelated topic data, or
+`task_id`/`evaluator` fields is in the provider prompt. Retrieval TSV, full-text archive,
+qrels, gold nuggets, generated-claim-as-gold data, and credentials remain excluded. Keep
+private work, support tasks, raw events, judgments, manifests, and reports outside git.
 
 The exact accepted-mode flags are `--accepted-rag`, `--accepted-bundle-metadata`,
 `--handoff-manifest`, and (only for the multi-stage run) `--source-identity`. The command
@@ -200,11 +204,17 @@ namespace, and adding the source identity:
   --output /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ms1-final/evaluation_report.html
 ```
 
-Before any probe, enforce the exact accepted scope and task inventory. The receipt's
-`manifest.scope.topic_ids` must equal the authenticated handoff's exact ordered 119 topic IDs;
-do not pass a `--topic` subset. The cache-only receipt must show `judgment_tasks: 3155` for
-`rag26-ss1` and `judgment_tasks: 7008` for `rag26-ms1-final`, alongside the recorded hit/miss
-fields above. These are scope gates, not estimates.
+Before any probe, enforce the exact accepted scope and task inventory. The stdout receipt's
+top-level `topic_ids` must equal the authenticated handoff's exact ordered 119 topic IDs.
+Follow that receipt's `manifest_path`; the manifest file's `scope.topic_ids` must equal the
+same ordered list. Do not pass a `--topic` subset. The cache-only receipt must show
+`judgment_tasks: 3155` for `rag26-ss1` and `judgment_tasks: 7008` for `rag26-ms1-final`,
+alongside the recorded hit/miss fields above. These are scope gates, not estimates.
+
+The accepted identity totals are `3155 judgment tasks / 3148 unique judge identities` for
+`rag26-ss1` and `7008 judgment tasks / 6974 unique judge identities` for `rag26-ms1-final`.
+Inventory and probe receipts determine actual calls; the post-probe bounds below are hard
+maxima and do not assume an empty preexisting cache.
 
 #### 2. One-task probe (one authorized hosted call)
 
@@ -226,14 +236,19 @@ interruption. Require `reused_from_cache >= 1`, `failed_judgments: 0`,
 `conflicting_judgments: 0`. Task counts differ from unique judge prompt identities: one hosted
 success may fill multiple tasks. Therefore `hosted_calls` is bounded by the selected unique
 uncached identities, not raw missing tasks; `--judge-limit` limits those selected identities.
+After one successful new identity probe, `hosted_calls <= 3147` for `rag26-ss1`. After one
+successful new identity probe, `hosted_calls <= 6973` for `rag26-ms1-final`; actual calls may
+be lower when the inventory or probe receipt already shows cache hits.
 
 #### 4. Final cache-only replay
 
 After the bounded resume, run each accepted command once more with `--run-judge` omitted,
-the same cache, and a fresh private replay work/output directory. This final cache-only replay
-A fresh cache-only replay is the exact completion authority. It must repeat the exact ordered
-119 topic IDs in `manifest.scope.topic_ids` and `judgment_tasks: 3155` for `rag26-ss1` or `judgment_tasks: 7008` for
-`rag26-ms1-final`, and must show `hosted_calls: 0`, `missing_judgments: 0`,
+the same cache, and a fresh private replay work/output directory. A fresh cache-only replay is
+the exact completion authority. Its stdout receipt's top-level `topic_ids` must equal the
+authenticated handoff's exact ordered 119 topic IDs. Follow that receipt's `manifest_path`;
+the manifest file's `scope.topic_ids` must equal the same ordered list. It must show
+`judgment_tasks: 3155` for `rag26-ss1` or `judgment_tasks: 7008` for
+`rag26-ms1-final`, plus `hosted_calls: 0`, `missing_judgments: 0`,
 `failed_judgments: 0`, `conflicting_judgments: 0`, and `fully_judged: true`. A partial output
 must never be called complete; a report is complete only after this replay proves all checks.
 Missing qrels/gold
