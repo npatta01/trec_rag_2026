@@ -294,7 +294,7 @@ def build_evaluation_bundle(
             run_desc=accepted_binding.run_desc,
             provider=accepted_binding.provider,
             model=", ".join(accepted_binding.models),
-            submission_sha256=accepted_binding.submission_sha256,
+            accepted_submission_sha256=accepted_binding.submission_sha256,
         )
 
     data = load_debug_report_data(

@@ -250,7 +250,7 @@ class RagArtifactSource:
     run_desc: str
     provider: str
     model: str
-    submission_sha256: str | None = None
+    accepted_submission_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -564,8 +564,8 @@ def _attach_rag_outputs(
     ):
         rows = _decode_jsonl(output_raw, "RAG output")
     if (
-        source.submission_sha256 is not None
-        and output_sha256 != source.submission_sha256
+        source.accepted_submission_sha256 is not None
+        and output_sha256 != source.accepted_submission_sha256
     ):
         raise ValueError("RAG output sha256 does not match its accepted binding")
     if len(rows) != len(configured_topics):

@@ -1500,7 +1500,7 @@ def test_accepted_source_debug_bundle_reports_rag_output_supplied(tmp_path: Path
         run_desc=binding.run_desc,
         provider=binding.provider,
         model=", ".join(binding.models),
-        submission_sha256=binding.submission_sha256,
+        accepted_submission_sha256=binding.submission_sha256,
     )
     target = fixture.retrieval_output / "accepted-debug-bundle"
     receipt = debug_report.build_debug_report_bundle(

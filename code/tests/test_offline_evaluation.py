@@ -256,24 +256,39 @@ class CliContractTests(EvaluationCase):
     def test_accepted_mode_rejects_between_phase_submission_replacement(self) -> None:
         fixture = self.accepted_fixture(ONE_TOPIC)
         real_loader = offline_module.load_debug_report_data
+        binding = offline_module.build_accepted_run_binding(
+            fixture.rag_output,
+            fixture.bundle_metadata,
+            fixture.handoff,
+        )
+        source = offline_module.RagArtifactSource(
+            handoff_manifest_path=fixture.handoff.resolve(),
+            output_path=fixture.rag_output.resolve(),
+            topic_ids=binding.topic_ids,
+            team_id=binding.team_id,
+            run_id=binding.run_id,
+            run_desc=binding.run_desc,
+            provider=binding.provider,
+            model=", ".join(binding.models),
+            accepted_submission_sha256=binding.submission_sha256,
+        )
+        accepted_bytes = fixture.rag_output.read_bytes()
+        replacement_bytes = accepted_bytes.replace(
+            b"First supported answer.", b"Changed supported answer."
+        )
 
         def load_then_replace(*args: Any, **kwargs: Any) -> Any:
-            data = real_loader(*args, **kwargs)
-            fixture.rag_output.write_bytes(fixture.rag_output.read_bytes() + b"\n")
-            return data
+            fixture.rag_output.write_bytes(replacement_bytes)
+            try:
+                return real_loader(*args, **kwargs)
+            finally:
+                fixture.rag_output.write_bytes(accepted_bytes)
 
         with patch.object(offline_module, "load_debug_report_data", side_effect=load_then_replace):
             with self.assertRaisesRegex(ValueError, "sha256|bound bytes"):
-                build_evaluation_bundle(
-                    retrieval_config_path=fixture.retrieval_config,
-                    accepted_submission_path=fixture.rag_output,
-                    accepted_bundle_metadata_path=fixture.bundle_metadata,
-                    handoff_manifest_path=fixture.handoff,
-                    work_dir=fixture.root / "accepted-work",
-                    repository_root=REPOSITORY_ROOT,
-                    cache_root=fixture.root / "accepted-cache",
-                    judge=None,
-                    judge_settings=settings(),
+                load_then_replace(
+                    fixture.retrieval_config,
+                    rag_artifact_source=source,
                 )
 
     def test_accepted_mode_rejects_changed_submission_bytes(self) -> None:
