@@ -11,6 +11,9 @@
   --guide-paper: #ffffff;
   --guide-ink: #17201c;
   --guide-muted: #52615a;
+  --guide-code-ink: #6f3488;
+  --guide-code-bg: #f3e8f7;
+  --guide-code-border: #d8b9e3;
 }
 
 body.quarto-dark {
@@ -26,6 +29,9 @@ body.quarto-dark {
   --guide-paper: #121b17;
   --guide-ink: #eef5f0;
   --guide-muted: #bac7bf;
+  --guide-code-ink: #f0cfff;
+  --guide-code-bg: #2c2332;
+  --guide-code-border: #765484;
 }
 
 html {
@@ -201,6 +207,18 @@ details[open] summary {
 
 code {
   overflow-wrap: anywhere;
+}
+
+:not(pre) > code:not(.sourceCode) {
+  border: 1px solid var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+}
+
+body.quarto-dark :not(pre) > code:not(.sourceCode) {
+  border-color: var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
 }
 
 .artifact-grid {

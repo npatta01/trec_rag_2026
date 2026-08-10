@@ -28,6 +28,15 @@ const normalizedQmd = qmd.replace(/\s+/g, " ");
 const html = fs.readFileSync(htmlPath, "utf8");
 const reportCss = fs.readFileSync(path.join(assetRoot, "report.css"), "utf8");
 
+for (const token of ["--guide-code-ink", "--guide-code-bg", "--guide-code-border"]) {
+  assert(reportCss.includes(token), `report CSS should define ${token}`);
+}
+assert(
+  reportCss.includes("body.quarto-dark :not(pre) > code:not(.sourceCode)"),
+  "dark mode should explicitly theme inline code without changing code blocks",
+);
+assert(html.includes("--guide-code-bg"), "rendered HTML should contain canonical code tokens");
+
 assert(
   /body\.quarto-dark\s*\{/.test(reportCss),
   "report CSS should switch guide variables on Quarto's dark-mode body class",
