@@ -371,6 +371,8 @@ class CliContractTests(EvaluationCase):
     def test_accepted_mode_rejects_handoff_changed_after_support_materialization(self) -> None:
         fixture = self.accepted_fixture(ONE_TOPIC)
         real_support_rows = offline_module._selected_support_rows
+        judge = RecordingJudge("FS")
+        cache_root = fixture.root / "accepted-cache"
 
         def support_then_replace(*args: Any, **kwargs: Any) -> Any:
             rows = real_support_rows(*args, **kwargs)
@@ -387,10 +389,12 @@ class CliContractTests(EvaluationCase):
                     handoff_manifest_path=fixture.handoff,
                     work_dir=fixture.root / "accepted-work",
                     repository_root=REPOSITORY_ROOT,
-                    cache_root=fixture.root / "accepted-cache",
-                    judge=None,
+                    cache_root=cache_root,
+                    judge=judge,
                     judge_settings=settings(),
                 )
+        self.assertEqual(judge.calls, [])
+        self.assertFalse(any(cache_root.rglob("*.json")))
 
     def test_accepted_mode_rejects_metadata_changed_after_binding(self) -> None:
         fixture = self.accepted_fixture(ONE_TOPIC)

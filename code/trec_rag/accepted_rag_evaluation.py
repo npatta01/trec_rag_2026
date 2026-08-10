@@ -457,7 +457,7 @@ def build_accepted_run_binding(
     ):
         raise ValueError(f"{bundle_metadata_path}: invalid models")
     models = tuple(sorted(dict.fromkeys(model_value)))
-    return AcceptedRunBinding(
+    binding = AcceptedRunBinding(
         schema_version=ACCEPTED_BINDING_SCHEMA_VERSION,
         run_id=run_id,
         run_desc=run_desc,
@@ -479,12 +479,18 @@ def build_accepted_run_binding(
         source_identity_snapshot=source_identity_snapshot,
         handoff=handoff,
     )
+    # The receipt must never be emitted for a binding whose source paths changed while it
+    # was being authenticated.  Later evaluation phases retain and re-check these same
+    # snapshots, so this is the first seal boundary.
+    binding.verify_sources()
+    return binding
 
 
 def write_accepted_run_binding(binding: AcceptedRunBinding, output_path: Path) -> Path:
     """Atomically write a canonical private accepted-run receipt."""
     if not isinstance(binding, AcceptedRunBinding):
         raise TypeError("binding must be an AcceptedRunBinding")
+    binding.verify_sources()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(output_path.parent, 0o700)

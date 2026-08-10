@@ -308,6 +308,8 @@ def build_evaluation_bundle(
         rag_artifact_source=(None if rag_config_path is not None else rag_source),
         topic_ids=list(topic_ids) if topic_ids is not None else None,
     )
+    if accepted_binding is not None:
+        accepted_binding.verify_sources()
     if not data.topics:
         raise EvaluationError("the selected scope contains no topics")
     if any(topic.rag_output is None for topic in data.topics):
@@ -319,11 +321,15 @@ def build_evaluation_bundle(
         identity_path if identity_path is not None else accepted_binding_path,
         ordered_topic_ids,
     )
+    if accepted_binding is not None:
+        accepted_binding.verify_sources()
 
     ragdoll = ragdoll_identity(Path(repository_root))
     tasks = _support_tasks(support_rows, ordered_topic_ids)
 
     cache = JudgeCache(Path(cache_root))
+    if accepted_binding is not None:
+        accepted_binding.verify_sources()
     judgments, judge_report = _resolve_judgments(
         tasks,
         cache=cache,
