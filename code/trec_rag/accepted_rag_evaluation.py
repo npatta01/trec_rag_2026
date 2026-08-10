@@ -161,7 +161,10 @@ def _topic_ids_from_source_identity(
     source_run_id = source.get("submission_run_id")
     topic_items = source.get("topics")
     if source_run_id is not None or topic_items is not None:
-        if source.get("identity_version") != MULTISTAGE_IDENTITY_VERSION:
+        if (
+            type(source.get("identity_version")) is not int
+            or source.get("identity_version") != MULTISTAGE_IDENTITY_VERSION
+        ):
             raise ValueError("accepted source identity does not match multi-stage identity version")
         if source.get("trial_contract_version") != MULTISTAGE_TRIAL_CONTRACT_VERSION:
             raise ValueError("accepted source identity does not match multi-stage trial contract")
@@ -196,7 +199,10 @@ def _topic_ids_from_source_identity(
     # identity alongside an accepted file.  It is not synthesized when missing.
     source_run_id = source.get("run_id")
     selected_items = source.get("selected_topics")
-    if source.get("identity_version") != SINGLEPASS_IDENTITY_VERSION:
+    if (
+        type(source.get("identity_version")) is not int
+        or source.get("identity_version") != SINGLEPASS_IDENTITY_VERSION
+    ):
         raise ValueError("accepted source identity does not match single-pass identity version")
     if source.get("prompt_contract_version") != PROMPT_CONTRACT_VERSION:
         raise ValueError("accepted source identity does not match single-pass prompt contract")

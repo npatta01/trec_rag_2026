@@ -319,7 +319,10 @@ def load_evidence_binding(path: Path) -> EvidenceBinding:
         handoff_schema = value.get("handoff_schema_version")
         handoff_digest = value.get("handoff_manifest_sha256")
         topic_items = value.get("topics")
-        if identity_version != MULTISTAGE_IDENTITY_VERSION:
+        if (
+            type(identity_version) is not int
+            or identity_version != MULTISTAGE_IDENTITY_VERSION
+        ):
             raise ValueError(f"{path}: invalid multi-stage identity_version")
         if trial_contract != MULTISTAGE_TRIAL_CONTRACT_VERSION:
             raise ValueError(f"{path}: invalid multi-stage trial_contract_version")
@@ -516,7 +519,7 @@ def _load_generation_identity(path: Path) -> dict[str, Any]:
     digest = value.get("handoff_manifest_sha256")
     run_id = value.get("run_id")
     selected = value.get("selected_topics")
-    if identity_version != SINGLEPASS_IDENTITY_VERSION:
+    if type(identity_version) is not int or identity_version != SINGLEPASS_IDENTITY_VERSION:
         raise ValueError(f"{path}: invalid identity_version")
     if not isinstance(schema_version, str) or not schema_version:
         raise ValueError(f"{path}: invalid handoff_schema_version")

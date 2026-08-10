@@ -270,6 +270,66 @@ def test_accepted_binding_rejects_missing_or_changed_multistage_contract_fields(
             )
 
 
+@pytest.mark.parametrize("identity_version", [True, 1.0])
+def test_accepted_binding_rejects_non_integer_multistage_identity_version(
+    tmp_path: Path,
+    identity_version: object,
+) -> None:
+    paths = build_accepted_fixture(tmp_path)
+    handoff = json.loads(paths.handoff.read_text(encoding="utf-8"))
+    identity = {
+        "identity_version": identity_version,
+        "trial_contract_version": "bounded_narrative_revision_trial_v8_screen_liveness",
+        "handoff_schema_version": handoff["schema_version"],
+        "handoff_manifest_sha256": handoff["manifest_sha256"],
+        "submission_run_id": "accepted-single",
+        "topics": [
+            {"topic_id": topic_id, "context_sha256": digest}
+            for topic_id, digest in paths.topic_context_sha256s.items()
+        ],
+    }
+    source_path = tmp_path / f"multistage-{identity_version!r}.json"
+    source_path.write_text(json.dumps(identity), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source identity.*version"):
+        build_accepted_run_binding(
+            paths.submission,
+            paths.bundle_metadata,
+            paths.handoff,
+            source_identity_path=source_path,
+        )
+
+
+@pytest.mark.parametrize("identity_version", [True, 6.0])
+def test_accepted_binding_rejects_non_integer_singlepass_identity_version(
+    tmp_path: Path,
+    identity_version: object,
+) -> None:
+    paths = build_accepted_fixture(tmp_path)
+    handoff = json.loads(paths.handoff.read_text(encoding="utf-8"))
+    identity = {
+        "identity_version": identity_version,
+        "handoff_schema_version": handoff["schema_version"],
+        "handoff_manifest_sha256": handoff["manifest_sha256"],
+        "run_id": "accepted-single",
+        "prompt_contract_version": "selected_evidence_one_shot_v1",
+        "selected_topics": [
+            {"topic_id": topic_id, "context_sha256": digest}
+            for topic_id, digest in paths.topic_context_sha256s.items()
+        ],
+    }
+    source_path = tmp_path / f"singlepass-{identity_version!r}.json"
+    source_path.write_text(json.dumps(identity), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source identity.*version"):
+        build_accepted_run_binding(
+            paths.submission,
+            paths.bundle_metadata,
+            paths.handoff,
+            source_identity_path=source_path,
+        )
+
+
 def test_selected_support_rejects_submission_answer_mutation_after_binding(
     tmp_path: Path,
 ) -> None:

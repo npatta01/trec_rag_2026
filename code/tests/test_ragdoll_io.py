@@ -254,6 +254,8 @@ def test_load_evidence_binding_normalizes_single_pass_and_multistage_receipts(
     [
         {"identity_version": None},
         {"identity_version": 2},
+        {"identity_version": True},
+        {"identity_version": 6.0},
         {"prompt_contract_version": None},
         {"prompt_contract_version": "wrong-contract"},
     ],
@@ -284,6 +286,8 @@ def test_load_evidence_binding_rejects_invalid_single_pass_contract(
     [
         {"identity_version": None},
         {"identity_version": 2},
+        {"identity_version": True},
+        {"identity_version": 1.0},
         {"trial_contract_version": None},
         {"trial_contract_version": "wrong-contract"},
     ],
