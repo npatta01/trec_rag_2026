@@ -1054,14 +1054,22 @@ class PrivacyTests(EvaluationCase):
         from trec_rag.friendly_report import assert_publishable
 
         formatted_leaks = (
-            "OPEN<strong>ROUTER</strong>",
+            'OPEN<span title="&gt;">ROUTER</span>',
             "OPEN&#x3c;strong&#x3e;ROUTER&#x3c;/strong&#x3e;",
             "/ho<strong>me</strong>/private/report",
             "a1b2c3<strong>d4e5f6</strong>7890",
+            "doc-<span>original</span>",
+            "Shared selected <span>evidence passage.</span>",
         )
+        denylist_by_leak = {
+            "doc-<span>original</span>": ("doc-original",),
+            "Shared selected <span>evidence passage.</span>": (
+                "Shared selected evidence passage.",
+            ),
+        }
         for leaked in formatted_leaks:
             with self.subTest(leaked=leaked), self.assertRaises(ReportPrivacyError):
-                assert_publishable(f"<p>{leaked}</p>")
+                assert_publishable(f"<p>{leaked}</p>", denylist_by_leak.get(leaked, ()))
 
         fixture = self.run_fixture(ONE_TOPIC)
         bundle = self.build(fixture, judge=RecordingJudge("FS"))
@@ -1103,6 +1111,54 @@ class PrivacyTests(EvaluationCase):
                     fixture.root / "nested-renderer-leak.html",
                     denylist=denylist_from_bundle(bundle.work_dir),
                 )
+
+    def test_renderer_dynamic_answer_copy_is_rejected(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values()))
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = f"The answer repeats {evidence}."
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+
+        def render_with_dynamic_copy(view: Any) -> str:
+            page = original_render_report(view)
+            source = view.topics[0]["answer"][0]["text"]
+            return page + f'<aside data-copy="{source}"><strong>{source}</strong></aside>'
+
+        with patch.object(
+            friendly_report, "render_report", side_effect=render_with_dynamic_copy
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / "dynamic-answer-copy-leak.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
+    def test_privacy_parser_fails_closed_on_unexpected_sink_markup(self) -> None:
+        from trec_rag.friendly_report import assert_publishable
+
+        malformed = (
+            '<p class="response-text"><div>unexpected block</div></p>',
+            '<p class="response-text"><strong>unclosed',
+            '<p class="response-text"><strong>mismatched</p>',
+        )
+        for page in malformed:
+            with self.subTest(page=page), self.assertRaises(ReportPrivacyError):
+                assert_publishable(page)
+
+    def test_citation_subtree_is_not_allowlisted(self) -> None:
+        from trec_rag.friendly_report import assert_publishable
+
+        with self.assertRaises(ReportPrivacyError):
+            assert_publishable(
+                '<p class="response-text">safe'
+                '<span class="citations">private selected passage</span></p>',
+                ("private selected passage",),
+            )
 
     def test_allowlisted_evidence_reuse_passes_but_template_leak_fails(self) -> None:
         fixture = self.run_fixture(ONE_TOPIC)

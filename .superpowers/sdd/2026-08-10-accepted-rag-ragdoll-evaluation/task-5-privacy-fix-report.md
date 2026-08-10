@@ -169,3 +169,104 @@ Final clean-source full-suite result after this round:
 PYTHONPATH=code TMPDIR=<fresh-private-temp-dir> .venv/bin/python -m pytest -q
 3237 passed, 19 skipped, 145 subtests passed
 ```
+
+## Fix Round 2 — raw-render sink-aware validation
+
+Round 2 replaces the model-level authorization boundary with validation of the
+actual HTML returned by `render_report`. The complete denylist remains intact,
+including every selected passage and every always-forbidden reference/document
+identifier. `write_report` now scans the actual page for identifiers and all
+generic privacy patterns, then parses that same raw page a second time for the
+passage collision check. The second projection preserves every raw start/end
+tag and attribute and replaces only text data events in the exact renderer sinks:
+`blockquote.narrative`, `p.subnarrative-text`, the pre-citation answer text in
+`p.response-text`, and `q.judgment-statement`. Only renderer-known `strong` and
+`br` descendants are permitted there; the direct `span.citations` subtree is
+left unredacted. Evidence in an attribute, an unexpected descendant, a citation
+subtree, or any other page location therefore remains visible to the denylist
+scan. A malformed, mismatched, or unclosed page raises `ReportPrivacyError`
+instead of guessing at a safe projection.
+
+The same stdlib `HTMLParser` receives raw HTML with `convert_charrefs=False` for
+the browser-visible projection. It decodes entities only in their text-event
+handlers, tracks void elements and stack balance, preserves inline adjacency,
+and inserts boundaries only for block elements and `br`. Raw and HTML-decoded
+projections remain separate, so generic patterns and identifiers are checked
+against raw markup, decoded attributes/text, faithful parser-visible text, and a
+parser-backed compact projection that catches entity-encoded formatting without
+parsing decoded HTML as markup.
+
+Adversarial TDD coverage added in `test_offline_evaluation.py` proves:
+
+- a renderer-time copy of `view.topics[0]["answer"][0]["text"]` into an
+  `<aside>` attribute and nested `<strong>` is rejected; this is not a captured
+  constant and is caught from the actual rendered page;
+- a selected passage remains accepted only in the approved rendered answer and
+  subnarrative text, while the same value in nested attributes or template
+  chrome fails; the existing dynamic evidence leak rejection remains green;
+- response-contained document identifiers are rejected even in allowlisted text;
+- `OPEN<span title="&gt;">ROUTER</span>`, split `/home`, split hashes, split
+  `doc-original`, and split passage values all fail; entity-encoded formatting,
+  formatted answer credentials, and paths fail as well;
+- block descendants, mismatched tags, unclosed tags, and passage text in the
+  unredacted citation subtree fail closed.
+
+Round 2 RED/GREEN and regression results:
+
+```text
+RED: the renderer-time answer-copy regression and quoted/split parser cases
+     failed before the raw sink parser was implemented.
+GREEN: PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py \
+  -k 'privacy or generic_patterns_scan or dynamic_answer_copy' -q
+       13 passed, 104 deselected, 11 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest code/tests/test_offline_evaluation.py -q
+       117 passed, 117 subtests passed
+```
+
+Both real accepted-artifact renders were replayed privately with no
+`--run-judge`. The output root was
+`/home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/task5-privacy-fix-round2/`;
+it was not copied to the portal. Both reports are mode `0600` and both
+manifests retain the exact 119-topic order:
+
+| run | topics | tasks | hosted calls | cache hits / misses / writes | failed / conflicts | report bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `rag26-ss1` | 119 | 3,155 | 0 | 0 / 3,155 / 0 | 0 / 0 | 2,914,417 |
+| `rag26-ms1-final` | 119 | 7,008 | 0 | 0 / 7,008 / 0 | 0 / 0 | 5,475,990 |
+
+The parser-backed write path succeeded for both single-pass and multi-stage
+reports. No hosted calls or cache writes occurred.
+
+Round 2 self-review:
+
+- No passage value was removed and the existing `len(value) >= 6` policy was
+  unchanged; identifiers and all generic patterns remain unredacted scans of
+  the actual page.
+- No global string replacement or decoded-before-parse operation authorizes a
+  sink. Raw start/end tags and attributes are preserved, and parser failure is
+  fail-closed.
+- The renderer is invoked once per report; the dynamic projection is derived
+  from that exact returned page, so copied answer values cannot evade the
+  scan.
+- Only the three owned tracked files changed; accepted artifacts, caches,
+  private outputs, docs/hubs, AGENTS instructions, and portal files were not
+  modified or published.
+
+Final committed-source verification:
+
+```text
+TMPDIR=/tmp/trec-rag-round2-suite-final.yo6HFE \
+  PYTHONPATH=code .venv/bin/python -m pytest -q
+3240 passed, 19 skipped, 150 subtests passed in 1:53
+
+PYTHONPATH=code .venv/bin/python -m py_compile \
+  code/trec_rag/friendly_report.py code/tests/test_offline_evaluation.py
+git diff --check
+```
+
+The owned files were committed as `850dd29c` (`fix: enforce sink-aware report
+privacy`) after the clean-source run. The temporary suite directory was private
+scratch only and was removed; no hosted call, cache write, portal copy, or
+accepted-artifact change occurred.

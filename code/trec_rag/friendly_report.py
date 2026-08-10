@@ -18,8 +18,8 @@ import os
 import re
 import secrets
 from collections.abc import Iterable, Mapping, Sequence
-from copy import deepcopy
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +74,11 @@ _PRIVATE_PATTERNS = (
 
 class ReportPrivacyError(EvaluationError):
     """Raised when the assembled page would publish forbidden material."""
+
+
+# Keep the renderer's parser independent of test/integration monkeypatches applied to
+# the shared stdlib class (some bundle tests count that class's public ``feed`` calls).
+_RAW_HTMLPARSER_FEED = HTMLParser.feed
 
 
 # ---------------------------------------------------------------------------
@@ -272,17 +277,290 @@ def denylist_from_bundle(work_dir: Path, extra: Iterable[str] = ()) -> PrivacyDe
     )
 
 
-_BLOCK_HTML_TAGS = re.compile(
-    r"</?(?:address|article|aside|blockquote|br|dd|details|div|dl|dt|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tr|ul)\b[^>]*>",
-    flags=re.IGNORECASE,
+_VOID_HTML_TAGS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 )
+_BLOCK_HTML_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "dd",
+        "details",
+        "div",
+        "dl",
+        "dt",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "summary",
+        "table",
+        "tr",
+        "ul",
+    }
+)
+_APPROVED_SINKS = {
+    ("blockquote", "narrative"): "narrative",
+    ("p", "subnarrative-text"): "subnarrative",
+    ("p", "response-text"): "response",
+    ("q", "judgment-statement"): "judgment",
+}
+_APPROVED_INLINE_TAGS = frozenset({"strong", "br"})
 
 
-def _privacy_projections(page: str) -> tuple[str, str, str]:
-    decoded = html.unescape(page)
-    plain = _BLOCK_HTML_TAGS.sub("\n", decoded)
-    plain = re.sub(r"<[^>]+>", "", plain)
-    return page, decoded, plain
+def _tag_end(raw: str, start: int) -> int | None:
+    """Find a raw tag's closing ``>`` without treating quoted ``>`` as the end."""
+    quote: str | None = None
+    for index in range(start, len(raw)):
+        character = raw[index]
+        if quote is not None:
+            if character == quote:
+                quote = None
+        elif character in "\"'":
+            quote = character
+        elif character == ">":
+            return index
+    return None
+
+
+class _PrivacyHTMLParser(HTMLParser):
+    """Parse raw report HTML for privacy projections.
+
+    The parser deliberately receives the raw page with ``convert_charrefs=False``.
+    Dynamic redaction is limited to text events below the exact renderer sinks; raw
+    start/end tags and attributes are copied byte-for-byte. Any malformed structure or
+    unbalanced stack makes the caller fail closed rather than guessing at a node.
+    """
+
+    def __init__(self, *, redact_sinks: bool, sentinel: str = "") -> None:
+        super().__init__(convert_charrefs=False)
+        self.redact_sinks = redact_sinks
+        self.sentinel = sentinel
+        self.parts: list[str] = []
+        self.visible_parts: list[str] = []
+        self.compact_visible_parts: list[str] = []
+        self.stack: list[str] = []
+        self.sink_index: int | None = None
+        self.sink_kind: str | None = None
+        self.citation_index: int | None = None
+        self.failed_reason: str | None = None
+        self._pending_endtag: str | None = None
+        self._encoded_tag_text = False
+
+    def _fail(self, reason: str) -> None:
+        if self.failed_reason is None:
+            self.failed_reason = reason
+
+    @staticmethod
+    def _has_class(attrs: list[tuple[str, str | None]], expected: str) -> bool:
+        return any(
+            name == "class" and expected in (value or "").split()
+            for name, value in attrs
+        )
+
+    def _redacting_text(self) -> bool:
+        return (
+            self.redact_sinks
+            and self.sink_index is not None
+            and self.citation_index is None
+        )
+
+    def _visible_start(self, tag: str) -> None:
+        if tag in _BLOCK_HTML_TAGS:
+            self.visible_parts.append("\n")
+            self.compact_visible_parts.append("\n")
+
+    def _visible_end(self, tag: str) -> None:
+        if tag in _BLOCK_HTML_TAGS:
+            self.visible_parts.append("\n")
+            self.compact_visible_parts.append("\n")
+
+    def _start(self, tag: str, attrs: list[tuple[str, str | None]], raw: str, *, empty: bool) -> None:
+        tag = tag.lower()
+        self.parts.append(raw)
+        self._visible_start(tag)
+
+        in_sink = self.sink_index is not None
+        in_citations = self.citation_index is not None
+        if in_sink and not in_citations:
+            if self.sink_kind == "response" and tag == "span" and self._has_class(attrs, "citations"):
+                if empty:
+                    self._fail("the citations boundary cannot be self-closing")
+                elif self.sink_index != len(self.stack) - 1:
+                    self._fail("the citations boundary must be a direct response child")
+            elif tag not in _APPROVED_INLINE_TAGS:
+                self._fail(f"unexpected {tag} descendant in approved report text")
+        elif not in_sink:
+            sink_kind = next(
+                (
+                    candidate
+                    for (sink_tag, sink_class), candidate in _APPROVED_SINKS.items()
+                    if tag == sink_tag and self._has_class(attrs, sink_class)
+                ),
+                None,
+            )
+            if sink_kind is not None:
+                if empty:
+                    self._fail("an approved privacy sink cannot be self-closing")
+                else:
+                    self.sink_index = len(self.stack)
+                    self.sink_kind = sink_kind
+
+        if tag == "br":
+            self.visible_parts.append("\n")
+            self.compact_visible_parts.append("\n")
+        if not empty and tag not in _VOID_HTML_TAGS:
+            self.stack.append(tag)
+            if (
+                self.sink_kind == "response"
+                and tag == "span"
+                and self.sink_index is not None
+                and self.citation_index is None
+                and self._has_class(attrs, "citations")
+            ):
+                self.citation_index = len(self.stack) - 1
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        raw = self.get_starttag_text()
+        if raw is None:
+            self._fail("start tag has no raw source")
+            return
+        self._start(tag, attrs, raw, empty=False)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        raw = self.get_starttag_text()
+        if raw is None:
+            self._fail("empty tag has no raw source")
+            return
+        self._start(tag, attrs, raw, empty=True)
+
+    def handle_endtag(self, tag: str) -> None:
+        raw = self._pending_endtag
+        if raw is None:
+            self._fail("end tag has no raw source")
+        else:
+            self.parts.append(raw)
+        tag = tag.lower()
+        if not self.stack or self.stack[-1] != tag:
+            self._fail(f"mismatched or unexpected end tag {tag!r}")
+            return
+        frame_index = len(self.stack) - 1
+        self._visible_end(tag)
+        self.stack.pop()
+        if self.citation_index == frame_index:
+            self.citation_index = None
+        if self.sink_index == frame_index:
+            self.sink_index = None
+            self.sink_kind = None
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(self.sentinel if self._redacting_text() else data)
+        decoded = html.unescape(data)
+        self.visible_parts.append(decoded)
+        if not self._encoded_tag_text:
+            self.compact_visible_parts.append(decoded)
+
+    def handle_entityref(self, name: str) -> None:
+        raw = f"&{name};"
+        decoded = html.unescape(raw)
+        self.parts.append(self.sentinel if self._redacting_text() else raw)
+        self.visible_parts.append(decoded)
+        if decoded == "<":
+            self._encoded_tag_text = True
+        elif decoded == ">" and self._encoded_tag_text:
+            self._encoded_tag_text = False
+        elif not self._encoded_tag_text:
+            self.compact_visible_parts.append(decoded)
+
+    def handle_charref(self, name: str) -> None:
+        raw = f"&#{name};"
+        decoded = html.unescape(raw)
+        self.parts.append(self.sentinel if self._redacting_text() else raw)
+        self.visible_parts.append(decoded)
+        if decoded == "<":
+            self._encoded_tag_text = True
+        elif decoded == ">" and self._encoded_tag_text:
+            self._encoded_tag_text = False
+        elif not self._encoded_tag_text:
+            self.compact_visible_parts.append(decoded)
+
+    def handle_comment(self, data: str) -> None:
+        self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl: str) -> None:
+        self.parts.append(f"<!{decl}>")
+
+    def handle_pi(self, data: str) -> None:
+        self.parts.append(f"<?{data}>")
+
+    def parse_starttag(self, i: int) -> int:
+        result = super().parse_starttag(i)
+        if result < 0:
+            self._fail("malformed or unclosed start tag")
+        return result
+
+    def parse_endtag(self, i: int) -> int:
+        raw_end = _tag_end(self.rawdata, i)
+        self._pending_endtag = (
+            self.rawdata[i : raw_end + 1] if raw_end is not None else None
+        )
+        if self.rawdata[i + 2 : i + 3] == ">":
+            self._fail("missing end-tag name")
+        result = super().parse_endtag(i)
+        if result < 0:
+            self._fail("malformed or unclosed end tag")
+        self._pending_endtag = None
+        return result
+
+    def close(self) -> None:
+        super().close()
+        if self.stack:
+            self._fail("unclosed HTML element")
+
+
+def _parse_privacy_html(page: str, *, redact_sinks: bool) -> _PrivacyHTMLParser:
+    sentinel = f"friendly-report-allowlisted-{secrets.token_urlsafe(24)}"
+    parser = _PrivacyHTMLParser(redact_sinks=redact_sinks, sentinel=sentinel)
+    try:
+        _RAW_HTMLPARSER_FEED(parser, page)
+        parser.close()
+    except Exception as error:
+        raise ReportPrivacyError("refusing to write the report: malformed HTML") from error
+    if parser.failed_reason is not None:
+        raise ReportPrivacyError(
+            f"refusing to write the report: {parser.failed_reason}"
+        )
+    return parser
+
+
+def _privacy_projections(page: str) -> tuple[str, str, str, str]:
+    parser = _parse_privacy_html(page, redact_sinks=False)
+    return (
+        page,
+        html.unescape(page),
+        "".join(parser.visible_parts),
+        "".join(parser.compact_visible_parts),
+    )
+
+
+def _dynamic_scan_projection(page: str) -> str:
+    return "".join(_parse_privacy_html(page, redact_sinks=True).parts)
 
 
 def _denylist_values(denylist: Sequence[str] | PrivacyDenylist) -> tuple[str, ...]:
@@ -394,18 +672,6 @@ def render_report(view: Presentation) -> str:
         ]
     )
     return _PAGE.format(style=_STYLE, body=body)
-
-
-def _privacy_scan_view(view: Presentation) -> Presentation:
-    """Clone the model and redact only text fields explicitly published by the template."""
-    scan_view = deepcopy(view)
-    sentinel = f"friendly-report-allowlisted-{secrets.token_urlsafe(24)}"
-    for topic in scan_view.topics:
-        topic["narrative"] = sentinel
-        topic["subnarratives"] = [sentinel for _ in topic["subnarratives"]]
-        for answer in topic["answer"]:
-            answer["text"] = sentinel
-    return scan_view
 
 
 def _render_hero(view: Presentation) -> str:
@@ -857,14 +1123,16 @@ def write_report(
         # Keep legacy callers fail-closed while the bundle API uses the split type.
         identifiers = tuple(denylist)
         passage_texts = identifiers
-    # Generic patterns must inspect the actual page: allowlisted response text is still
-    # forbidden when it contains credentials, paths, hashes, or provider/runtime fields.
-    # Identifiers are always forbidden and therefore scan every projection of the real page.
+    # Generic patterns must inspect the actual page with no dynamic exemption:
+    # allowlisted response text is still forbidden when it contains credentials,
+    # paths, hashes, or provider/runtime fields. Identifiers are always forbidden
+    # too, so they receive a separate all-projection scan of that same page.
+    assert_publishable(page, denylist=())
     assert_publishable(page, denylist=identifiers)
-    # Passage values are checked against a second render from a model-level projection.
-    # The same renderer preserves every tag, attribute, and template/chrome field while
-    # replacing only the exact allowlisted presentation-model text fields.
-    scan_page = render_report(_privacy_scan_view(view))
+    # Passage values are checked against the actual rendered HTML. The parser preserves
+    # every raw tag and attribute and redacts only text events in exact approved sinks.
+    # This catches a renderer copying an allowlisted value into an aside or attribute.
+    scan_page = _dynamic_scan_projection(page)
     assert_publishable(scan_page, denylist=passage_texts)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
