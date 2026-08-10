@@ -121,3 +121,61 @@ the private portal.
 
 The final tracked worktree is clean. Accepted organizer files and private
 evaluation outputs remain untouched.
+
+## Fix Round 1 — bind visible labels to exact destinations
+
+The first review identified two contract gaps in the tests, while the authored
+navigation and orientation content itself was already correct:
+
+1. Root and report-index tests checked labels and URLs independently, so a
+   swap of the `rag26-ss1` and `rag26-ms1-final` visible labels could pass.
+2. The architecture test checked AGENTS signals independently, but did not
+   bind each run ID to its complete private URL and accepted JSONL input path.
+
+The fix changes only the three owned test files. Each HTML suite now extracts
+the anchor for every exact href and requires its normalized visible text to
+equal the expected label. The architecture suite applies the same binding to
+both the QMD Markdown link and rendered HTML anchor. All suites include an
+active fault-injection fixture that swaps the two RAG labels and asserts the
+binding contract rejects it.
+
+The AGENTS contract now asserts exact triples:
+
+| Run ID | Private report URL | Accepted evaluated input |
+| --- | --- | --- |
+| `rag26-ss1` | `https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html` | `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl` |
+| `rag26-ms1-final` | `https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html` | `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl` |
+
+The AGENTS contract also injects and rejects a broken/swapped URL, removed
+input, swapped input paths, and swapped run labels.
+
+### Fix Round 1 TDD and mutation evidence
+
+Before the stronger assertions, a legacy independent-label/URL harness accepted
+the swapped fixture:
+
+```text
+legacy-independent-contract-accepted-root-swap=true
+legacy-independent-contract-accepted-reports-swap=true
+legacy-substring-agents-contract-accepted-broken-map=true
+```
+
+After the fix, the active mutation assertions and all normal suites pass:
+
+```text
+root artifact hub smoke test passed
+reports index smoke test passed
+2026 competition architecture smoke test passed
+```
+
+The final verification also reran:
+
+```text
+quarto render reports/2026-competition-architecture.qmd
+git diff --exit-code -- reports/2026-competition-architecture.html
+git diff --check
+```
+
+The canonical rerender completed and generated HTML remained byte-consistent;
+whitespace checks passed. No authored content, portal file, accepted artifact,
+private output, or provider state changed in this fix round.

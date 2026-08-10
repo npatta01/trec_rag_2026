@@ -40,6 +40,76 @@ const analysisLinks = [
   ],
 ];
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function assertQmdAnalysisBindings(source) {
+  for (const [visibleLabel, href] of analysisLinks) {
+    const match = new RegExp(`\\[([^\\]]+)\\]\\(${escapeRegExp(href)}\\)`).exec(source);
+    assert(match, `QMD should contain a link for ${href}`);
+    assert(
+      match[1].replace(/\s+/g, " ").trim() === visibleLabel,
+      `QMD should bind ${visibleLabel} to ${href}`,
+    );
+  }
+}
+
+function assertHtmlAnalysisBindings(source) {
+  for (const [visibleLabel, href] of analysisLinks) {
+    const match = new RegExp(
+      `<a\\b[^>]*href="${escapeRegExp(href)}"[^>]*>([\\s\\S]*?)</a>`,
+    ).exec(source);
+    assert(match, `rendered report should contain an anchor for ${href}`);
+    const anchorText = match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    assert(
+      anchorText === visibleLabel,
+      `rendered report should bind ${visibleLabel} to ${href}`,
+    );
+  }
+}
+
+function replaceMarkdownLabel(source, href, nextLabel) {
+  return source.replace(
+    new RegExp(`(\\[)[^\\]]+(\\]\\(${escapeRegExp(href)}\\))`),
+    `$1${nextLabel}$2`,
+  );
+}
+
+function replaceAnchorLabel(source, href, nextLabel) {
+  return source.replace(
+    new RegExp(`(<a\\b[^>]*href="${escapeRegExp(href)}"[^>]*>)[\\s\\S]*?(</a>)`),
+    `$1${nextLabel}$2`,
+  );
+}
+
+function assertRejectsMutation(assertion, mutatedSource, label) {
+  let rejected = false;
+  try {
+    assertion(mutatedSource);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, `${label} should reject swapped analysis labels`);
+}
+
+assertQmdAnalysisBindings(qmd);
+assertHtmlAnalysisBindings(html);
+const swappedQmdLabels = replaceMarkdownLabel(
+  replaceMarkdownLabel(qmd, analysisLinks[1][1], analysisLinks[2][0]),
+  analysisLinks[2][1],
+  analysisLinks[1][0],
+);
+const swappedHtmlLabels = replaceAnchorLabel(
+  replaceAnchorLabel(html, analysisLinks[1][1], analysisLinks[2][0]),
+  analysisLinks[2][1],
+  analysisLinks[1][0],
+);
+assert(swappedQmdLabels !== qmd, "QMD mutation should swap visible labels");
+assert(swappedHtmlLabels !== html, "rendered report mutation should swap visible labels");
+assertRejectsMutation(assertQmdAnalysisBindings, swappedQmdLabels, "QMD");
+assertRejectsMutation(assertHtmlAnalysisBindings, swappedHtmlLabels, "rendered report");
+
 for (const [label, href] of analysisLinks) {
   assert(normalizedQmd.includes(label), `QMD should label ${label}`);
   const escapedHref = href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -373,6 +443,73 @@ const evaluationSignals = [
 for (const signal of evaluationSignals) {
   assert(normalizedAgents.includes(signal), `AGENTS.md should orient agents to final analyses: ${signal}`);
 }
+
+const acceptedRagBindings = [
+  [
+    "rag26-ss1",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html",
+    "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl",
+  ],
+  [
+    "rag26-ms1-final",
+    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html",
+    "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl",
+  ],
+];
+
+function assertAgentRagBindings(source) {
+  for (const [runId, reportUrl, inputPath] of acceptedRagBindings) {
+    const bindingPattern = new RegExp(
+      "\\[RAG Analysis: " +
+        escapeRegExp(runId) +
+        "\\]\\(" +
+        escapeRegExp(reportUrl) +
+        "\\)\\s+—\\s+\\*\\*Private / tailnet\\*\\*;[\\s\\S]{0,360}?input: `" +
+        escapeRegExp(inputPath) +
+        "`",
+    );
+    assert(
+      bindingPattern.test(source),
+      `AGENTS.md should bind ${runId} to its private URL and accepted input`,
+    );
+  }
+}
+
+function assertAgentMutationRejected(mutatedSource, label) {
+  let rejected = false;
+  try {
+    assertAgentRagBindings(mutatedSource);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, `AGENTS.md should reject ${label}`);
+}
+
+assertAgentRagBindings(agents);
+const [singlepassBinding, multistageBinding] = acceptedRagBindings;
+const brokenUrlAgents = agents.replace(singlepassBinding[1], multistageBinding[1]);
+assert(brokenUrlAgents !== agents, "AGENTS URL mutation should change the source");
+assertAgentMutationRejected(
+  brokenUrlAgents,
+  "a broken or swapped private URL",
+);
+const removedInputAgents = agents.replace(singlepassBinding[2], "");
+assert(removedInputAgents !== agents, "AGENTS input removal mutation should change the source");
+assertAgentMutationRejected(
+  removedInputAgents,
+  "a removed accepted input path",
+);
+const swappedInputBindings = agents
+  .replace(singlepassBinding[2], "__singlepass_input__")
+  .replace(multistageBinding[2], singlepassBinding[2])
+  .replace("__singlepass_input__", multistageBinding[2]);
+assert(swappedInputBindings !== agents, "AGENTS input mutation should swap mappings");
+assertAgentMutationRejected(swappedInputBindings, "swapped accepted input mappings");
+const swappedAgentLabels = agents
+  .replace(/RAG Analysis: rag26-ss1/g, "RAG Analysis: rag26-ms1-final")
+  .replace(/RAG Analysis: rag26-ms1-final/g, "RAG Analysis: rag26-ss1");
+assert(swappedAgentLabels !== agents, "AGENTS label mutation should swap run labels");
+assertAgentMutationRejected(swappedAgentLabels, "swapped run labels");
 
 for (const target of [
   "reports/2026-competition-architecture.html",

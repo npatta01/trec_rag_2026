@@ -91,6 +91,50 @@ const analysisLinks = [
   ],
 ];
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function assertAnalysisBindings(source, label) {
+  for (const [visibleLabel, href] of analysisLinks) {
+    const match = new RegExp(
+      `<a\\b[^>]*href="${escapeRegExp(href)}"[^>]*>([\\s\\S]*?)</a>`,
+    ).exec(source);
+    assert(match, `${label} should contain an anchor for ${href}`);
+    const anchorText = match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    assert(
+      anchorText === visibleLabel,
+      `${label} should bind ${visibleLabel} to ${href}`,
+    );
+  }
+}
+
+function replaceAnchorLabel(source, href, nextLabel) {
+  return source.replace(
+    new RegExp(`(<a\\b[^>]*href="${escapeRegExp(href)}"[^>]*>)[\\s\\S]*?(</a>)`),
+    `$1${nextLabel}$2`,
+  );
+}
+
+function assertRejectsMutation(mutatedSource, label) {
+  let rejected = false;
+  try {
+    assertAnalysisBindings(mutatedSource, label);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, `${label} should reject swapped analysis labels`);
+}
+
+assertAnalysisBindings(html, "reports index");
+const swappedAnalysisLabels = replaceAnchorLabel(
+  replaceAnchorLabel(html, analysisLinks[1][1], analysisLinks[2][0]),
+  analysisLinks[2][1],
+  analysisLinks[1][0],
+);
+assert(swappedAnalysisLabels !== html, "reports index mutation should swap visible labels");
+assertRejectsMutation(swappedAnalysisLabels, "reports index");
+
 const reportHrefs = [...html.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
 for (const [label, href] of analysisLinks) {
   const occurrences = (html.match(new RegExp(`href="${href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g")) || []).length;
