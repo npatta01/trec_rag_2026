@@ -3,6 +3,41 @@
 These instructions are the shared contract for Codex, Claude, and any future
 coding agent working in this repository.
 
+## Completed Project and Key Artifacts
+
+This TREC RAG 2026 project is complete. All five tracked organizer files were
+uploaded and accepted by Evalbase. Do not treat historical plans,
+specifications, experiment notes, or unused configs as an active backlog, and
+do not start new retrieval, generation, or evaluation work unless the user
+explicitly reopens the project.
+
+Start every orientation or handoff from these artifacts:
+
+- [`index.html`](index.html) is the reader-facing project map.
+- [`submissions/trec-rag-2026/SUBMISSION_LEDGER.md`](submissions/trec-rag-2026/SUBMISSION_LEDGER.md)
+  is the control sheet for exact accepted files, priorities, hashes, and portal
+  notes.
+- [`reports/2026-competition-architecture.html`](reports/2026-competition-architecture.html)
+  explains the final system; edit only its canonical
+  [`reports/2026-competition-architecture.qmd`](reports/2026-competition-architecture.qmd)
+  source and re-render with Quarto.
+- The final [Retrieval bundle](submissions/trec-rag-2026/retrieval/cache-first-candidate-core-v1/README.md)
+  and [RAG bundle](submissions/trec-rag-2026/rag/selected-evidence-sol-v1/README.md)
+  document the submitted variants and provenance.
+- [`.agents/skills/validate-trec-rag-2026-submissions/SKILL.md`](.agents/skills/validate-trec-rag-2026-submissions/SKILL.md)
+  is the canonical repo-local delivery preflight. It composes the official
+  [track contract](trec-rag-skills/skills/trec-rag-2026-track-guidelines/SKILL.md)
+  with organizer AutoJudge checks.
+- [`code/trec_rag/README.md`](code/trec_rag/README.md) is the implementation and
+  reproduction reference; [`reports/index.html`](reports/index.html) collects
+  supporting reports.
+
+Treat the five organizer files under `submissions/trec-rag-2026/` as immutable
+accepted artifacts. Documentation may link and verify them, but must not
+regenerate, reformat, or overwrite them. Evalbase submission IDs and upload
+timestamps were not recorded; preserve that unknown explicitly rather than
+inventing values.
+
 ## Repository Shape
 
 - Keep source-backed reports under `reports/`.
@@ -59,14 +94,15 @@ coding agent working in this repository.
   `./cache/retrieval/...` and `./cache/reranker/...`.
 - Keep `.venv/` and generated activation helpers out of git.
 
-## Architecture Orientation
+## Final Architecture Orientation
 
 Read the friend-facing
 [`reports/2026-competition-architecture.html`](reports/2026-competition-architecture.html)
 for the image-led walkthrough. Agents should edit
 [`reports/2026-competition-architecture.qmd`](reports/2026-competition-architecture.qmd)
 and re-render it with Quarto; never patch the generated HTML directly. The guide
-covers only the supported 2026 competition path: Retrieval → handoff → Generation.
+covers the final frozen source and its two sibling submission branches:
+cache-first Retrieval TSVs and selected-evidence RAG JSONLs.
 
 Keep these boundaries intact:
 
@@ -75,11 +111,27 @@ Keep these boundaries intact:
 - Each valid subnarrative contains 1–3 BM25 query lanes, for at most 25 searches per topic including the original lane.
 - The 1,000-document and 100-passage values are per-query ceilings with a documents-to-passages unit change.
 - Selected passages are factual authority; canonical claim hints are advisory.
-- Generation consumes only the authenticated handoff.
-- Generation never opens the TREC run, full-text ZIP, qrels, gold nuggets, or RAGDoll scores.
-- Transport and semantic retry limits are separate.
+- The authenticated `facet-deepseek-b40-v3` source is the common provenance
+  point; the final Retrieval and RAG bundles are sibling derivations.
+- Retrieval submission replay robustly admits a narrative-specific candidate
+  core, completes a cache-first score matrix only over that core, and orders
+  the identical per-topic set three ways. Submitted depth ranges from 1 to 121.
+- RAG Generation consumes only the authenticated selected-evidence handoff.
+  The organizer-facing Retrieval TSV is not Generation input.
+- Generation never opens the Retrieval TSV, full-text ZIP, qrels, gold
+  nuggets, or RAGDoll scores.
+- Single-pass Sol and bounded multi-stage Luna + Sol Generation use the same
+  sealed evidence but separate strategy-specific state and organizer files.
+- Multi-stage Generation bounds Luna planning, per-group audits, and operation
+  screening; Sol drafting and revision remain bounded, with the already
+  validated draft as the deterministic fallback.
+- Transport, semantic, and stage reservation limits remain separate.
 
-## Competition Retrieval and RAG Runs
+## Historical Run and Reproduction Safety
+
+- No further competition runs are planned. The commands and safety rules below
+  are retained only for reproducibility if the user explicitly reopens the
+  project; they are not a request or next-action list.
 
 - Treat `trec-rag-skills/skills/trec-rag-2026-track-guidelines/SKILL.md`
   as the canonical task and submission contract. Read its retrieval or RAG
@@ -87,8 +139,10 @@ Keep these boundaries intact:
   output. Use
   `trec-rag-skills/skills/pyserini-rest-api/SKILL.md` for API mechanics and
   token-safety rules.
-- The supported competition workflow has two ordered commands. Retrieval must
-  finish first and publish the sealed selected-evidence handoff before RAG:
+- The original source workflow has two ordered commands. Retrieval must finish
+  first and publish the sealed selected-evidence handoff before RAG. These
+  commands describe the source runner and config shape; they do not regenerate
+  the accepted cache-first Retrieval bundle or its multi-stage RAG sibling:
 
   ```bash
   .venv/bin/python-rocm -m trec_rag.competition_retrieval \
@@ -98,9 +152,8 @@ Keep these boundaries intact:
     --config configs/rag26_competition_rag_gpt_sol_v2.yaml
   ```
 
-- The checked-in configs are the canonical full-run configs and select all 119
-  test narratives by default. Do not use them for an exploratory one-, two-, or
-  three-topic run. Follow the two-topic smoke instructions in
+- The checked-in configs select all 119 test narratives by default. Do not use
+  them for an exploratory one-, two-, or three-topic run. Follow the two-topic smoke instructions in
   `code/trec_rag/README.md`: copy both configs into ignored `configs/local/`,
   assign unique experiment IDs/output directories, point the RAG input at the
   smoke retrieval handoff, and set RAG `experiment.topic_ids` to the same IDs.

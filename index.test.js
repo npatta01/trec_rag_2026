@@ -43,4 +43,24 @@ for (const forbidden of [
   assert(!html.includes(forbidden), `artifact hub should not expose ${forbidden}`);
 }
 
+const ledgerPath = path.join(root, "submissions/trec-rag-2026/SUBMISSION_LEDGER.md");
+const ledger = fs.readFileSync(ledgerPath, "utf8");
+for (const runId of [
+  "r26-narr-facet-v1",
+  "r26-facet-breadth-v1",
+  "r26-narrative-v1",
+  "rag26-ms1-final",
+  "rag26-ss1",
+]) {
+  const rows = ledger
+    .split("\n")
+    .filter((line) => line.startsWith("|") && line.includes(`\`${runId}\``));
+  assert(rows.length === 2, `ledger should contain artifact and confirmation rows for ${runId}`);
+  assert(rows.every((line) => line.includes("Accepted by Evalbase")), `ledger should mark ${runId} accepted`);
+  assert(
+    rows[1].includes("| Not recorded | Not recorded | Accepted by Evalbase |"),
+    `ledger should preserve unknown portal metadata for ${runId}`,
+  );
+}
+
 console.log("root artifact hub smoke test passed");

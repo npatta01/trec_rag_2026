@@ -2,11 +2,12 @@
 
 This private repository bundle contains three organizer-facing Retrieval (`R`)
 run files. Each run uses the same variable-depth candidate set for every
-narrative and changes only the ordering.
+narrative and changes only the ordering. All three exact files were uploaded
+and accepted by Evalbase.
 
-## Upload files
+## Accepted files
 
-Upload one `r_output_trec_rag_2026.tsv` file per Evalbase submission:
+These `r_output_trec_rag_2026.tsv` files were submitted separately:
 
 | Suggested priority | Variant | Run ID | File |
 |---:|---|---|---|
@@ -14,12 +15,13 @@ Upload one `r_output_trec_rag_2026.tsv` file per Evalbase submission:
 | 2 | Subnarrative evidence breadth | `r26-facet-breadth-v1` | `breadth/r_output_trec_rag_2026.tsv` |
 | 3 | Narrative only | `r26-narrative-v1` | `narrative/r_output_trec_rag_2026.tsv` |
 
-The priority order is a recommendation, not an organizer rule. The current
-organizer page permits up to ten runs per task and requires participants to
-report a priority on each submission form.
+The table preserves the submitted priority order. It was a recommendation, not
+an organizer rule.
 
 Start with the repository-wide [`submission ledger`](../../SUBMISSION_LEDGER.md).
-It links the exact upload file and copy/paste Evalbase response for each run.
+It links the exact accepted file, recorded SHA-256, and archived Evalbase
+response for each run. The [final architecture report](../../../../reports/2026-competition-architecture.html)
+places this bundle beside the RAG branch from the shared frozen source.
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the end-to-end design, formulas,
 runtime-model classification, and system boundaries.
 

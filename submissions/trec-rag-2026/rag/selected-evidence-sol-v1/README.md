@@ -3,9 +3,9 @@
 This private repository bundle contains two organizer-facing Retrieval-Augmented
 Generation (`RAG`) submission files generated from the same authenticated
 selected-evidence handoff. Retrieval was not rerun between generation
-strategies.
+strategies. Both exact files were uploaded and accepted by Evalbase.
 
-## Upload files
+## Accepted files
 
 | Suggested priority | Strategy | Run ID | File |
 |---:|---|---|---|
@@ -13,8 +13,10 @@ strategies.
 | 2 | Single-pass Sol | `rag26-ss1` | [`singlepass/rag_output_trec_rag_2026.jsonl`](singlepass/rag_output_trec_rag_2026.jsonl) |
 
 Start with the repository-wide [`submission ledger`](../../SUBMISSION_LEDGER.md).
-It records the exact hashes and links to the copy/paste portal notes for both
-runs.
+It records the exact accepted-file hashes and links to the archived portal
+notes for both runs. The [final architecture report](../../../../reports/2026-competition-architecture.html)
+shows how both strategies consume the sealed handoff without reading the
+organizer Retrieval TSV.
 
 ## Shared retrieval and evidence boundary
 
@@ -41,7 +43,7 @@ four-topic concurrency limit.
 
 ## Validation
 
-Both upload files independently pass the organizer AutoJudge for `rag26` with
+Both accepted files independently pass the organizer AutoJudge for `rag26` with
 all 119 official narratives, no extras, and no duplicates. Project validation
 also confirms exact narrative order and text, allowed ClimbMix citation domains,
 exact-hint citation rules, unique references, and the 1,024-word limit.

@@ -1,15 +1,40 @@
 # TREC RAG Workspace
 
-This repository collects TREC RAG research notes, reports, and reusable
-implementation patterns.
+This completed project contains the final TREC RAG 2026 Retrieval and RAG
+submissions, their architecture and validation records, supporting reports, and
+the reusable implementation that produced them. All five checked-in organizer
+files were uploaded and accepted by Evalbase.
 
-## Current Contents
+## Final Project Artifacts
+
+- [`index.html`](index.html) - compact entrypoint to the final project.
+- [`reports/2026-competition-architecture.html`](reports/2026-competition-architecture.html)
+  - image-led walkthrough of the final frozen-source architecture and its two
+  submission branches.
+- [`reports/2026-competition-architecture.qmd`](reports/2026-competition-architecture.qmd)
+  - canonical Quarto source for the generated architecture report.
+- [`submissions/trec-rag-2026/SUBMISSION_LEDGER.md`](submissions/trec-rag-2026/SUBMISSION_LEDGER.md)
+  - control sheet for the five accepted files, hashes, priorities, and portal
+  notes.
+- [`submissions/trec-rag-2026/retrieval/cache-first-candidate-core-v1/README.md`](submissions/trec-rag-2026/retrieval/cache-first-candidate-core-v1/README.md)
+  - final three-run Retrieval bundle.
+- [`submissions/trec-rag-2026/rag/selected-evidence-sol-v1/README.md`](submissions/trec-rag-2026/rag/selected-evidence-sol-v1/README.md)
+  - final two-run RAG bundle.
+- [Submission validation skill](.agents/skills/validate-trec-rag-2026-submissions/SKILL.md)
+  - combined structural and organizer AutoJudge preflight.
+- [`reports/index.html`](reports/index.html) - supporting report collection.
+- [`code/trec_rag/README.md`](code/trec_rag/README.md) - implementation and
+  reproduction reference.
+
+The final system starts from one authenticated source retrieval artifact and
+then branches. Cache-first replay produces three variable-depth Retrieval TSVs;
+the sealed selected-evidence handoff independently feeds single-pass and
+multi-stage RAG generation. The organizer Retrieval TSV is not a Generation
+input.
+
+## Supporting Contents
 
 - `reports/index.html` - common entrypoint for the interactive reports.
-- `reports/2026-competition-architecture.html` - image-led walkthrough of the
-  supported 2026 Narrative → Retrieval → Handoff → Generation path.
-- `reports/2026-competition-architecture.qmd` - canonical Quarto source for the
-  generated architecture walkthrough.
 - `reports/trec-rag-briefing-report.html` - interactive 2026 briefing report
   covering ClimbMix, sample documents, answer nuggets, and solution strategy.
 - `reports/trec-rag-2025-writeups/` - standalone interactive report for the
@@ -24,6 +49,8 @@ implementation patterns.
   config-driven BM25 RAG pipeline.
 - `.agents/skills/trec-rag-competition-debug-report/` - repo-local agent skill
   for privately explaining completed competition retrieval and RAG runs.
+- `.agents/skills/validate-trec-rag-2026-submissions/` - repo-local validator
+  for the exact organizer-facing Retrieval and RAG formats.
 
 ## Upstream Inputs
 
