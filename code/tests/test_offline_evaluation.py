@@ -1515,9 +1515,40 @@ class ReportWordingTests(EvaluationCase):
 
 
 class AcceptedWorkflowDocumentationTests(unittest.TestCase):
-    """Both operator-facing docs must describe the same accepted-run preflight."""
+    """Both docs must carry a semantically complete accepted-run preflight section."""
 
-    REQUIRED_TEXT = (
+    DOCUMENTS = (
+        (
+            REPOSITORY_ROOT / ".agents/skills/trec-rag-competition-debug-report/SKILL.md",
+            "### accepted evalbase rag jsonl preflight",
+        ),
+        (
+            REPOSITORY_ROOT / "code/trec_rag/README.md",
+            "#### accepted evalbase rag preflight (119 topics)",
+        ),
+    )
+
+    @staticmethod
+    def _section(content: str, heading: str) -> str:
+        """Return one accepted-workflow section, stopping at its next peer heading."""
+        lines = content.splitlines()
+        start = next(
+            index for index, line in enumerate(lines) if line.strip() == heading
+        )
+        level = len(heading.split()[0])
+        for end in range(start + 1, len(lines)):
+            match = re.match(r"^(#+)\s+", lines[end])
+            if match and len(match.group(1)) <= level:
+                return "\n".join(lines[start:end])
+        return "\n".join(lines[start:])
+
+    @staticmethod
+    def _subsection(section: str, marker: str, next_marker: str | None = None) -> str:
+        start = section.index(marker)
+        end = section.index(next_marker, start) if next_marker is not None else len(section)
+        return section[start:end]
+
+    COMMON_TEXT = (
         "--accepted-rag",
         "--accepted-bundle-metadata",
         "--handoff-manifest",
@@ -1527,37 +1558,83 @@ class AcceptedWorkflowDocumentationTests(unittest.TestCase):
         "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl",
         "/home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json",
         "/home/npatta01/.codex/worktrees/rag26-ms1-full-run-1786308971/outputs/rag26-ms1-multistage-final/work/multistage_generation_identity.json",
-        "cache-only",
         "one-task probe",
         "--judge-limit 1",
         "--judge-workers 1",
         "--judge-workers 4",
         "bounded",
         "full resume",
-        "cache-only replay",
-        "completed_judgments",
-        "missing_judgments",
         "qrels",
         "gold nuggets",
         "unavailable",
         "partial",
-        "must not",
-        "one generated statement",
-        "selected-evidence",
-        "no unrelated topic data",
         "tailnet-only",
     )
 
+    SCOPE_TEXT = (
+        "manifest.scope.topic_ids",
+        "exact ordered 119 topic ids",
+        "rag26-ss1",
+        "judgment_tasks: 3155",
+        "rag26-ms1-final",
+        "judgment_tasks: 7008",
+    )
+
+    FINAL_TEXT = (
+        "missing_judgments: 0",
+        "failed_judgments: 0",
+        "conflicting_judgments: 0",
+        "fully_judged: true",
+        "partial output must never be called complete",
+        "fresh cache-only replay is the exact completion authority",
+    )
+
+    DEDUP_TEXT = (
+        "task counts differ from unique judge prompt identities",
+        "one hosted success may fill multiple tasks",
+        "hosted_calls",
+        "selected unique uncached identities",
+        "fresh cache-only replay",
+    )
+
+    PAYLOAD_TEXT = (
+        "local private task objects retain narrative/source metadata",
+        "hosted prompt contains only one generated statement and cited selected-evidence text",
+        "task_id",
+        "evaluator",
+        "instruction",
+        "no narrative/source metadata or unrelated topic data is in the provider prompt",
+    )
+
     def test_accepted_workflow_documentation(self) -> None:
-        documentation = (
-            REPOSITORY_ROOT / ".agents/skills/trec-rag-competition-debug-report/SKILL.md",
-            REPOSITORY_ROOT / "code/trec_rag/README.md",
-        )
-        for path in documentation:
+        for path, heading in self.DOCUMENTS:
             content = path.read_text(encoding="utf-8").lower()
-            for required in self.REQUIRED_TEXT:
-                with self.subTest(document=path.name, required=required):
-                    self.assertIn(required, content)
+            section = re.sub(r"\s+", " ", self._section(content, heading)).strip()
+            with self.subTest(document=path.name):
+                for required in self.COMMON_TEXT:
+                    self.assertIn(required, section)
+
+                inventory = self._subsection(
+                    section,
+                    "1. cache-only inventory",
+                    "2. one-task probe",
+                )
+                final_replay = self._subsection(section, "4. final cache-only replay")
+                for required in self.SCOPE_TEXT:
+                    with self.subTest(phase="cache-only inventory", required=required):
+                        self.assertIn(required, inventory)
+                    with self.subTest(phase="final cache-only replay", required=required):
+                        self.assertIn(required, final_replay)
+                for required in self.FINAL_TEXT:
+                    with self.subTest(phase="final cache-only replay", required=required):
+                        self.assertIn(required, final_replay)
+                for required in self.DEDUP_TEXT:
+                    with self.subTest(phase="deduplication", required=required):
+                        self.assertIn(required, section)
+                for required in self.PAYLOAD_TEXT:
+                    with self.subTest(phase="payload boundary", required=required):
+                        self.assertIn(required, section)
+                self.assertNotIn("hosted calls equal only to remaining misses", section)
 
 
 class ReceiptContractTests(EvaluationCase):

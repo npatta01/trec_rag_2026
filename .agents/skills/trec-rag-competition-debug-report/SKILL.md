@@ -151,11 +151,13 @@ The preserved multi-stage source identity is the private path
 The single-pass binding intentionally records that the original generation identity was not
 preserved; do not invent one from the post-run binding.
 
-The evaluator payload is minimized to one generated statement, the cited selected-evidence
-text, and narrative/source metadata for that citation task. It contains no unrelated topic data,
-retrieval TSV, full-text archive, qrels, gold nuggets, generated-claim-as-gold data,
-or credentials. Keep private work, support tasks, raw events, judgments, manifests, and
-reports outside git.
+Local private task objects retain narrative/source metadata under `metadata.source`, plus one
+generated statement and cited selected-evidence text for reconciliation. The hosted prompt contains
+only one generated statement and cited selected-evidence text. The transport/evaluator envelope
+may carry `task_id`, `evaluator`, and the rendered `instruction`; no narrative/source metadata or
+unrelated topic data is in the provider prompt. Retrieval TSV, full-text archive, qrels, gold
+nuggets, generated-claim-as-gold data, and credentials remain excluded. Keep private work,
+support tasks, raw events, judgments, manifests, and reports outside git.
 
 The exact accepted-mode flags are `--accepted-rag`, `--accepted-bundle-metadata`,
 `--handoff-manifest`, and (only for the multi-stage run) `--source-identity`. The command
@@ -198,6 +200,12 @@ namespace, and adding the source identity:
   --output /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ms1-final/evaluation_report.html
 ```
 
+Before any probe, enforce the exact accepted scope and task inventory. The receipt's
+`manifest.scope.topic_ids` must equal the authenticated handoff's exact ordered 119 topic IDs;
+do not pass a `--topic` subset. The cache-only receipt must show `judgment_tasks: 3155` for
+`rag26-ss1` and `judgment_tasks: 7008` for `rag26-ms1-final`, alongside the recorded hit/miss
+fields above. These are scope gates, not estimates.
+
 #### 2. One-task probe (one authorized hosted call)
 
 Only after reviewing the cache-only receipt and explicit evaluation authorization, rerun the
@@ -215,15 +223,20 @@ with `--run-judge --judge-workers 4` and no judge limit. This is a bounded full 
 most four hosted judge calls run concurrently, and cached tasks never occupy workers. Do not
 run concurrent evaluator commands against the same cache. Resume the same command after an
 interruption. Require `reused_from_cache >= 1`, `failed_judgments: 0`,
-`conflicting_judgments: 0`, and hosted calls equal only to remaining misses.
+`conflicting_judgments: 0`. Task counts differ from unique judge prompt identities: one hosted
+success may fill multiple tasks. Therefore `hosted_calls` is bounded by the selected unique
+uncached identities, not raw missing tasks; `--judge-limit` limits those selected identities.
 
 #### 4. Final cache-only replay
 
 After the bounded resume, run each accepted command once more with `--run-judge` omitted,
 the same cache, and a fresh private replay work/output directory. This final cache-only replay
-must show `hosted_calls: 0`, `missing_judgments: 0`, `failed_judgments: 0`,
-`conflicting_judgments: 0`, and `fully_judged: true`. A partial output must never be called
-complete; a report is complete only after this replay proves all checks. Missing qrels/gold
+A fresh cache-only replay is the exact completion authority. It must repeat the exact ordered
+119 topic IDs in `manifest.scope.topic_ids` and `judgment_tasks: 3155` for `rag26-ss1` or `judgment_tasks: 7008` for
+`rag26-ms1-final`, and must show `hosted_calls: 0`, `missing_judgments: 0`,
+`failed_judgments: 0`, `conflicting_judgments: 0`, and `fully_judged: true`. A partial output
+must never be called complete; a report is complete only after this replay proves all checks.
+Missing qrels/gold
 metrics remain `Unavailable`: qrels-based retrieval metrics require matching qrels, and nugget
 coverage requires released gold nuggets plus complete assignments. Never render either as zero
 or treat generated claims as gold.
@@ -281,7 +294,12 @@ If the probe receipt is already `fully_judged: true`, finish there. Otherwise re
   --run-judge
 ```
 
-Require `reused_from_cache >= 1` (the probe was reused, not re-sent), `failed_judgments: 0`, `conflicting_judgments: 0`, and `hosted_calls` equal to the remaining misses rather than the full task count. `--judge-limit` requires `--run-judge` and must be a positive number. Do not run concurrent judging commands against the same cache directory.
+Require `reused_from_cache >= 1` (the probe was reused, not re-sent), `failed_judgments: 0`,
+and `conflicting_judgments: 0`. Task counts can exceed unique judge prompt identities, so
+one hosted success may fill multiple tasks; `hosted_calls` is bounded by selected unique
+uncached identities rather than raw remaining misses. `--judge-limit` requires `--run-judge`
+and must be a positive number. Do not run concurrent judging commands against the same cache
+directory.
 
 The command writes a private `evaluation_manifest.json` bundle and renders the HTML from it. Read the receipt and confirm `hosted_calls`, the cache counters, the topic order, and `fully_judged` before reporting results. A complete cache hit must show `hosted_calls: 0`.
 

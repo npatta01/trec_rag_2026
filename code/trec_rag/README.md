@@ -2249,6 +2249,15 @@ The preserved multi-stage source identity is
 The single-pass source identity is unavailable by provenance; do not invent a historical
 generation identity from the accepted post-run binding.
 
+Local private task objects retain narrative/source metadata under `metadata.source`, plus one
+generated statement and cited selected-evidence text for reconciliation. The hosted prompt contains
+only one generated statement and cited selected-evidence text. The transport/evaluator envelope
+may carry `task_id`, `evaluator`, and the rendered `instruction`; no narrative/source metadata or
+unrelated topic data is in the provider prompt. Retrieval TSV, full-text ZIP, qrels, gold
+nuggets, generated-claim-as-gold data, credentials, and provider events remain excluded.
+
+##### 1. Cache-only inventory (zero hosted calls)
+
 Use the same private cache for all four phases: cache-only inventory, one-task probe, bounded
 full resume, and final cache-only replay. The cache-only phase makes zero hosted calls and
 must record `completed_judgments`, `missing_judgments`, `failed_judgments`,
@@ -2282,27 +2291,43 @@ Repeat that command for multi-stage with its accepted path and source identity:
   --output /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ms1-final/evaluation_report.html
 ```
 
+Before any probe, enforce the exact accepted scope and task inventory. The receipt's
+`manifest.scope.topic_ids` must equal the authenticated handoff's exact ordered 119 topic IDs;
+do not pass a `--topic` subset. The cache-only receipt must show `judgment_tasks: 3155` for
+`rag26-ss1` and `judgment_tasks: 7008` for `rag26-ms1-final`, alongside the recorded hit/miss
+fields above. These are scope gates, not estimates.
+
+##### 2. One-task probe (one authorized hosted call)
+
 After reviewing each cache-only receipt, the one-task probe reruns the same command with
 `--run-judge --judge-limit 1 --judge-workers 1`. This is the exact one-worker bound and at
 most one hosted call. Require `hosted_calls: 1`, `failed_judgments: 0`,
 `conflicting_judgments: 0`, and an increase in `completed_judgments`; stop on any mismatch.
+
+##### 3. Bounded full resume
+
 Then resume the same cache with `--run-judge --judge-workers 4` and no limit. Four is the
 maximum concurrent worker bound; cached tasks never occupy workers, and the same command is
 safe to resume after interruption. `--judge-limit` and non-default `--judge-workers` require
-`--run-judge`; never run concurrent commands against one cache.
+`--run-judge`; never run concurrent commands against one cache. Task counts differ from unique
+judge prompt identities: one hosted success may fill multiple tasks. Therefore `hosted_calls`
+is bounded by selected unique uncached identities, not raw missing tasks; `--judge-limit` limits
+those selected identities.
+
+##### 4. Final cache-only replay
 
 Once the full resume reports no failed or conflicting judgments, replay each run cache-only
-without `--run-judge` into a fresh private replay work directory. Completion requires
+without `--run-judge` into a fresh private replay work directory. A fresh cache-only replay is
+the exact completion authority. It must repeat the exact ordered 119 topic IDs in
+`manifest.scope.topic_ids` and `judgment_tasks: 3155` for `rag26-ss1` or `judgment_tasks: 7008` for
+`rag26-ms1-final`. Completion requires
 `hosted_calls: 0`, `missing_judgments: 0`, `failed_judgments: 0`,
-`conflicting_judgments: 0`, and `fully_judged: true`. A partial output must not be called
+`conflicting_judgments: 0`, and `fully_judged: true`. A partial output must never be called
 complete. Qrels-based retrieval metrics remain unavailable without matching qrels, and nugget
 coverage remains unavailable without released gold nuggets and complete assignments; never
 render unavailable as zero or treat generated claims as gold.
 
-The hosted payload is minimized to one generated statement, cited selected-evidence text, and
-narrative/source metadata for that task. No unrelated topic data, retrieval TSV, full-text ZIP,
-qrels, gold nuggets, credentials, or provider events are sent. Private work, raw events,
-judgments, manifests, and detailed reports remain outside git. Only HTML written by
+Private work, raw events, judgments, manifests, and detailed reports remain outside git. Only HTML written by
 `trec_rag.friendly_report.write_report` after its privacy scan may be copied to the existing
 tailnet-only portal; never use a new listener or public URL. The approved derived filenames are
 `trec-rag-2026-ragdoll-rag26-ss1.html` and

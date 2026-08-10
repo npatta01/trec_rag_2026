@@ -130,6 +130,67 @@ they are recoverable under `/home/npatta01/.local/share/Trash/files/`.
 - No organizer artifact, report hub, portal file, or unrelated worktree change was
   touched. No hosted calls were made.
 
+## Fix Round 1
+
+### Reviewer findings addressed
+
+- Replaced the broad document keyword scan with section-anchored semantic checks for
+  the accepted-workflow sections in both operator documents. The test now requires the
+  cache-only inventory and final replay to assert `manifest.scope.topic_ids` against the
+  exact ordered 119-topic handoff scope, `judgment_tasks: 3155` for `rag26-ss1`, and
+  `judgment_tasks: 7008` for `rag26-ms1-final`. The final replay additionally requires
+  zero missing, failed, and conflicting judgments plus `fully_judged: true`.
+- Removed the incorrect requirement that hosted calls equal raw remaining misses. Both
+  documents now state that task counts can exceed unique judge prompt identities, one
+  hosted success can fill multiple tasks, and `hosted_calls` is bounded by selected
+  unique uncached identities. The fresh cache-only replay remains the exact completion
+  authority.
+- Corrected egress language: local private task objects retain narrative/source metadata
+  under `metadata.source`, while the provider prompt contains only one generated statement
+  and cited selected-evidence text. `task_id`, `evaluator`, and rendered `instruction` are
+  identified as transport/evaluator envelope fields; no narrative/source metadata or
+  unrelated topic data is in the provider prompt.
+
+### RED and GREEN evidence
+
+The first fix-round contract run failed because the existing docs lacked the anchored
+scope/task gates, deduplication semantics, and exact egress distinction:
+
+```text
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py -k accepted_workflow_documentation -q
+2 failed, 1 passed, 109 deselected, 24 subtests passed
+```
+
+After updating both documents and the contract test:
+
+```text
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py -k accepted_workflow_documentation -q
+1 passed, 109 deselected, 60 subtests passed
+```
+
+### Fix-round verification
+
+```text
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_offline_evaluation.py \
+  code/tests/test_accepted_rag_evaluation.py \
+  code/tests/test_ragdoll_io.py -q
+171 passed, 88 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest \
+  code/tests/test_competition_debug_report_skill.py -q
+12 passed, 10 subtests passed
+
+PYTHONPATH=code .venv/bin/python -m pytest -q
+3233 passed, 19 skipped, 121 subtests passed in 110.98s
+```
+
+`git diff --check` and targeted test compilation passed. No hosted calls were made.
+The fresh full suite started after moving only stale pytest-owned temporary fixtures to
+the recoverable user Trash.
+
 ## Commit
 
-Planned commit message: `docs: preflight accepted RAG evaluations`.
+Fix-round commit message: `docs: clarify accepted RAG evaluation preflight`.
