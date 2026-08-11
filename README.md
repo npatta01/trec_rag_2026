@@ -8,6 +8,39 @@ The published hub is the best place to start. It presents the final system
 architecture, accepted submission records, the 2026 Retrieval quality report,
 and both 2026 RAGDoll evaluations in one reader-friendly site.
 
+## The problem
+
+TREC RAG 2026 asks systems to answer complex information needs using the
+ClimbMix corpus. A useful system must retrieve trustworthy evidence for every
+part of an official narrative, turn that evidence into a clear answer, and keep
+each factual claim traceable to an allowed source. Our submission addresses
+both sides of that problem: variable-depth Retrieval rankings and cited RAG
+answers derived from one authenticated evidence source.
+
+[![The NP Labs TREC RAG 2026 system: bounded source retrieval creates one authenticated source, which branches into three Retrieval submissions and two evidence-grounded RAG submissions.](reports/2026-competition-architecture/01-whole-system.svg)](reports/2026-competition-architecture.html)
+
+*Open the diagram in the [Architecture Report](reports/2026-competition-architecture.html) for the full guided walkthrough.*
+
+## Project at a glance
+
+| Verified scope | Count |
+| --- | ---: |
+| Official narratives | 119 |
+| Retrieval runs | 3 |
+| RAG runs | 2 |
+| Evalbase-accepted organizer files | 5 |
+
+### Reports for reviewers
+
+- [Architecture Report](reports/2026-competition-architecture.html) — the final
+  system from bounded source retrieval through all five accepted files.
+- [Retrieval Quality Report](reports/2026-retrieval-nugget-coverage.html) —
+  evidence coverage analysis across the 119 official narratives.
+- [RAGDoll Evaluation — Single-pass RAG](reports/2026-ragdoll-rag26-ss1.html) —
+  citation-support analysis for `rag26-ss1`.
+- [RAGDoll Evaluation — Multi-stage RAG](reports/2026-ragdoll-rag26-ms1-final.html)
+  — citation-support analysis for `rag26-ms1-final`.
+
 ## Repository references
 
 - [Submission ledger](submissions/trec-rag-2026/SUBMISSION_LEDGER.md) — exact
@@ -19,12 +52,6 @@ and both 2026 RAGDoll evaluations in one reader-friendly site.
   — combined Retrieval format and organizer AutoJudge preflight.
 - [Implementation reference](code/trec_rag/README.md) — pipeline behavior,
   commands, reproduction boundaries, and evaluation workflow.
-
-The completed architecture starts from one authenticated source-retrieval
-artifact. Cache-first replay produces the Retrieval submissions, while a sealed
-selected-evidence handoff independently feeds the single-pass and bounded
-multi-stage RAG systems. The organizer-facing Retrieval TSV is not used as
-Generation input.
 
 ## Developer notes
 
