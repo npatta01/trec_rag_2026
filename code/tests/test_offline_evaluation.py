@@ -1350,7 +1350,7 @@ class PrivacyTests(EvaluationCase):
         write_report(bundle.manifest, output)
         original = output.read_bytes()
         with self.assertRaises(ReportPrivacyError):
-            write_report(bundle.manifest, output, denylist=("Private post-run evaluation",))
+            write_report(bundle.manifest, output, denylist=("Post-run evaluation",))
         self.assertEqual(output.read_bytes(), original)
         self.assertEqual([p for p in output.parent.glob("*.tmp-*")], [])
 
@@ -1855,7 +1855,9 @@ class AcceptedWorkflowDocumentationTests(unittest.TestCase):
         "gold nuggets",
         "unavailable",
         "partial",
-        "tailnet-only",
+        "github pages",
+        "reports/2026-ragdoll-rag26-ss1.html",
+        "reports/2026-ragdoll-rag26-ms1-final.html",
     )
 
     SCOPE_TEXT = (

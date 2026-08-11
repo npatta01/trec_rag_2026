@@ -32,11 +32,11 @@ const analysisLinks = [
   ["Retrieval Quality Analysis", "2026-retrieval-nugget-coverage.html"],
   [
     "RAG Analysis: rag26-ss1",
-    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html",
+    "2026-ragdoll-rag26-ss1.html",
   ],
   [
     "RAG Analysis: rag26-ms1-final",
-    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html",
+    "2026-ragdoll-rag26-ms1-final.html",
   ],
 ];
 
@@ -118,13 +118,8 @@ for (const [label, href] of analysisLinks) {
   assert(qmdOccurrences === 1, `QMD should link ${href} exactly once`);
   assert(htmlOccurrences === 1, `rendered report should link ${href} exactly once`);
 }
-for (const href of analysisLinks.slice(1).map(([, target]) => target)) {
-  const hrefIndex = normalizedQmd.indexOf(href);
-  const nearby = normalizedQmd.slice(Math.max(0, hrefIndex - 180), hrefIndex + href.length + 240);
-  assert(
-    nearby.includes("Private / tailnet"),
-    `QMD should mark ${href} as Private / tailnet near the link`,
-  );
+for (const href of analysisLinks.map(([, target]) => target)) {
+  assert(fs.existsSync(path.join(reportsRoot, href)), `architecture target should exist: ${href}`);
 }
 assert(
   ![...normalizedQmd.matchAll(/href="([^"]+)"/g)].some(([, href]) => /comparison|side[- ]by[- ]side/i.test(href)),
@@ -432,12 +427,14 @@ const evaluationSignals = [
   "reports/2026-retrieval-nugget-coverage.html",
   "rag26-ss1",
   "rag26-ms1-final",
-  "Private / tailnet",
+  "reports/2026-ragdoll-rag26-ss1.html",
+  "reports/2026-ragdoll-rag26-ms1-final.html",
   ".agents/skills/trec-rag-competition-debug-report/SKILL.md",
   "citation support",
   "not an official TREC score",
   "immutable evaluated inputs",
-  "raw evaluation work stays outside git",
+  "only the two privacy-scanned standalone HTML reports are public",
+  "outside git and private",
   "accepted files and priorities remain unchanged",
 ];
 for (const signal of evaluationSignals) {
@@ -447,12 +444,12 @@ for (const signal of evaluationSignals) {
 const acceptedRagBindings = [
   [
     "rag26-ss1",
-    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html",
+    "reports/2026-ragdoll-rag26-ss1.html",
     "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl",
   ],
   [
     "rag26-ms1-final",
-    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html",
+    "reports/2026-ragdoll-rag26-ms1-final.html",
     "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl",
   ],
 ];
@@ -464,13 +461,13 @@ function assertAgentRagBindings(source) {
         escapeRegExp(runId) +
         "\\]\\(" +
         escapeRegExp(reportUrl) +
-        "\\)\\s+—\\s+\\*\\*Private / tailnet\\*\\*;[\\s\\S]{0,360}?input: `" +
+        "\\);[\\s\\S]{0,360}?input: `" +
         escapeRegExp(inputPath) +
         "`",
     );
     assert(
       bindingPattern.test(source),
-      `AGENTS.md should bind ${runId} to its private URL and accepted input`,
+      `AGENTS.md should bind ${runId} to its tracked report and accepted input`,
     );
   }
 }

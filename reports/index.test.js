@@ -26,6 +26,8 @@ const requiredSignals = [
   "TREC RAG 2026 Competition Architecture",
   "one frozen authenticated source",
   "2026-competition-architecture.html",
+  "2026-ragdoll-rag26-ss1.html",
+  "2026-ragdoll-rag26-ms1-final.html",
   "TREC RAG 2025 Writeups",
   "Promising 2025 RAG Architecture",
   "Narrative to verified answer",
@@ -79,15 +81,31 @@ for (const linkedFile of linkedFiles) {
   assert(fs.existsSync(path.join(root, linkedFile)), `Linked report should exist: ${linkedFile}`);
 }
 
+const publicRagReports = [
+  ["2026-ragdoll-rag26-ss1.html", "3155 judge tasks", "1335 full support", "1809 partial support", "11 no support"],
+  ["2026-ragdoll-rag26-ms1-final.html", "7008 judge tasks", "1651 full support", "5136 partial support", "221 no support"],
+];
+for (const [filename, ...signals] of publicRagReports) {
+  const reportPath = path.join(root, filename);
+  const source = fs.readFileSync(reportPath, "utf8");
+  assert(fs.statSync(reportPath).size < 10_000_000, `${filename} should stay below 10 MB`);
+  for (const signal of signals) {
+    assert(source.includes(signal), `${filename} should include ${signal}`);
+  }
+  for (const forbidden of ["/home/", "tail481212", "Private post-run evaluation", "Bearer "]) {
+    assert(!source.includes(forbidden), `${filename} should not expose ${forbidden}`);
+  }
+}
+
 const analysisLinks = [
   ["Retrieval Quality Analysis", "2026-retrieval-nugget-coverage.html"],
   [
     "RAG Analysis: rag26-ss1",
-    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html",
+    "2026-ragdoll-rag26-ss1.html",
   ],
   [
     "RAG Analysis: rag26-ms1-final",
-    "https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html",
+    "2026-ragdoll-rag26-ms1-final.html",
   ],
 ];
 
@@ -141,13 +159,8 @@ for (const [label, href] of analysisLinks) {
   assert(occurrences === 1, `reports index should link ${href} exactly once`);
   assert(html.includes(label), `reports index should label ${label}`);
 }
-for (const href of analysisLinks.slice(1).map(([, target]) => target)) {
-  const hrefIndex = html.indexOf(`href="${href}"`);
-  const nearby = html.slice(Math.max(0, hrefIndex - 180), hrefIndex + href.length + 240);
-  assert(
-    nearby.includes("Private / tailnet"),
-    `reports index should mark ${href} as Private / tailnet near the link`,
-  );
+for (const href of analysisLinks.map(([, target]) => target)) {
+  assert(fs.existsSync(path.join(root, href)), `analysis report should exist: ${href}`);
 }
 assert(
   !reportHrefs.some((href) => /comparison|side[- ]by[- ]side/i.test(href)),

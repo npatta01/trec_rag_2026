@@ -841,7 +841,7 @@ def _render_hero(view: Presentation) -> str:
         [
             '    <header class="hero">',
             '      <div class="hero-inner">',
-            '        <p class="eyebrow">Private post-run evaluation</p>',
+            '        <p class="eyebrow">Post-run evaluation</p>',
             "        <h1>Retrieval and answer evaluation</h1>",
             f'        <p class="lede">{len(view.topic_ids)} topic(s) in declared order. '
             f"RAGDoll judged {judged} statement-citation pair(s): "
@@ -1558,14 +1558,13 @@ _PAGE = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="robots" content="noindex,nofollow,noarchive">
-  <title>TREC RAG private post-run evaluation</title>
+  <title>TREC RAG post-run evaluation</title>
   <style>{style}  </style>
 </head>
 <body>
   <main>
 {body}
-    <footer>Private post-run evaluation. It intentionally includes narratives, generated
+    <footer>Post-run evaluation. It intentionally includes narratives, generated
     subnarratives, and answer text. It excludes corpus passages, document identifiers,
     credentials, and raw provider responses.</footer>
   </main>

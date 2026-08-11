@@ -2341,15 +2341,15 @@ complete. Qrels-based retrieval metrics remain unavailable without matching qrel
 coverage remains unavailable without released gold nuggets and complete assignments; never
 render unavailable as zero or treat generated claims as gold.
 
-Private work, raw events, judgments, manifests, and detailed reports remain outside git. Only HTML written by
-`trec_rag.friendly_report.write_report` after its privacy scan may be copied to the existing
-tailnet-only portal; never use a new listener or public URL. The approved derived filenames are
-`trec-rag-2026-ragdoll-rag26-ss1.html` and
-`trec-rag-2026-ragdoll-rag26-ms1-final.html`, served only through the existing tailnet-only
-mapping at:
+Private work, raw events, judgments, and manifests remain outside git. The two standalone HTML
+reports written by `trec_rag.friendly_report.write_report` passed its fail-closed privacy scan
+and are intentionally published through GitHub Pages at:
 
-- `https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html`
-- `https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html`
+- `reports/2026-ragdoll-rag26-ss1.html`
+- `reports/2026-ragdoll-rag26-ms1-final.html`
+
+Do not publish the underlying work directories, caches, JSONL judgments, manifests, corpus
+passages, document identifiers, credentials, or raw provider responses.
 
 ### `retrieval_nugget_coverage.py`
 

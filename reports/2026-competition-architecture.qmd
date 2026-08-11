@@ -528,14 +528,14 @@ Existing tracked 119-topic Retrieval coverage analysis.
 ::: {.artifact-card}
 ### RAG Analysis: rag26-ss1
 
-[RAG Analysis: rag26-ss1](https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html) · **Private / tailnet**<br>
+[RAG Analysis: rag26-ss1](2026-ragdoll-rag26-ss1.html)<br>
 Separate 119-topic RAGDoll citation-support report for accepted single-pass
 RAG. It is not an official TREC correctness score.
 :::
 ::: {.artifact-card}
 ### RAG Analysis: rag26-ms1-final
 
-[RAG Analysis: rag26-ms1-final](https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html) · **Private / tailnet**<br>
+[RAG Analysis: rag26-ms1-final](2026-ragdoll-rag26-ms1-final.html)<br>
 Separate 119-topic RAGDoll citation-support report for accepted multi-stage
 RAG. It is not an official TREC correctness score.
 :::

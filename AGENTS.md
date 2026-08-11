@@ -38,18 +38,19 @@ Final analyses and their boundary:
   is the project's separate 119-topic Retrieval coverage report.
 - The accepted RAG files are the immutable evaluated inputs for two separate
   119-topic RAGDoll citation-support reports:
-  - [RAG Analysis: rag26-ss1](https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ss1.html) — **Private / tailnet**;
+  - [RAG Analysis: rag26-ss1](reports/2026-ragdoll-rag26-ss1.html);
     input: `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl`.
-  - [RAG Analysis: rag26-ms1-final](https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-ragdoll-rag26-ms1-final.html) — **Private / tailnet**;
+  - [RAG Analysis: rag26-ms1-final](reports/2026-ragdoll-rag26-ms1-final.html);
     input: `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl`.
 - These reports measure citation support, not an official TREC score. qrel/gold
   metrics are unavailable; generated claims are not gold nuggets. RAGDoll
   results did not change the accepted files or priorities—there was no priority
   influence, and the accepted files and priorities remain unchanged.
 - Use [`.agents/skills/trec-rag-competition-debug-report/SKILL.md`](.agents/skills/trec-rag-competition-debug-report/SKILL.md)
-  for the accepted-input evaluation contract. Keep it explicit: raw evaluation
-  work stays outside git and the rendered portal. Keep work directories, caches,
-  raw passages, tasks, events, judgments, assignments, and manifests private.
+  for the accepted-input evaluation contract. Keep it explicit: only the two
+  privacy-scanned standalone HTML reports are public. Keep work directories,
+  caches, raw passages, tasks, events, judgments, assignments, and manifests
+  outside git and private.
 
 Treat the five organizer files under `submissions/trec-rag-2026/` as immutable
 accepted artifacts. Documentation may link and verify them, but must not
