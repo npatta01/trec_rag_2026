@@ -1,36 +1,37 @@
-# TREC RAG 2026 Architecture Figures
+# TREC RAG 2026 Final Architecture Figures
 
-These nine SVGs are reusable views of the supported competition path at commit
-`7e9d3b9`. Their geometry is **conceptual**, not a measurement of throughput or
-relative volume. The guide's extreme-heat narrative is **fictional** and does
-not reproduce a TREC test topic, corpus passage, or model answer.
+These nine SVGs are reusable views of the final TREC RAG 2026 submission
+architecture. Their geometry is **conceptual**, not a measurement of throughput,
+cost, confidence, or relative volume. They contain aggregate provenance and no
+test narrative, corpus passage, prompt, provider response, or generated answer.
 
-Every figure is self-contained: it has a theme-aware light/dark palette, visible
-labels, an accessible title and description, and redundant shape/line semantics
-so color is never the only carrier of meaning. Solid arrows carry data or
-evidence. Dashed arrows carry advisory, retry, or control flow.
+Every figure is self-contained: it has a theme-aware light/dark palette,
+visible labels, an accessible title and description, and redundant shape/line
+semantics so color is never the only carrier of meaning. Solid arrows carry
+data or evidence. Dashed arrows carry advisory, fallback, or validation flow.
 
 | Figure | Reader question | Primary source | Text equivalent |
 |---|---|---|---|
-| `01-whole-system.svg` | What is the complete supported path? | `AGENTS.md`; `code/trec_rag/README.md`; `code/trec_rag/competition_retrieval.py`; `code/trec_rag/competition_rag.py` | Narrative enters Retrieval; only an authenticated evidence handoff enters Generation; validated answers become organizer RAG JSONL, while the run and ZIP remain separate Retrieval outputs. |
-| `02-retrieval-system.svg` | How does Retrieval widen and narrow? | `configs/rag26_competition_retrieval_v2.yaml`; `code/trec_rag/facet_extraction.py`; `code/trec_rag/competition_retrieval.py` | The original narrative supplies one lane. Up to eight subnarratives supply one to three BM25 queries each: up to 24 planned query lanes and 25 total searches. Every query independently retrieves at most 1,000 documents, ranks chunks, and retains at most 100 passages before evidence selection. |
-| `03-bounded-deepseek-planning.svg` | In what sense is planning agentic? | `code/trec_rag/facet_extraction.py`; `code/trec_rag/competition_retrieval.py` | One strict DeepSeek call may add zero to eight subnarratives, each with one to three BM25 queries. The untouched original lane always remains; failure falls back to it, with no open-ended search loop. |
-| `04-per-query-candidate-accounting.svg` | What do the 1,000 and 100 ceilings count? | `configs/rag26_competition_retrieval_v2.yaml`; `code/trec_rag/shared_passage_retrieval.py` | For one original or planned BM25 query, at most 1,000 documents become overlapping chunks, Mixedbread scores them as passages, and one global top list retains at most 100 passages. The process repeats per query lane. |
-| `05-evidence-and-nuggetizer.svg` | Which material is factual authority? | `configs/rag26_competition_retrieval_v2.yaml`; `code/trec_rag/evidence_local.py`; `code/trec_rag/canonical_nuggets.py` | Local exact-span selection yields up to 40 factual evidence items per subnarrative. Nuggetizer may produce up to 20 advisory hints with up to three supporting documents each; failure leaves extractive evidence intact. |
-| `06-generation-handoff-contract.svg` | What may cross into Generation? | `code/trec_rag/generation_handoff.py`; `code/trec_rag/competition_rag.py` | The canonical, hash-authenticated handoff carries narrative, evidence, hints, citation IDs, and receipts. The run, ZIP, qrels, gold nuggets, and RAGDoll scores are barred. |
-| `07-sol-generation.svg` | What does Sol receive and return? | `configs/rag26_competition_rag_gpt_sol_v2.yaml`; `code/trec_rag/competition_rag.py` | GPT-5.6 Sol receives a deterministic projection of the handoff, uses medium reasoning and strict structured output under a 12,000-token ceiling, and returns answer objects citing raw allowed document IDs. |
-| `08-validation-and-retries.svg` | Why are there two retry limits? | `configs/rag26_competition_rag_gpt_sol_v2.yaml`; `code/trec_rag/competition_rag.py` | Each hosted request has at most three transport attempts. A topic has at most two semantic attempts around generation and local validation, followed by deterministic citation-index conversion. |
-| `09-organizer-output-split.svg` | Which stage publishes which organizer artifact? | `code/trec_rag/retrieval_export.py`; `code/trec_rag/competition_retrieval.py`; `code/trec_rag/competition_rag.py` | Retrieval publishes the evidence run, full-text ZIP, and receipt plus the private handoff; Generation consumes only the handoff and publishes organizer RAG JSONL. |
+| `01-whole-system.svg` | How does one frozen source become five accepted files? | `submissions/trec-rag-2026/SUBMISSION_LEDGER.md`; both bundle READMEs | Bounded source retrieval freezes one authenticated artifact. A cache-first branch emits three Retrieval TSVs; a sealed-evidence branch emits two RAG JSONLs. |
+| `02-frozen-source-retrieval.svg` | What produced the common source? | `configs/rag26_competition_retrieval_v2.yaml`; `competition_retrieval.py`; `facet_extraction.py` | The original narrative and bounded planned lanes cross Pyserini BM25, document chunking, Mixedbread passage scoring, evidence selection, and advisory hint generation before the source freezes. |
+| `03-bounded-deepseek-planning.svg` | Why is source planning bounded? | `facet_extraction.py`; final Retrieval architecture | One DeepSeek call may add zero to eight subnarratives with one to three BM25 queries each. The original lane survives and search never loops back to planning. |
+| `04-variable-depth-candidate-core.svg` | How is final Retrieval depth selected? | `retrieval_candidate_core.py`; final Retrieval architecture | Each authenticated lane applies a robust median/MAD gate. Their inclusive union gives a shared narrative-specific core of 1–121 documents, with an original-lane fallback. |
+| `05-targeted-scoring-and-runs.svg` | How do three runs share one document set? | `retrieval_baseline_runs.py`; Retrieval metadata | Cache-first Mixedbread scoring completes a targeted candidate-by-semantic-unit matrix. Combo, breadth, and narrative heads reorder identical per-narrative sets. |
+| `06-generation-handoff-contract.svg` | What is allowed to enter RAG? | `generation_handoff.py`; RAG bundle README | A canonical handoff carries exact narratives, selected passages, advisory hints, allowed citation IDs, receipts, and hashes. Retrieval TSVs, the ZIP, qrels, gold nuggets, and RAGDoll scores are barred. |
+| `07-single-pass-rag.svg` | How does the single-pass run work? | `competition_rag.py`; RAG metadata | Sol receives the complete selected-evidence context. Local schema, citation, exact-hint, and word-limit validation permits one bounded semantic retry before publication. |
+| `08-multistage-rag.svg` | How does the multi-stage run bound planning and revision? | `competition_rag_multistage.py`; `narrative_blueprint.py`; `bounded_splice.py`; `operation_screen.py` | Luna plans, audits, and screens; Sol drafts and proposes a bounded splice. Local code applies only safe operations or preserves the validated draft. |
+| `09-accepted-submissions.svg` | What proves the exact files are delivery-ready? | submission ledger; validation skill; bundle metadata | Three Retrieval files pass structural validation, two RAG files pass organizer AutoJudge, all hashes match, and Evalbase accepted all five. |
 
 ## Visual grammar
 
-- Teal rectangles: Retrieval work.
-- Indigo rectangles: Generation work.
+- Teal rectangles: source or submission Retrieval.
+- Indigo rectangles: RAG Generation.
 - Amber fills or dashed lines: advisory or bounded control flow.
-- Red bars: forbidden input or failed path.
+- Green capsules: accepted or validated completion.
+- Red bars: forbidden input.
 - Folded-corner documents: durable artifacts.
-- Diamonds: validation gates.
-- Cylinders: searched stores.
+- Diamonds: selection or validation gates.
+- Cylinders: searched or cached stores.
 
-Human-readable names stay in the diagrams. Exact model and configuration
-identifiers are spelled out in the guide's implementation notes.
+Human-readable names stay in the diagrams. Exact model, configuration, run,
+and artifact identifiers are spelled out in the guide's implementation notes.

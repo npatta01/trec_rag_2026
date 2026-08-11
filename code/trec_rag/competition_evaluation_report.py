@@ -134,12 +134,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="python -m trec_rag.competition_evaluation_report",
         description=(
             "Evaluate a completed retrieval + RAG run and render the private friendly report. "
-            "Both configs are required; use trec_rag.competition_debug_report for the "
-            "retrieval-only raw debug report."
+            "Use either a generation config or authenticated accepted RAG artifacts."
         ),
     )
     parser.add_argument("--retrieval-config", type=Path, required=True)
-    parser.add_argument("--rag-config", type=Path, required=True)
+    rag_input = parser.add_mutually_exclusive_group(required=True)
+    rag_input.add_argument("--rag-config", type=Path)
+    rag_input.add_argument("--accepted-rag", type=Path)
+    parser.add_argument("--accepted-bundle-metadata", type=Path)
+    parser.add_argument("--handoff-manifest", type=Path)
+    parser.add_argument("--source-identity", type=Path)
     parser.add_argument("--topic", action="append", dest="topic_ids", default=None)
     parser.add_argument("--work-dir", type=Path, default=None)
     parser.add_argument("--qrels", type=Path, default=None)
@@ -162,11 +166,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             "the probe is a cache hit and only remaining misses call the judge."
         ),
     )
+    parser.add_argument(
+        "--judge-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Bound concurrent hosted judge calls to N workers. The default is 1; values "
+            "other than the default require --run-judge."
+        ),
+    )
     arguments = parser.parse_args(argv)
+    if arguments.accepted_rag is not None:
+        if arguments.accepted_bundle_metadata is None or arguments.handoff_manifest is None:
+            parser.error(
+                "--accepted-rag requires --accepted-bundle-metadata and --handoff-manifest"
+            )
+    elif any(
+        value is not None
+        for value in (
+            arguments.accepted_bundle_metadata,
+            arguments.handoff_manifest,
+            arguments.source_identity,
+        )
+    ):
+        parser.error(
+            "--accepted-bundle-metadata, --handoff-manifest, and --source-identity "
+            "are only valid with --accepted-rag"
+        )
+    if arguments.accepted_rag is None and arguments.source_identity is not None:
+        parser.error("--source-identity is only valid with --accepted-rag")
     if arguments.judge_limit is not None and arguments.judge_limit < 1:
         parser.error("--judge-limit must be a positive number of hosted calls")
     if arguments.judge_limit is not None and not arguments.run_judge:
         parser.error("--judge-limit only applies with --run-judge, which makes hosted calls")
+    if arguments.judge_workers < 1:
+        parser.error("--judge-workers must be a positive number of workers")
+    if arguments.judge_workers != 1 and not arguments.run_judge:
+        parser.error("--judge-workers only applies with --run-judge, which makes hosted calls")
 
     repository_root = find_repo_root(Path.cwd())
     work_dir = _private_directory(arguments.work_dir)
@@ -180,16 +217,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     bundle = build_evaluation_bundle(
         retrieval_config_path=arguments.retrieval_config,
-        rag_config_path=arguments.rag_config,
         work_dir=work_dir,
         repository_root=repository_root,
         cache_root=cache_root,
+        rag_config_path=arguments.rag_config,
+        accepted_submission_path=arguments.accepted_rag,
+        accepted_bundle_metadata_path=arguments.accepted_bundle_metadata,
+        handoff_manifest_path=arguments.handoff_manifest,
+        source_identity_path=arguments.source_identity,
         topic_ids=arguments.topic_ids,
         qrels_path=arguments.qrels,
         gold_nuggets_path=arguments.gold_nuggets,
         judge=judge,
         judge_settings=settings,
         judge_limit=arguments.judge_limit,
+        judge_workers=arguments.judge_workers,
     )
 
     output_path = (
@@ -201,6 +243,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     # cache, qrels, and output paths would leak the private filesystem layout and the privacy
     # scan rejects them. This is therefore a portable command *shape*, not the exact
     # invocation; the exact one is recorded privately in the receipt below.
+    rag_command = (
+        ["--rag-config", _portable(arguments.rag_config, repository_root)]
+        if arguments.rag_config is not None
+        else [
+            "--accepted-rag", _portable(arguments.accepted_rag, repository_root),
+            "--accepted-bundle-metadata",
+            _portable(arguments.accepted_bundle_metadata, repository_root),
+            "--handoff-manifest",
+            _portable(arguments.handoff_manifest, repository_root),
+            *(
+                ["--source-identity", _portable(arguments.source_identity, repository_root)]
+                if arguments.source_identity is not None
+                else []
+            ),
+        ]
+    )
     command = " ".join(
         shlex.quote(part)
         for part in [
@@ -209,8 +267,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "trec_rag.competition_evaluation_report",
             "--retrieval-config",
             _portable(arguments.retrieval_config, repository_root),
-            "--rag-config",
-            _portable(arguments.rag_config, repository_root),
+            *rag_command,
             *[part for topic_id in (arguments.topic_ids or []) for part in ("--topic", topic_id)],
         ]
     )
@@ -254,6 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "label_counts": bundle.manifest["judgments"]["label_counts"],
                 "fully_judged": bundle.manifest["judgments"]["fully_judged"],
                 "judge_limit": arguments.judge_limit,
+                "judge_workers": arguments.judge_workers,
                 "skipped_by_judge_limit": judge_report["skipped_by_judge_limit"],
                 "exact_invocation": exact_invocation,
             },

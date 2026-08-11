@@ -36,6 +36,7 @@ from trec_rag.competition_debug_report import (
     TopicPageNavigation,
     TopicReport,
     _REPORT_SCHEMA_VERSION,
+    rag_included,
     render_debug_topic_page,
 )
 from trec_rag.friendly_report import assert_publishable, build_presentation
@@ -228,7 +229,7 @@ def build_run_summary(
         canonical_nuggets=sum(topic.nuggets for topic in topics),
         distributions=distributions,
         evaluation=evaluation,
-        rag_included=data.rag_config_path is not None,
+        rag_included=rag_included(data),
     )
 
 
@@ -2214,7 +2215,7 @@ def build_bundle_from_data(
             "index": index_receipt.as_json(),
             "topics": [receipt.as_json() for receipt in topic_receipts],
             "sources": dict(sorted(data.source_sha256s.items())),
-            "rag_included": data.rag_config_path is not None,
+            "rag_included": rag_included(data),
             "evaluation": (
                 {
                     "included": True,
@@ -2331,7 +2332,7 @@ def build_bundle_from_data(
             bundle_manifest_sha256=manifest_receipt.sha256,
             page_count=len(pages),
             total_bytes=all_bytes,
-            rag_included=data.rag_config_path is not None,
+            rag_included=rag_included(data),
             evaluation_included=evaluation is not None,
         )
     finally:

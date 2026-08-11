@@ -24,8 +24,216 @@ assert(
 );
 
 const qmd = fs.readFileSync(sourcePath, "utf8");
+const normalizedQmd = qmd.replace(/\s+/g, " ");
 const html = fs.readFileSync(htmlPath, "utf8");
 const reportCss = fs.readFileSync(path.join(assetRoot, "report.css"), "utf8");
+
+const analysisLinks = [
+  ["Retrieval Quality Analysis", "2026-retrieval-nugget-coverage.html"],
+  [
+    "RAG Analysis: rag26-ss1",
+    "2026-ragdoll-rag26-ss1.html",
+  ],
+  [
+    "RAG Analysis: rag26-ms1-final",
+    "2026-ragdoll-rag26-ms1-final.html",
+  ],
+];
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function assertQmdAnalysisBindings(source) {
+  for (const [visibleLabel, href] of analysisLinks) {
+    const match = new RegExp(`\\[([^\\]]+)\\]\\(${escapeRegExp(href)}\\)`).exec(source);
+    assert(match, `QMD should contain a link for ${href}`);
+    assert(
+      match[1].replace(/\s+/g, " ").trim() === visibleLabel,
+      `QMD should bind ${visibleLabel} to ${href}`,
+    );
+  }
+}
+
+function assertHtmlAnalysisBindings(source) {
+  for (const [visibleLabel, href] of analysisLinks) {
+    const match = new RegExp(
+      `<a\\b[^>]*href="${escapeRegExp(href)}"[^>]*>([\\s\\S]*?)</a>`,
+    ).exec(source);
+    assert(match, `rendered report should contain an anchor for ${href}`);
+    const anchorText = match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    assert(
+      anchorText === visibleLabel,
+      `rendered report should bind ${visibleLabel} to ${href}`,
+    );
+  }
+}
+
+function replaceMarkdownLabel(source, href, nextLabel) {
+  return source.replace(
+    new RegExp(`(\\[)[^\\]]+(\\]\\(${escapeRegExp(href)}\\))`),
+    `$1${nextLabel}$2`,
+  );
+}
+
+function replaceAnchorLabel(source, href, nextLabel) {
+  return source.replace(
+    new RegExp(`(<a\\b[^>]*href="${escapeRegExp(href)}"[^>]*>)[\\s\\S]*?(</a>)`),
+    `$1${nextLabel}$2`,
+  );
+}
+
+function assertRejectsMutation(assertion, mutatedSource, label) {
+  let rejected = false;
+  try {
+    assertion(mutatedSource);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, `${label} should reject swapped analysis labels`);
+}
+
+assertQmdAnalysisBindings(qmd);
+assertHtmlAnalysisBindings(html);
+const swappedQmdLabels = replaceMarkdownLabel(
+  replaceMarkdownLabel(qmd, analysisLinks[1][1], analysisLinks[2][0]),
+  analysisLinks[2][1],
+  analysisLinks[1][0],
+);
+const swappedHtmlLabels = replaceAnchorLabel(
+  replaceAnchorLabel(html, analysisLinks[1][1], analysisLinks[2][0]),
+  analysisLinks[2][1],
+  analysisLinks[1][0],
+);
+assert(swappedQmdLabels !== qmd, "QMD mutation should swap visible labels");
+assert(swappedHtmlLabels !== html, "rendered report mutation should swap visible labels");
+assertRejectsMutation(assertQmdAnalysisBindings, swappedQmdLabels, "QMD");
+assertRejectsMutation(assertHtmlAnalysisBindings, swappedHtmlLabels, "rendered report");
+
+for (const [label, href] of analysisLinks) {
+  assert(normalizedQmd.includes(label), `QMD should label ${label}`);
+  const escapedHref = href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const qmdOccurrences = (qmd.match(new RegExp(`\\]\\(${escapedHref}\\)`, "g")) || []).length;
+  const htmlOccurrences = (html.match(new RegExp(`href="${escapedHref}"`, "g")) || []).length;
+  assert(qmdOccurrences === 1, `QMD should link ${href} exactly once`);
+  assert(htmlOccurrences === 1, `rendered report should link ${href} exactly once`);
+}
+for (const href of analysisLinks.map(([, target]) => target)) {
+  assert(fs.existsSync(path.join(reportsRoot, href)), `architecture target should exist: ${href}`);
+}
+assert(
+  ![...normalizedQmd.matchAll(/href="([^"]+)"/g)].some(([, href]) => /comparison|side[- ]by[- ]side/i.test(href)),
+  "architecture report should not add a comparison or side-by-side report target",
+);
+assert(
+  !/\]\([^)]*(?:comparison|side[- ]by[- ]side)[^)]*\)/i.test(qmd),
+  "architecture source should not add a comparison or side-by-side report target",
+);
+for (const signal of [
+  "separate 119-topic RAGDoll citation-support reports",
+  "RAGDoll measures citation support, not official TREC correctness",
+  "qrel/gold metrics are unavailable",
+  "evaluation did not influence accepted priority",
+]) {
+  assert(normalizedQmd.includes(signal), `QMD should state final-analysis scope: ${signal}`);
+}
+
+function normalizeCss(value) {
+  return value.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ").trim();
+}
+
+function extractRule(source, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}\\s*\\{([^{}]*)\\}`, "m").exec(source);
+  assert(match, `CSS should define the ${selector} rule`);
+  return normalizeCss(match[1]);
+}
+
+function assertRule(source, selector, declarations, label) {
+  const actual = extractRule(source, selector);
+  const expected = normalizeCss(declarations);
+  assert(actual === expected, `${label || selector} declarations changed: ${actual}`);
+}
+
+function assertScopedToken(source, scope, token, value) {
+  const declarations = extractRule(source, scope);
+  assert(
+    new RegExp(`(?:^|; )${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: ${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:;|$)`).test(declarations),
+    `${scope} should set ${token} to ${value}`,
+  );
+}
+
+assertScopedToken(reportCss, ":root", "--guide-code-ink", "#6f3488");
+assertScopedToken(reportCss, ":root", "--guide-code-bg", "#f3e8f7");
+assertScopedToken(reportCss, ":root", "--guide-code-border", "#d8b9e3");
+assertScopedToken(reportCss, "body.quarto-dark", "--guide-code-ink", "#f0cfff");
+assertScopedToken(reportCss, "body.quarto-dark", "--guide-code-bg", "#2c2332");
+assertScopedToken(reportCss, "body.quarto-dark", "--guide-code-border", "#765484");
+
+const inlineCodeSelector = ":not(pre) > code:not(.sourceCode)";
+const darkInlineCodeSelector = "body.quarto-dark :not(pre) > code:not(.sourceCode)";
+const plainDarkCodeSelector = "body.quarto-dark pre > code:not(.sourceCode)";
+const inlineCodeDeclarations = `
+  border: 1px solid var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+`;
+const darkInlineCodeDeclarations = `
+  border-color: var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+`;
+const plainDarkCodeDeclarations = "color: var(--guide-ink);";
+
+assertRule(reportCss, inlineCodeSelector, inlineCodeDeclarations, "light inline-code");
+assertRule(reportCss, darkInlineCodeSelector, darkInlineCodeDeclarations, "dark inline-code");
+assertRule(reportCss, plainDarkCodeSelector, plainDarkCodeDeclarations, "dark plain fenced code");
+assert(
+  !extractRule(reportCss, plainDarkCodeSelector).includes("background"),
+  "dark plain fenced code must not add a background declaration",
+);
+
+for (const selector of [inlineCodeSelector, darkInlineCodeSelector]) {
+  assert(
+    !/(?:^|[\s>])pre(?:[\s>]|$)/.test(selector) &&
+      !/(?:^|[\s>])\.sourceCode(?:[\s>]|$)/.test(selector),
+    `${selector} must exclude code blocks`,
+  );
+}
+
+for (const match of reportCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  const selector = normalizeCss(match[1]);
+  const declarations = normalizeCss(match[2]);
+  if (/\bbackground(?:-color)?\s*:/.test(declarations)) {
+    assert(
+      !/(?:^|[\s>])pre(?:[\s>]|$)|(?:^|[\s>])\.sourceCode(?:[\s>]|$)|(?:^|[\s>])code\s+span/.test(selector),
+      `report CSS must not add code-block or syntax-token backgrounds: ${selector}`,
+    );
+  }
+}
+
+for (const [scope, token, value] of [
+  [":root", "--guide-code-ink", "#6f3488"],
+  [":root", "--guide-code-bg", "#f3e8f7"],
+  [":root", "--guide-code-border", "#d8b9e3"],
+  ["body.quarto-dark", "--guide-code-ink", "#f0cfff"],
+  ["body.quarto-dark", "--guide-code-bg", "#2c2332"],
+  ["body.quarto-dark", "--guide-code-border", "#765484"],
+]) {
+  assertScopedToken(html, scope, token, value);
+}
+for (const [selector, declarations] of [
+  [inlineCodeSelector, inlineCodeDeclarations],
+  [darkInlineCodeSelector, darkInlineCodeDeclarations],
+  [plainDarkCodeSelector, plainDarkCodeDeclarations],
+]) {
+  const canonical = normalizeCss(`${selector} { ${declarations} }`);
+  assert(normalizeCss(html).includes(canonical), `rendered HTML should contain ${selector} declarations`);
+}
+assert(
+  !/body\.quarto-dark[^{}]*\{[^{}]*--guide-code-bg:\s*#f8f9fa/.test(reportCss),
+  "dark inline-code background must not regress to Bootstrap light gray",
+);
 
 assert(
   /body\.quarto-dark\s*\{/.test(reportCss),
@@ -67,14 +275,14 @@ assert(
 
 const figures = [
   "01-whole-system.svg",
-  "02-retrieval-system.svg",
+  "02-frozen-source-retrieval.svg",
   "03-bounded-deepseek-planning.svg",
-  "04-per-query-candidate-accounting.svg",
-  "05-evidence-and-nuggetizer.svg",
+  "04-variable-depth-candidate-core.svg",
+  "05-targeted-scoring-and-runs.svg",
   "06-generation-handoff-contract.svg",
-  "07-sol-generation.svg",
-  "08-validation-and-retries.svg",
-  "09-organizer-output-split.svg",
+  "07-single-pass-rag.svg",
+  "08-multistage-rag.svg",
+  "09-accepted-submissions.svg",
 ];
 
 for (const figure of figures) {
@@ -111,44 +319,48 @@ for (const figure of figures) {
   assert(assetReadme.includes(figure), `Asset README should document ${figure}`);
 }
 assert(
-  assetReadme.includes("fictional") && assetReadme.includes("conceptual"),
-  "Asset README should explain fictional content and conceptual geometry",
+  assetReadme.includes("conceptual") && /no\s+test narrative/.test(assetReadme),
+  "Asset README should explain conceptual geometry and the privacy boundary",
 );
 
 const requiredConcepts = [
-  "Illustrative narrative — not a TREC test topic",
+  "Frozen source, two submission branches",
+  "facet-deepseek-b40-v3",
   "DeepSeek V4 Flash",
   "deepseek/deepseek-v4-flash-20260423",
-  "0–8 focused subnarratives",
-  "1–3 BM25 query lanes per subnarrative",
-  "at most 25 searches per topic",
-  "Pyserini",
-  "ClimbMix",
-  "≤1,000 documents / focused query",
+  "climbmix-400b",
   "3500 characters",
   "350-character overlap",
-  "Mixedbread",
   "mixedbread-ai/mxbai-rerank-base-v2",
-  "≤100 passages / focused query",
-  "Nuggetizer",
+  "median absolute deviation",
+  "2.5 × 1.4826 × MAD",
+  "variable depth",
+  "1–121 documents",
+  "4,246 rows",
+  "r26-narr-facet-v1",
+  "r26-facet-breadth-v1",
+  "r26-narrative-v1",
   "Selected passages are factual authority",
   "Canonical claim hints are advisory",
   "generation_handoff_manifest.json",
+  "rag26-ms1-final",
+  "rag26-ss1",
+  "openai/gpt-5.6-luna",
   "openai/gpt-5.6-sol",
+  "691 evidence groups",
   "12,000-token ceiling",
-  "≤3 transport attempts",
-  "≤2 semantic attempts",
   "1,024-word ceiling",
-  "organizer RAG JSONL",
+  "Accepted by Evalbase",
+  "The Retrieval TSV is not Generation input",
 ];
 
 for (const concept of requiredConcepts) {
-  assert(qmd.includes(concept), `Missing architecture concept in QMD: ${concept}`);
+  assert(normalizedQmd.includes(concept), `Missing architecture concept in QMD: ${concept}`);
 }
 
 assert(
-  fs.readFileSync(path.join(assetRoot, "02-retrieval-system.svg"), "utf8").includes("1–25 query lanes"),
-  "Retrieval overview should show the true executable query-lane range",
+  fs.readFileSync(path.join(assetRoot, "04-variable-depth-candidate-core.svg"), "utf8").includes("1–121 documents"),
+  "Candidate-core figure should show the observed variable-depth range",
 );
 assert(
   fs.readFileSync(path.join(assetRoot, "03-bounded-deepseek-planning.svg"), "utf8").includes("1–3 BM25 queries each"),
@@ -184,11 +396,12 @@ for (const signal of [
   "passages",
   "selected evidence",
   "advisory hints",
-  "TREC run",
+  "Retrieval TSV",
   "full-text ZIP",
   "qrels",
   "gold nuggets",
   "RAGDoll scores",
+  "sibling",
 ]) {
   assert(qmd.includes(signal), `Missing architecture distinction: ${signal}`);
 }
@@ -207,7 +420,93 @@ for (const forbidden of ["Authorization:", "Bearer ", "rag2026-"]) {
 }
 
 const agents = fs.readFileSync(path.join(reportsRoot, "..", "AGENTS.md"), "utf8");
+const normalizedAgents = agents.replace(/\s+/g, " ");
 const rootReadme = fs.readFileSync(path.join(reportsRoot, "..", "README.md"), "utf8");
+
+const evaluationSignals = [
+  "reports/2026-retrieval-nugget-coverage.html",
+  "rag26-ss1",
+  "rag26-ms1-final",
+  "reports/2026-ragdoll-rag26-ss1.html",
+  "reports/2026-ragdoll-rag26-ms1-final.html",
+  ".agents/skills/trec-rag-competition-debug-report/SKILL.md",
+  "citation support",
+  "not an official TREC score",
+  "immutable evaluated inputs",
+  "only the two privacy-scanned standalone HTML reports are public",
+  "outside git and private",
+  "accepted files and priorities remain unchanged",
+];
+for (const signal of evaluationSignals) {
+  assert(normalizedAgents.includes(signal), `AGENTS.md should orient agents to final analyses: ${signal}`);
+}
+
+const acceptedRagBindings = [
+  [
+    "rag26-ss1",
+    "reports/2026-ragdoll-rag26-ss1.html",
+    "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl",
+  ],
+  [
+    "rag26-ms1-final",
+    "reports/2026-ragdoll-rag26-ms1-final.html",
+    "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl",
+  ],
+];
+
+function assertAgentRagBindings(source) {
+  for (const [runId, reportUrl, inputPath] of acceptedRagBindings) {
+    const bindingPattern = new RegExp(
+      "\\[RAG Analysis: " +
+        escapeRegExp(runId) +
+        "\\]\\(" +
+        escapeRegExp(reportUrl) +
+        "\\);[\\s\\S]{0,360}?input: `" +
+        escapeRegExp(inputPath) +
+        "`",
+    );
+    assert(
+      bindingPattern.test(source),
+      `AGENTS.md should bind ${runId} to its tracked report and accepted input`,
+    );
+  }
+}
+
+function assertAgentMutationRejected(mutatedSource, label) {
+  let rejected = false;
+  try {
+    assertAgentRagBindings(mutatedSource);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, `AGENTS.md should reject ${label}`);
+}
+
+assertAgentRagBindings(agents);
+const [singlepassBinding, multistageBinding] = acceptedRagBindings;
+const brokenUrlAgents = agents.replace(singlepassBinding[1], multistageBinding[1]);
+assert(brokenUrlAgents !== agents, "AGENTS URL mutation should change the source");
+assertAgentMutationRejected(
+  brokenUrlAgents,
+  "a broken or swapped private URL",
+);
+const removedInputAgents = agents.replace(singlepassBinding[2], "");
+assert(removedInputAgents !== agents, "AGENTS input removal mutation should change the source");
+assertAgentMutationRejected(
+  removedInputAgents,
+  "a removed accepted input path",
+);
+const swappedInputBindings = agents
+  .replace(singlepassBinding[2], "__singlepass_input__")
+  .replace(multistageBinding[2], singlepassBinding[2])
+  .replace("__singlepass_input__", multistageBinding[2]);
+assert(swappedInputBindings !== agents, "AGENTS input mutation should swap mappings");
+assertAgentMutationRejected(swappedInputBindings, "swapped accepted input mappings");
+const swappedAgentLabels = agents
+  .replace(/RAG Analysis: rag26-ss1/g, "RAG Analysis: rag26-ms1-final")
+  .replace(/RAG Analysis: rag26-ms1-final/g, "RAG Analysis: rag26-ss1");
+assert(swappedAgentLabels !== agents, "AGENTS label mutation should swap run labels");
+assertAgentMutationRejected(swappedAgentLabels, "swapped run labels");
 
 for (const target of [
   "reports/2026-competition-architecture.html",
@@ -218,17 +517,17 @@ for (const target of [
 }
 
 for (const signal of [
-  "## Architecture Orientation",
-  "Retrieval → handoff → Generation",
+  "## Final Architecture Orientation",
+  "two sibling submission branches",
   "per-query ceilings with a documents-to-passages unit change",
   "1–3 BM25 query lanes",
   "at most 25 searches per topic",
   "Selected passages are factual authority",
-  "authenticated handoff",
-  "TREC run, full-text ZIP, qrels, gold nuggets, or RAGDoll scores",
-  "Transport and semantic retry limits are separate",
+  "authenticated selected-evidence handoff",
+  "organizer-facing Retrieval TSV is not Generation input",
+  "Transport, semantic, and stage reservation limits remain separate",
 ]) {
-  assert(agents.includes(signal), `AGENTS.md should retain architecture signal: ${signal}`);
+  assert(normalizedAgents.includes(signal), `AGENTS.md should retain architecture signal: ${signal}`);
 }
 
 console.log("2026 competition architecture smoke test passed");

@@ -18,13 +18,28 @@ import argparse
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from trec_rag.accepted_rag_evaluation import (
+    ArtifactSnapshot,
+    load_generation_handoff_snapshot,
+)
 from trec_rag.topics import load_narrative_topics
 
 GOLD_NUGGET_IMPORTANCE = frozenset({"vital", "okay"})
 SUPPORT_LABELS = frozenset({"FS", "PS", "NS"})
+
+
+def _valid_sha256(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -47,18 +62,37 @@ class AnswerRow:
         }
 
 
-def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
-    with path.open(encoding="utf-8") as handle:
-        for number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise ValueError(f"{path}:{number}: invalid JSON") from error
-            if not isinstance(row, dict):
-                raise ValueError(f"{path}:{number}: row is not a JSON object")
-            yield row
+@dataclass(frozen=True)
+class EvidenceBinding:
+    """Common evidence receipt view for historical and accepted RAG runs."""
+
+    kind: str
+    run_id: str
+    handoff_schema_version: str
+    handoff_manifest_sha256: str
+    topic_ids: tuple[str, ...]
+    topic_context_sha256s: Mapping[str, str]
+    prompt_contract_version: str | None
+    source_identity_available: bool
+    source_identity_reason: str | None
+    submission_sha256: str | None
+    bundle_metadata_sha256: str | None
+
+
+def _read_jsonl(path: Path, raw: bytes | None = None) -> Iterator[dict[str, Any]]:
+    if raw is None:
+        with path.open("rb") as handle:
+            raw = handle.read()
+    for number, line in enumerate(raw.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"{path}:{number}: invalid JSON") from error
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}:{number}: row is not a JSON object")
+        yield row
 
 
 def _write_jsonl(path: Path, rows: Sequence[dict[str, object]]) -> int:
@@ -181,53 +215,243 @@ def gold_nugget_rows(
     return rows
 
 
+def load_evidence_binding(path: Path) -> EvidenceBinding:
+    """Normalize one historical, multi-stage, or accepted-run receipt.
+
+    This loader deliberately keeps the three contracts distinct.  In particular,
+    a multi-stage receipt is not given the single-pass prompt contract merely to
+    make downstream code simpler.
+    """
+    path = Path(path)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{path}: invalid evidence binding JSON") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: evidence binding is not an object")
+
+    schema_version = value.get("schema_version")
+    if schema_version == "accepted_rag_evaluation_binding_v1":
+        run_id = value.get("run_id")
+        run_desc = value.get("run_desc")
+        team_id = value.get("team_id")
+        provider = value.get("provider")
+        models = value.get("models")
+        handoff_schema = value.get("handoff_schema_version")
+        handoff_digest = value.get("handoff_manifest_sha256")
+        topic_ids = value.get("topic_ids")
+        contexts = value.get("topic_context_sha256s")
+        submission_digest = value.get("submission_sha256")
+        bundle_digest = value.get("bundle_metadata_sha256")
+        source_available = value.get("source_identity_available")
+        source_reason = value.get("source_identity_reason")
+        source_digest = value.get("source_identity_sha256")
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError(f"{path}: invalid accepted binding run_id")
+        if not isinstance(run_desc, str) or not run_desc.strip():
+            raise ValueError(f"{path}: invalid accepted binding run_desc")
+        if not isinstance(team_id, str) or not team_id.strip():
+            raise ValueError(f"{path}: invalid accepted binding team_id")
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError(f"{path}: invalid accepted binding provider")
+        if not isinstance(models, list) or any(
+            not isinstance(model, str) or not model.strip() for model in models
+        ):
+            raise ValueError(f"{path}: invalid accepted binding models")
+        if not isinstance(handoff_schema, str) or not handoff_schema:
+            raise ValueError(f"{path}: invalid accepted binding handoff_schema_version")
+        if not _valid_sha256(handoff_digest):
+            raise ValueError(f"{path}: invalid accepted binding handoff_manifest_sha256")
+        if not isinstance(topic_ids, list) or not topic_ids:
+            raise ValueError(f"{path}: invalid accepted binding topic_ids")
+        normalized_topic_ids: list[str] = []
+        for topic_id in topic_ids:
+            if (
+                not isinstance(topic_id, str)
+                or not topic_id.strip()
+                or topic_id in normalized_topic_ids
+            ):
+                raise ValueError(f"{path}: invalid accepted binding topic_ids")
+            normalized_topic_ids.append(topic_id)
+        if not isinstance(contexts, dict) or not contexts:
+            raise ValueError(f"{path}: invalid accepted binding topic_context_sha256s")
+        normalized_contexts: dict[str, str] = {}
+        for topic_id, digest in contexts.items():
+            if not isinstance(topic_id, str) or not topic_id.strip():
+                raise ValueError(f"{path}: invalid accepted binding topic id")
+            if not _valid_sha256(digest):
+                raise ValueError(f"{path}: invalid accepted binding context_sha256")
+            normalized_contexts[topic_id] = digest
+        if set(normalized_topic_ids) != set(contexts):
+            raise ValueError(f"{path}: accepted binding topic order differs from topic contexts")
+        if not _valid_sha256(submission_digest):
+            raise ValueError(f"{path}: invalid accepted binding submission_sha256")
+        if not _valid_sha256(bundle_digest):
+            raise ValueError(f"{path}: invalid accepted binding bundle_metadata_sha256")
+        if type(source_available) is not bool:
+            raise ValueError(f"{path}: invalid accepted binding source_identity_available")
+        if source_available:
+            if not _valid_sha256(source_digest):
+                raise ValueError(f"{path}: invalid accepted binding source_identity_sha256")
+            if source_reason is not None:
+                raise ValueError(f"{path}: available source identity has a reason")
+        else:
+            if source_digest is not None or source_reason != "original generation identity was not preserved":
+                raise ValueError(f"{path}: unavailable source identity is not explained")
+        return EvidenceBinding(
+            kind="accepted",
+            run_id=run_id,
+            handoff_schema_version=handoff_schema,
+            handoff_manifest_sha256=handoff_digest,
+            topic_ids=tuple(normalized_topic_ids),
+            topic_context_sha256s=normalized_contexts,
+            prompt_contract_version=None,
+            source_identity_available=source_available,
+            source_identity_reason=source_reason,
+            submission_sha256=submission_digest,
+            bundle_metadata_sha256=bundle_digest,
+        )
+
+    # A preserved multi-stage identity has `submission_run_id` and a topic list.
+    if "submission_run_id" in value or "trial_contract_version" in value:
+        from trec_rag.accepted_rag_evaluation import (
+            MULTISTAGE_IDENTITY_VERSION,
+            MULTISTAGE_TRIAL_CONTRACT_VERSION,
+        )
+
+        identity_version = value.get("identity_version")
+        trial_contract = value.get("trial_contract_version")
+        run_id = value.get("submission_run_id")
+        handoff_schema = value.get("handoff_schema_version")
+        handoff_digest = value.get("handoff_manifest_sha256")
+        topic_items = value.get("topics")
+        if (
+            type(identity_version) is not int
+            or identity_version != MULTISTAGE_IDENTITY_VERSION
+        ):
+            raise ValueError(f"{path}: invalid multi-stage identity_version")
+        if trial_contract != MULTISTAGE_TRIAL_CONTRACT_VERSION:
+            raise ValueError(f"{path}: invalid multi-stage trial_contract_version")
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError(f"{path}: invalid multi-stage submission_run_id")
+        if not isinstance(handoff_schema, str) or not handoff_schema:
+            raise ValueError(f"{path}: invalid multi-stage handoff_schema_version")
+        if not _valid_sha256(handoff_digest):
+            raise ValueError(f"{path}: invalid multi-stage handoff_manifest_sha256")
+        if not isinstance(topic_items, list) or not topic_items:
+            raise ValueError(f"{path}: invalid multi-stage topics")
+        normalized_contexts: dict[str, str] = {}
+        for index, item in enumerate(topic_items):
+            if not isinstance(item, dict):
+                raise ValueError(f"{path}: multi-stage topic {index} is not an object")
+            topic_id = item.get("topic_id")
+            digest = item.get("context_sha256")
+            if not isinstance(topic_id, str) or not topic_id.strip() or topic_id in normalized_contexts:
+                raise ValueError(f"{path}: multi-stage topic {index} has invalid topic_id")
+            if not _valid_sha256(digest):
+                raise ValueError(f"{path}: multi-stage topic {index} has invalid context_sha256")
+            normalized_contexts[topic_id] = digest
+        return EvidenceBinding(
+            kind="multistage",
+            run_id=run_id,
+            handoff_schema_version=handoff_schema,
+            handoff_manifest_sha256=handoff_digest,
+            topic_ids=tuple(normalized_contexts),
+            topic_context_sha256s=normalized_contexts,
+            prompt_contract_version=None,
+            source_identity_available=True,
+            source_identity_reason=None,
+            submission_sha256=None,
+            bundle_metadata_sha256=None,
+        )
+
+    # Historical single-pass identities are validated with the existing strict
+    # parser, including the prompt contract.  Keep its exact field checks here.
+    identity = _load_generation_identity(path)
+    return EvidenceBinding(
+        kind="singlepass",
+        run_id=identity["run_id"],
+        handoff_schema_version=identity["handoff_schema_version"],
+        handoff_manifest_sha256=identity["handoff_manifest_sha256"],
+        topic_ids=tuple(identity["selected_topics"]),
+        topic_context_sha256s=identity["selected_topics"],
+        prompt_contract_version=identity["prompt_contract_version"],
+        source_identity_available=True,
+        source_identity_reason=None,
+        submission_sha256=None,
+        bundle_metadata_sha256=None,
+    )
+
+
 def selected_evidence_support_rows(
     submission_path: Path,
     handoff_manifest_path: Path,
-    generation_identity_path: Path,
+    evidence_binding_path: Path,
+    *,
+    submission_snapshot: ArtifactSnapshot | None = None,
+    handoff_snapshot: ArtifactSnapshot | None = None,
+    handoff: Any | None = None,
 ) -> list[dict[str, object]]:
     """Attach exactly the topic-owned selected passages shown to this generation run."""
     from trec_rag.generation_handoff import (
         HANDOFF_SCHEMA_VERSION,
         PROMPT_CONTRACT_VERSION,
-        load_generation_handoff,
     )
 
-    records, topic_docids = _support_inputs(submission_path)
-    handoff = load_generation_handoff(handoff_manifest_path)
-    identity = _load_generation_identity(generation_identity_path)
-    if identity["handoff_schema_version"] != HANDOFF_SCHEMA_VERSION:
+    submission_snapshot = submission_snapshot or ArtifactSnapshot.capture(submission_path)
+    handoff_snapshot = handoff_snapshot or ArtifactSnapshot.capture(handoff_manifest_path)
+    records, topic_docids = _support_inputs(submission_path, raw=submission_snapshot.data)
+    handoff = handoff or load_generation_handoff_snapshot(handoff_snapshot)
+    binding = load_evidence_binding(evidence_binding_path)
+    if binding.handoff_schema_version != HANDOFF_SCHEMA_VERSION:
         raise ValueError(
-            f"{generation_identity_path}: handoff_schema_version is not "
+            f"{evidence_binding_path}: handoff_schema_version is not "
             f"{HANDOFF_SCHEMA_VERSION}"
         )
-    if identity["prompt_contract_version"] != PROMPT_CONTRACT_VERSION:
+    if binding.kind == "singlepass" and binding.prompt_contract_version != PROMPT_CONTRACT_VERSION:
         raise ValueError(
-            f"{generation_identity_path}: prompt_contract_version is not "
+            f"{evidence_binding_path}: prompt_contract_version is not "
             f"{PROMPT_CONTRACT_VERSION}"
         )
-    if identity["handoff_manifest_sha256"] != handoff.manifest_sha256:
+    if binding.handoff_manifest_sha256 != handoff.manifest_sha256:
         raise ValueError(
-            f"{generation_identity_path}: handoff_manifest_sha256 does not match "
+            f"{evidence_binding_path}: handoff_manifest_sha256 does not match "
             f"{handoff_manifest_path}"
         )
+    if binding.submission_sha256 is not None:
+        submission_digest = submission_snapshot.sha256
+        if submission_digest != binding.submission_sha256:
+            raise ValueError(
+                f"{evidence_binding_path}: submission sha256 does not match bound bytes"
+            )
 
     run_ids = {
         str(record["metadata"]["run_id"])
         for record in records
     }
-    if run_ids != {identity["run_id"]}:
+    if run_ids != {binding.run_id}:
         raise ValueError(
-            f"{generation_identity_path}: run_id does not match submission run IDs "
+            f"{evidence_binding_path}: run_id does not match submission run IDs "
             f"{sorted(run_ids)}"
         )
 
-    identity_topics = identity["selected_topics"]
+    identity_topics = binding.topic_context_sha256s
+    submission_topic_ids = tuple(
+        str(record["metadata"]["narrative_id"]).strip() for record in records
+    )
+    if submission_topic_ids != binding.topic_ids:
+        raise ValueError(
+            f"{evidence_binding_path}: submission topic order does not match evidence binding"
+        )
     topics = {topic.topic_id: topic for topic in handoff.topics}
     records_by_topic = {
         str(record["metadata"]["narrative_id"]).strip(): record
         for record in records
     }
+    if set(records_by_topic) != set(identity_topics):
+        raise ValueError(
+            f"{evidence_binding_path}: binding topic IDs do not match submission topic IDs"
+        )
     for topic_id, record in records_by_topic.items():
         topic = topics.get(topic_id)
         if topic is None:
@@ -237,7 +461,7 @@ def selected_evidence_support_rows(
         context_sha256 = identity_topics.get(topic_id)
         if context_sha256 != topic.context_sha256:
             raise ValueError(
-                f"{generation_identity_path}: selected topic {topic_id} is absent or its "
+                f"{evidence_binding_path}: selected topic {topic_id} is absent or its "
                 "context_sha256 does not match the handoff"
             )
         metadata = record["metadata"]
@@ -275,16 +499,26 @@ def selected_evidence_support_rows(
         documents_by_topic[topic_id] = {
             docid: "\n\n".join(rows) for docid, rows in passages.items()
         }
-    return _assemble_support_rows(
+    rows = _assemble_support_rows(
         submission_path,
         records=records,
         topic_docids=topic_docids,
         documents_by_topic=documents_by_topic,
     )
+    # Parsing, support materialization, and digest checks all describe the same bytes.  A
+    # replacement at any phase is still rejected before callers can seal a bundle.
+    submission_snapshot.verify_current()
+    handoff_snapshot.verify_current()
+    return rows
 
 
 def _load_generation_identity(path: Path) -> dict[str, Any]:
     """Load the immutable generation receipt fields needed to bind an evidence view."""
+    from trec_rag.accepted_rag_evaluation import (
+        SINGLEPASS_IDENTITY_VERSION,
+    )
+    from trec_rag.generation_handoff import PROMPT_CONTRACT_VERSION
+
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
@@ -298,17 +532,13 @@ def _load_generation_identity(path: Path) -> dict[str, Any]:
     digest = value.get("handoff_manifest_sha256")
     run_id = value.get("run_id")
     selected = value.get("selected_topics")
-    if (
-        isinstance(identity_version, bool)
-        or not isinstance(identity_version, int)
-        or identity_version <= 0
-    ):
+    if type(identity_version) is not int or identity_version != SINGLEPASS_IDENTITY_VERSION:
         raise ValueError(f"{path}: invalid identity_version")
     if not isinstance(schema_version, str) or not schema_version:
         raise ValueError(f"{path}: invalid handoff_schema_version")
-    if not isinstance(prompt_contract_version, str) or not prompt_contract_version:
+    if prompt_contract_version != PROMPT_CONTRACT_VERSION:
         raise ValueError(f"{path}: invalid prompt_contract_version")
-    if not isinstance(digest, str) or len(digest) != 64:
+    if not _valid_sha256(digest):
         raise ValueError(f"{path}: invalid handoff_manifest_sha256")
     if not isinstance(run_id, str) or not run_id.strip():
         raise ValueError(f"{path}: invalid run_id")
@@ -325,7 +555,7 @@ def _load_generation_identity(path: Path) -> dict[str, Any]:
             raise ValueError(f"{path}: selected_topics[{index}] has invalid topic_id")
         if topic_id in topics:
             raise ValueError(f"{path}: duplicate selected topic {topic_id}")
-        if not isinstance(context_sha256, str) or len(context_sha256) != 64:
+        if not _valid_sha256(context_sha256):
             raise ValueError(
                 f"{path}: selected_topics[{index}] has invalid context_sha256"
             )
@@ -342,8 +572,10 @@ def _load_generation_identity(path: Path) -> dict[str, Any]:
 
 def _support_inputs(
     submission_path: Path,
+    *,
+    raw: bytes | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
-    records = list(_read_jsonl(submission_path))
+    records = list(_read_jsonl(submission_path, raw=raw))
     if not records:
         raise ValueError(f"{submission_path}: no submission records")
 

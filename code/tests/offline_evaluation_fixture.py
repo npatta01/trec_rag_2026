@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Sequence
@@ -58,6 +58,8 @@ class RunFixture:
     experiment_id: str
     run_id: str
     docids: dict[str, str] = field(default_factory=dict)
+    accepted_bundle_metadata: Path | None = None
+    accepted_handoff: Path | None = None
 
     @property
     def topic_ids(self) -> tuple[str, ...]:
@@ -65,6 +67,18 @@ class RunFixture:
 
     def narratives(self) -> dict[str, str]:
         return {spec.topic_id: spec.narrative for spec in self.specs}
+
+    @property
+    def bundle_metadata(self) -> Path:
+        if self.accepted_bundle_metadata is None:
+            raise AttributeError("this fixture has no accepted bundle metadata")
+        return self.accepted_bundle_metadata
+
+    @property
+    def handoff(self) -> Path:
+        if self.accepted_handoff is None:
+            raise AttributeError("this fixture has no accepted handoff")
+        return self.accepted_handoff
 
     def qrels(self, topics: Sequence[str] | None = None, *, grade: int = 1) -> Path:
         """Write qrels naming this run's real submitted docid for the given topics."""
@@ -261,6 +275,59 @@ def build_run(
     )
     write_generation_identity(fixture)
     return fixture
+
+
+def build_accepted_run(
+    root: Path,
+    specs: Sequence[TopicSpec],
+    *,
+    experiment_id: str = "debug-fixture",
+) -> RunFixture:
+    """Materialize a run plus an extracted accepted-submission metadata receipt."""
+    fixture = build_run(root, specs, experiment_id=experiment_id)
+    accepted_output = root / "accepted" / "rag_output_trec_rag_2026.jsonl"
+    accepted_output.parent.mkdir(parents=True, exist_ok=True)
+    accepted_output.write_bytes(fixture.rag_output.read_bytes())
+    handoff = fixture.retrieval_output / "generation_handoff_manifest.json"
+    handoff_payload = json.loads(handoff.read_text(encoding="utf-8"))
+    metadata = root / "accepted-bundle-metadata.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "schema_version": "trec-rag-2026-rag-submission-bundle-v1",
+                "team_id": "fixture-team",
+                "provider": "fixture-provider",
+                "source": {
+                    "generation_handoff_manifest_sha256": handoff_payload["manifest_sha256"],
+                    "topic_count": len(specs),
+                },
+                "runs": [
+                    {
+                        "name": "accepted-fixture",
+                        "run_id": fixture.run_id,
+                        "run_desc": RUN_DESC,
+                        "path": "accepted/rag_output_trec_rag_2026.jsonl",
+                        "bytes": len(accepted_output.read_bytes()),
+                        "line_count": len(specs),
+                        "sha256": sha256(accepted_output.read_bytes()).hexdigest(),
+                        "provider": "fixture-provider",
+                        "models": ["fixture/model"],
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return replace(
+        fixture,
+        rag_output=accepted_output,
+        accepted_bundle_metadata=metadata,
+        accepted_handoff=handoff,
+    )
+
+
+build_accepted_fixture = build_accepted_run
 
 
 def _generation_topic(spec: TopicSpec, *, docid: str = "doc-original"):

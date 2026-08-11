@@ -211,6 +211,222 @@ def test_cli_support_can_resolve_the_selected_evidence_handoff(tmp_path: Path) -
     }
 
 
+def test_load_evidence_binding_normalizes_single_pass_and_multistage_receipts(
+    tmp_path: Path,
+) -> None:
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {"58": [("climbmix-a", "Selected A.")]},
+    )
+    manifest = json.loads(handoff.read_text(encoding="utf-8"))
+    single = _write_generation_identity(tmp_path / "single.json", handoff)
+
+    single_binding = ragdoll_io.load_evidence_binding(single)
+    assert single_binding.kind == "singlepass"
+    assert single_binding.prompt_contract_version == "selected_evidence_one_shot_v1"
+    assert single_binding.run_id == "dev-spike"
+
+    multistage = tmp_path / "multistage.json"
+    multistage.write_text(
+        json.dumps(
+            {
+                "identity_version": 1,
+                "trial_contract_version": "bounded_narrative_revision_trial_v8_screen_liveness",
+                "handoff_schema_version": manifest["schema_version"],
+                "handoff_manifest_sha256": manifest["manifest_sha256"],
+                "submission_run_id": "dev-spike-final",
+                "topics": [
+                    {"topic_id": "58", "context_sha256": manifest["topics"][0]["context_sha256"]}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    multistage_binding = ragdoll_io.load_evidence_binding(multistage)
+    assert multistage_binding.kind == "multistage"
+    assert multistage_binding.prompt_contract_version is None
+    assert multistage_binding.source_identity_available is True
+    assert multistage_binding.run_id == "dev-spike-final"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"identity_version": None},
+        {"identity_version": 2},
+        {"identity_version": True},
+        {"identity_version": 6.0},
+        {"prompt_contract_version": None},
+        {"prompt_contract_version": "wrong-contract"},
+    ],
+)
+def test_load_evidence_binding_rejects_invalid_single_pass_contract(
+    tmp_path: Path,
+    mutation: dict[str, object],
+) -> None:
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {"58": [("climbmix-a", "Selected A.")]},
+    )
+    identity = json.loads(_write_generation_identity(tmp_path / "identity.json", handoff).read_text())
+    for field, value in mutation.items():
+        if value is None:
+            identity.pop(field)
+        else:
+            identity[field] = value
+    identity_path = tmp_path / "mutated-identity.json"
+    identity_path.write_text(json.dumps(identity), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="identity|prompt_contract_version"):
+        ragdoll_io.load_evidence_binding(identity_path)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"identity_version": None},
+        {"identity_version": 2},
+        {"identity_version": True},
+        {"identity_version": 1.0},
+        {"trial_contract_version": None},
+        {"trial_contract_version": "wrong-contract"},
+    ],
+)
+def test_load_evidence_binding_rejects_invalid_multistage_contract(
+    tmp_path: Path,
+    mutation: dict[str, object],
+) -> None:
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {"58": [("climbmix-a", "Selected A.")]},
+    )
+    manifest = json.loads(handoff.read_text(encoding="utf-8"))
+    identity: dict[str, object] = {
+        "identity_version": 1,
+        "trial_contract_version": "bounded_narrative_revision_trial_v8_screen_liveness",
+        "handoff_schema_version": manifest["schema_version"],
+        "handoff_manifest_sha256": manifest["manifest_sha256"],
+        "submission_run_id": "dev-spike-final",
+        "topics": [
+            {"topic_id": "58", "context_sha256": manifest["topics"][0]["context_sha256"]}
+        ],
+    }
+    for field, value in mutation.items():
+        if value is None:
+            identity.pop(field)
+        else:
+            identity[field] = value
+    identity_path = tmp_path / "mutated-multistage.json"
+    identity_path.write_text(json.dumps(identity), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="multi-stage|identity|trial_contract"):
+        ragdoll_io.load_evidence_binding(identity_path)
+
+
+def test_selected_evidence_support_rows_accept_accepted_binding_schema(
+    tmp_path: Path,
+) -> None:
+    args, _ = _ragdoll_cli_args(tmp_path)
+    submission = Path(args[1])
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {
+            "58": [
+                ("climbmix-a", "Generator-visible passage A."),
+                ("climbmix-b", "Generator-visible passage B."),
+            ]
+        },
+    )
+    manifest = json.loads(handoff.read_text(encoding="utf-8"))
+    binding_path = tmp_path / "accepted-binding.json"
+    binding_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "accepted_rag_evaluation_binding_v1",
+                "run_id": "dev-spike",
+                "run_desc": "development spike",
+                "team_id": "local-baseline",
+                "provider": "test-provider",
+                "models": ["test/model"],
+                "submission_sha256": sha256(submission.read_bytes()).hexdigest(),
+                "bundle_metadata_sha256": "b" * 64,
+                "handoff_schema_version": manifest["schema_version"],
+                "handoff_manifest_sha256": manifest["manifest_sha256"],
+                "topic_ids": ["58"],
+                "topic_context_sha256s": {
+                    topic["topic_id"]: topic["context_sha256"] for topic in manifest["topics"]
+                },
+                "source_identity_available": False,
+                "source_identity_sha256": None,
+                "source_identity_reason": "original generation identity was not preserved",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = ragdoll_io.selected_evidence_support_rows(submission, handoff, binding_path)
+
+    assert rows[0]["segments"] == {
+        "climbmix-a": "Generator-visible passage A.",
+        "climbmix-b": "Generator-visible passage B.",
+    }
+
+
+def test_selected_support_does_not_mix_submission_parse_and_hash_snapshots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, _ = _ragdoll_cli_args(tmp_path)
+    submission = Path(args[1])
+    handoff = _write_selected_evidence_handoff(
+        tmp_path / "generation_handoff_manifest.json",
+        {
+            "58": [
+                ("climbmix-a", "Generator-visible passage A."),
+                ("climbmix-b", "Generator-visible passage B."),
+            ]
+        },
+    )
+    manifest = json.loads(handoff.read_text(encoding="utf-8"))
+    binding_path = tmp_path / "accepted-binding.json"
+    binding_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "accepted_rag_evaluation_binding_v1",
+                "run_id": "dev-spike",
+                "run_desc": "development spike",
+                "team_id": "local-baseline",
+                "provider": "test-provider",
+                "models": ["test/model"],
+                "submission_sha256": sha256(submission.read_bytes()).hexdigest(),
+                "bundle_metadata_sha256": "b" * 64,
+                "handoff_schema_version": manifest["schema_version"],
+                "handoff_manifest_sha256": manifest["manifest_sha256"],
+                "topic_ids": ["58"],
+                "topic_context_sha256s": {
+                    topic["topic_id"]: topic["context_sha256"]
+                    for topic in manifest["topics"]
+                },
+                "source_identity_available": False,
+                "source_identity_sha256": None,
+                "source_identity_reason": "original generation identity was not preserved",
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_support_inputs = ragdoll_io._support_inputs
+
+    def parse_then_replace(
+        path: Path, *, raw: bytes | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
+        result = real_support_inputs(path, raw=raw)
+        submission.write_bytes(submission.read_bytes().replace(b"Answer", b"Changed"))
+        return result
+
+    monkeypatch.setattr(ragdoll_io, "_support_inputs", parse_then_replace)
+    with pytest.raises(ValueError, match="submission sha256|bound bytes|source changed"):
+        ragdoll_io.selected_evidence_support_rows(submission, handoff, binding_path)
+
+
 def test_cli_can_gate_completed_support_judgments(tmp_path: Path) -> None:
     args, _ = _ragdoll_cli_args(tmp_path)
     handoff = _write_selected_evidence_handoff(

@@ -11,6 +11,9 @@
   --guide-paper: #ffffff;
   --guide-ink: #17201c;
   --guide-muted: #52615a;
+  --guide-code-ink: #6f3488;
+  --guide-code-bg: #f3e8f7;
+  --guide-code-border: #d8b9e3;
 }
 
 body.quarto-dark {
@@ -26,6 +29,9 @@ body.quarto-dark {
   --guide-paper: #121b17;
   --guide-ink: #eef5f0;
   --guide-muted: #bac7bf;
+  --guide-code-ink: #f0cfff;
+  --guide-code-bg: #2c2332;
+  --guide-code-border: #765484;
 }
 
 html {
@@ -203,6 +209,60 @@ code {
   overflow-wrap: anywhere;
 }
 
+:not(pre) > code:not(.sourceCode) {
+  border: 1px solid var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+}
+
+body.quarto-dark :not(pre) > code:not(.sourceCode) {
+  border-color: var(--guide-code-border);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+}
+
+body.quarto-dark pre > code:not(.sourceCode) {
+  color: var(--guide-ink);
+}
+
+.artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  max-width: 72rem;
+  margin-block: 1.5rem 2rem;
+}
+
+.artifact-card {
+  min-width: 0;
+  border: 1px solid var(--guide-line);
+  border-block-start: 5px solid var(--guide-retrieval);
+  border-radius: 0.35rem;
+  padding: 1rem;
+  background: var(--guide-paper);
+}
+
+.artifact-card:nth-child(n + 4) {
+  border-block-start-color: var(--guide-generation);
+}
+
+.artifact-card h3 {
+  margin-block-start: 0;
+  font-size: 1rem;
+}
+
+.artifact-card strong,
+.status-accepted {
+  color: var(--guide-retrieval);
+}
+
+.branch-note {
+  max-width: 72ch;
+  border-inline-start: 5px solid var(--guide-advisory);
+  padding: 0.85rem 1rem;
+  background: var(--guide-advisory-soft);
+}
+
 @media (max-width: 44rem) {
   main.content {
     padding-inline: 1rem;
@@ -226,6 +286,10 @@ code {
   .limit {
     white-space: normal;
   }
+
+  .artifact-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -245,7 +309,8 @@ code {
 @media print {
   h1,
   figure,
-  details {
+  details,
+  .artifact-card {
     break-inside: avoid;
   }
 

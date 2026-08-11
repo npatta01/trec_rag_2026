@@ -22,6 +22,10 @@ from types import MappingProxyType
 from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 import zipfile
 
+from trec_rag.accepted_rag_evaluation import (
+    ArtifactSnapshot,
+    load_generation_handoff_snapshot,
+)
 from trec_rag.competition_rag import (
     load_rag_generation_config,
     validate_submission_record,
@@ -239,6 +243,25 @@ class RagOutputReport:
 
 
 @dataclass(frozen=True)
+class RagArtifactSource:
+    """The validated RAG artifacts consumed by the post-run report."""
+
+    handoff_manifest_path: Path
+    output_path: Path
+    topic_ids: tuple[str, ...]
+    team_id: str
+    run_id: str
+    run_desc: str
+    provider: str
+    model: str
+    accepted_submission_sha256: str | None = None
+    submission_snapshot: ArtifactSnapshot | None = None
+    output_snapshot: ArtifactSnapshot | None = None
+    handoff_snapshot: ArtifactSnapshot | None = None
+    handoff: Any | None = None
+
+
+@dataclass(frozen=True)
 class TopicReport:
     topic_id: str
     narrative: str
@@ -393,9 +416,15 @@ class _RootRetrievalArtifacts:
 class DebugReportData:
     retrieval_config_path: Path
     rag_config_path: Path | None
+    rag_artifact_source: RagArtifactSource | None
     output_dir: Path
     topics: tuple[TopicReport, ...]
     source_sha256s: Mapping[str, str]
+
+
+def rag_included(data: DebugReportData) -> bool:
+    """Return whether validated RAG output is attached, regardless of input mode."""
+    return data.rag_config_path is not None or data.rag_artifact_source is not None
 
 
 @dataclass(frozen=True)
@@ -426,9 +455,12 @@ def load_debug_report_data(
     retrieval_config_path: Path,
     *,
     rag_config_path: Path | None = None,
+    rag_artifact_source: RagArtifactSource | None = None,
     topic_ids: Sequence[str] | None = None,
 ) -> DebugReportData:
     """Load immutable, bounded retrieval and optional validated RAG artifacts."""
+    if rag_config_path is not None and rag_artifact_source is not None:
+        raise ValueError("RAG config and artifact source are mutually exclusive")
     config = load_facet_pilot_config(retrieval_config_path)
     configured_topics = select_configured_topics(config)
     if not configured_topics:
@@ -470,6 +502,7 @@ def load_debug_report_data(
     data = DebugReportData(
         retrieval_config_path=Path(retrieval_config_path).resolve(),
         rag_config_path=None,
+        rag_artifact_source=None,
         output_dir=output_dir,
         topics=reports,
         source_sha256s=MappingProxyType(dict(sorted(receipts.items()))),
@@ -477,23 +510,55 @@ def load_debug_report_data(
     if rag_config_path is not None:
         data = _attach_rag_outputs(
             data,
-            Path(rag_config_path),
+            _rag_source_from_config(
+                Path(rag_config_path),
+                exported_topics,
+            ),
             exported_topics,
         )
+        data = replace(data, rag_config_path=Path(rag_config_path).resolve())
+    elif rag_artifact_source is not None:
+        data = _attach_rag_outputs(data, rag_artifact_source, exported_topics)
     return data
+
+
+def _rag_source_from_config(
+    rag_config_path: Path,
+    exported_topics: Sequence[Topic],
+) -> RagArtifactSource:
+    config = load_rag_generation_config(rag_config_path)
+    return RagArtifactSource(
+        handoff_manifest_path=config.handoff_manifest_path,
+        output_path=config.output_path,
+        topic_ids=(
+            config.topic_ids
+            if config.topic_ids is not None
+            else tuple(topic.id for topic in exported_topics)
+        ),
+        team_id=config.team_id,
+        run_id=config.run_id,
+        run_desc=config.run_desc,
+        provider=config.provider,
+        model=config.model,
+    )
 
 
 def _attach_rag_outputs(
     data: DebugReportData,
-    rag_config_path: Path,
+    source: RagArtifactSource,
     exported_topics: Sequence[Topic],
 ) -> DebugReportData:
-    config = load_rag_generation_config(rag_config_path)
     expected_handoff = (data.output_dir / "generation_handoff_manifest.json").resolve()
-    if config.handoff_manifest_path.resolve() != expected_handoff:
+    if source.handoff_manifest_path.resolve() != expected_handoff:
         raise ValueError("RAG handoff manifest path is incompatible with the retrieval export")
-    handoff = load_generation_handoff(config.handoff_manifest_path)
-    configured_topics = select_generation_topics(handoff, config.topic_ids)
+    if source.handoff_snapshot is not None:
+        source.handoff_snapshot.verify_current()
+    handoff = source.handoff or (
+        load_generation_handoff_snapshot(source.handoff_snapshot)
+        if source.handoff_snapshot is not None
+        else load_generation_handoff(source.handoff_manifest_path)
+    )
+    configured_topics = select_generation_topics(handoff, source.topic_ids)
     configured_ids = tuple(topic.topic_id for topic in configured_topics)
     if configured_ids != tuple(topic.id for topic in exported_topics):
         raise ValueError("RAG topic order or coverage is incompatible with the retrieval export")
@@ -505,13 +570,24 @@ def _attach_rag_outputs(
     allowed_by_topic = {
         topic.topic_id: list(topic.citation_docids) for topic in configured_topics
     }
-    output_parent = _safe_directory(config.output_path.parent, "RAG output directory")
-    output_path = _safe_file(config.output_path, output_parent)
-    with _open_hashed_snapshot(output_path, _MAX_JSONL_BYTES) as (
-        output_raw,
-        output_sha256,
-    ):
+    output_parent = _safe_directory(source.output_path.parent, "RAG output directory")
+    output_path = _safe_file(source.output_path, output_parent)
+    if source.output_snapshot is not None:
+        source.output_snapshot.verify_current()
+        output_raw = source.output_snapshot.data
+        output_sha256 = source.output_snapshot.sha256
         rows = _decode_jsonl(output_raw, "RAG output")
+    else:
+        with _open_hashed_snapshot(output_path, _MAX_JSONL_BYTES) as (
+            output_raw,
+            output_sha256,
+        ):
+            rows = _decode_jsonl(output_raw, "RAG output")
+    if (
+        source.accepted_submission_sha256 is not None
+        and output_sha256 != source.accepted_submission_sha256
+    ):
+        raise ValueError("RAG output sha256 does not match its accepted binding")
     if len(rows) != len(configured_topics):
         raise ValueError("RAG output topic coverage is incompatible with the RAG config")
 
@@ -523,9 +599,9 @@ def _attach_rag_outputs(
             topic_id=topic_id,
             narrative=topic.narrative,
             allowed_docids=allowed_by_topic[topic_id],
-            team_id=config.team_id,
-            run_id=config.run_id,
-            run_desc=config.run_desc,
+            team_id=source.team_id,
+            run_id=source.run_id,
+            run_desc=source.run_desc,
         )
         references = tuple(row["references"])
         answer_items = tuple(
@@ -547,20 +623,31 @@ def _attach_rag_outputs(
             answer_items=answer_items,
             run_id=metadata["run_id"],
             run_desc=metadata["run_desc"],
-            provider=config.provider,
-            model=config.model,
+            provider=source.provider,
+            model=source.model,
             word_count=sum(len(item.text.split()) for item in answer_items),
             output_sha256=output_sha256,
         )
 
     sources = dict(data.source_sha256s)
-    sources["rag/generation_handoff_manifest.json"] = sha256(
-        serialize_generation_handoff(handoff)
-    ).hexdigest()
+    sources["rag/generation_handoff_manifest.json"] = (
+        source.handoff_snapshot.sha256
+        if source.handoff_snapshot is not None
+        else sha256(serialize_generation_handoff(handoff)).hexdigest()
+    )
     sources["rag/rag_output_trec_rag_2026.jsonl"] = output_sha256
+    if source.output_snapshot is not None:
+        source.output_snapshot.verify_current()
+    if source.handoff_snapshot is not None:
+        source.handoff_snapshot.verify_current()
     return replace(
         data,
-        rag_config_path=rag_config_path.resolve(),
+        rag_config_path=(
+            data.rag_config_path
+            if data.rag_config_path is not None
+            else None
+        ),
+        rag_artifact_source=source,
         topics=tuple(
             replace(topic, rag_output=rag_by_topic[topic.topic_id])
             for topic in data.topics
@@ -3851,6 +3938,7 @@ def build_debug_report(
     retrieval_config_path: Path,
     *,
     rag_config_path: Path | None = None,
+    rag_artifact_source: RagArtifactSource | None = None,
     topic_ids: Sequence[str] | None = None,
     output_path: Path | None = None,
 ) -> DebugReportReceipt:
@@ -3858,6 +3946,7 @@ def build_debug_report(
     data = load_debug_report_data(
         Path(retrieval_config_path),
         rag_config_path=None if rag_config_path is None else Path(rag_config_path),
+        rag_artifact_source=rag_artifact_source,
         topic_ids=topic_ids,
     )
     target = _resolve_report_output(data, output_path)
@@ -3867,7 +3956,7 @@ def build_debug_report(
         schema_version=_REPORT_SCHEMA_VERSION,
         output_path=target,
         topic_ids=tuple(topic.topic_id for topic in data.topics),
-        rag_included=data.rag_config_path is not None,
+        rag_included=rag_included(data),
         source_sha256s=MappingProxyType(dict(sorted(data.source_sha256s.items()))),
     )
 
@@ -3876,6 +3965,7 @@ def build_debug_report_bundle(
     retrieval_config_path: Path,
     *,
     rag_config_path: Path | None = None,
+    rag_artifact_source: RagArtifactSource | None = None,
     topic_ids: Sequence[str] | None = None,
     evaluation_manifest_path: Path | None = None,
     output_dir: Path,
@@ -3884,6 +3974,7 @@ def build_debug_report_bundle(
     data = load_debug_report_data(
         Path(retrieval_config_path),
         rag_config_path=None if rag_config_path is None else Path(rag_config_path),
+        rag_artifact_source=rag_artifact_source,
         topic_ids=topic_ids,
     )
     from trec_rag.competition_debug_bundle import build_bundle_from_data

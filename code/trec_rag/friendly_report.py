@@ -16,8 +16,10 @@ from __future__ import annotations
 import html
 import os
 import re
+import secrets
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +74,11 @@ _PRIVATE_PATTERNS = (
 
 class ReportPrivacyError(EvaluationError):
     """Raised when the assembled page would publish forbidden material."""
+
+
+# Keep the renderer's parser independent of test/integration monkeypatches applied to
+# the shared stdlib class (some bundle tests count that class's public ``feed`` calls).
+_RAW_HTMLPARSER_FEED = HTMLParser.feed
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +179,13 @@ def build_presentation(manifest: Mapping[str, Any], *, commands: Sequence[str] =
 
     judge = manifest["judge"]
     ragdoll = manifest["ragdoll"]
+    identities = manifest["identities"]
+    source_identity_available = identities.get("source_identity_available", True)
+    if type(source_identity_available) is not bool:
+        raise EvaluationError("identities.source_identity_available must be a boolean")
+    source_identity_reason = identities.get("source_identity_reason")
+    if source_identity_reason is not None and not isinstance(source_identity_reason, str):
+        raise EvaluationError("identities.source_identity_reason must be text or null")
     provenance = {
         "ragdoll_version": str(ragdoll["project_version"]),
         "ragdoll_commit": str(ragdoll["commit"])[:7],
@@ -183,6 +197,8 @@ def build_presentation(manifest: Mapping[str, Any], *, commands: Sequence[str] =
         "reused_from_cache": int(judge["reused_from_cache"]),
         "cache": {key: int(value) for key, value in manifest["cache"].items()},
         "run_identity_sha256": str(manifest["identities"]["generation_identity_sha256"])[:7],
+        "source_identity_available": source_identity_available,
+        "source_identity_reason": source_identity_reason,
     }
     return Presentation(
         schema_version=REPORT_SCHEMA_VERSION,
@@ -212,14 +228,36 @@ def build_presentation(manifest: Mapping[str, Any], *, commands: Sequence[str] =
 # ---------------------------------------------------------------------------
 
 
-def denylist_from_bundle(work_dir: Path, extra: Iterable[str] = ()) -> tuple[str, ...]:
-    """Collect concrete private values that must never appear in the page.
+@dataclass(frozen=True)
+class PrivacyDenylist(Sequence[str]):
+    """Separate always-forbidden identifiers from collision-safe passage text."""
+
+    identifiers: tuple[str, ...]
+    passage_texts: tuple[str, ...]
+
+    def _values(self) -> tuple[str, ...]:
+        return self.identifiers + self.passage_texts
+
+    def __len__(self) -> int:
+        return len(self.identifiers) + len(self.passage_texts)
+
+    def __getitem__(self, index: int | slice) -> str | tuple[str, ...]:
+        return self._values()[index]
+
+
+def denylist_from_bundle(work_dir: Path, extra: Iterable[str] = ()) -> PrivacyDenylist:
+    """Collect concrete private values, separating identifiers from passages.
 
     The values come from the bundle's own derived artifacts — document identifiers,
-    evidence passages, prompts, and full digests — so the scan catches a leak of this
-    run's real data rather than only matching generic regexes.
+    evidence passages, prompts, and full digests — so the scan catches a leak of
+    this run's real data rather than only matching generic regexes. Identifiers
+    are always scanned against the unredacted page; passage text may recur in the
+    explicitly allowlisted response/narrative fields.
     """
-    values: set[str] = {value for value in extra if isinstance(value, str) and value.strip()}
+    identifiers: set[str] = {
+        value for value in extra if isinstance(value, str) and value.strip()
+    }
+    passage_texts: set[str] = set()
     support_input = Path(work_dir) / "support_input.jsonl"
     if support_input.is_file():
         import json
@@ -229,26 +267,454 @@ def denylist_from_bundle(work_dir: Path, extra: Iterable[str] = ()) -> tuple[str
                 continue
             row = json.loads(line)
             for docid in row.get("references", []):
-                values.add(str(docid))
+                identifiers.add(str(docid))
             for docid, text in (row.get("segments") or {}).items():
-                values.add(str(docid))
-                values.add(str(text))
-    return tuple(sorted(value for value in values if len(value) >= 6))
+                identifiers.add(str(docid))
+                passage_texts.add(str(text))
+    return PrivacyDenylist(
+        identifiers=tuple(sorted(value for value in identifiers if len(value) >= 6)),
+        passage_texts=tuple(sorted(value for value in passage_texts if len(value) >= 6)),
+    )
 
 
-def assert_publishable(page: str, denylist: Sequence[str] = ()) -> None:
-    for pattern, description in _PRIVATE_PATTERNS:
-        match = re.search(pattern, page, flags=re.IGNORECASE)
-        if match is not None:
-            raise ReportPrivacyError(
-                f"refusing to write the report: it contains {description} ({match.group(0)[:24]!r})"
+_VOID_HTML_TAGS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+)
+_BLOCK_HTML_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "dd",
+        "details",
+        "div",
+        "dl",
+        "dt",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "summary",
+        "table",
+        "tr",
+        "ul",
+    }
+)
+_APPROVED_SINKS = {
+    ("blockquote", "narrative"): "narrative",
+    ("p", "subnarrative-text"): "subnarrative",
+    ("p", "response-text"): "response",
+    ("q", "judgment-statement"): "judgment",
+}
+_APPROVED_INLINE_TAGS = frozenset({"strong", "br"})
+
+
+def _tag_end(raw: str, start: int) -> int | None:
+    """Find a raw tag's closing ``>`` without treating quoted ``>`` as the end."""
+    quote: str | None = None
+    for index in range(start, len(raw)):
+        character = raw[index]
+        if quote is not None:
+            if character == quote:
+                quote = None
+        elif character in "\"'":
+            quote = character
+        elif character == ">":
+            return index
+    return None
+
+
+class _PrivacyHTMLParser(HTMLParser):
+    """Parse raw report HTML for privacy projections.
+
+    The parser deliberately receives the raw page with ``convert_charrefs=False``.
+    Dynamic redaction is limited to text events below the exact renderer sinks; raw
+    start/end tags and attributes are copied byte-for-byte. Any malformed structure or
+    unbalanced stack makes the caller fail closed rather than guessing at a node.
+    """
+
+    def __init__(
+        self,
+        *,
+        redact_sinks: bool,
+        sentinel: str = "",
+        expected_sinks: Mapping[str, Sequence[str]] | None = None,
+    ) -> None:
+        super().__init__(convert_charrefs=False)
+        self.redact_sinks = redact_sinks
+        self.sentinel = sentinel
+        self.expected_sinks = (
+            {kind: tuple(values) for kind, values in expected_sinks.items()}
+            if expected_sinks is not None
+            else None
+        )
+        self._seen_sinks: dict[str, int] = {}
+        self._sink_content: list[str] | None = None
+        self.parts: list[str] = []
+        self.visible_parts: list[str] = []
+        self.compact_visible_parts: list[str] = []
+        self.stack: list[str] = []
+        self.sink_index: int | None = None
+        self.sink_kind: str | None = None
+        self.citation_index: int | None = None
+        self.citations_seen = False
+        self.failed_reason: str | None = None
+        self._pending_endtag: str | None = None
+        self._encoded_tag_text = False
+
+    def _fail(self, reason: str) -> None:
+        if self.failed_reason is None:
+            self.failed_reason = reason
+
+    @staticmethod
+    def _has_class(attrs: list[tuple[str, str | None]], expected: str) -> bool:
+        return any(
+            name == "class" and expected in (value or "").split()
+            for name, value in attrs
+        )
+
+    def _redacting_text(self) -> bool:
+        return (
+            self.redact_sinks
+            and self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        )
+
+    def _response_after_citations(self) -> bool:
+        return (
+            self.sink_kind == "response"
+            and self.sink_index is not None
+            and self.citations_seen
+            and self.citation_index is None
+        )
+
+    def _capture_sink_content(self, raw: str) -> None:
+        if self._sink_content is not None:
+            self._sink_content.append(raw)
+
+    def _finish_sink(self) -> None:
+        if self.expected_sinks is None or self.sink_kind is None:
+            return
+        kind = self.sink_kind
+        seen = self._seen_sinks.get(kind, 0)
+        expected = self.expected_sinks.get(kind)
+        if expected is None or seen >= len(expected):
+            self._fail(f"unexpected {kind} privacy sink")
+        else:
+            actual = "".join(self._sink_content or ())
+            if actual != expected[seen]:
+                self._fail(f"{kind} sink does not match expected {kind} rendering")
+        self._seen_sinks[kind] = seen + 1
+
+    def _validate_sink_counts(self) -> None:
+        if self.expected_sinks is None:
+            return
+        for kind, expected in self.expected_sinks.items():
+            seen = self._seen_sinks.get(kind, 0)
+            if seen != len(expected):
+                self._fail(f"expected {kind} sink count {len(expected)}, saw {seen}")
+
+    def _visible_start(self, tag: str) -> None:
+        if tag in _BLOCK_HTML_TAGS:
+            self.visible_parts.append("\n")
+            self.compact_visible_parts.append("\n")
+
+    def _visible_end(self, tag: str) -> None:
+        if tag in _BLOCK_HTML_TAGS:
+            self.visible_parts.append("\n")
+            self.compact_visible_parts.append("\n")
+
+    def _start(self, tag: str, attrs: list[tuple[str, str | None]], raw: str, *, empty: bool) -> None:
+        tag = tag.lower()
+        self.parts.append(raw)
+        self._visible_start(tag)
+
+        in_sink = self.sink_index is not None
+        in_citations = self.citation_index is not None
+        if in_sink and not in_citations:
+            if self._response_after_citations():
+                self._fail("no markup is allowed after the response citations")
+            elif self.sink_kind == "response" and tag == "span" and self._has_class(attrs, "citations"):
+                if empty:
+                    self._fail("the citations boundary cannot be self-closing")
+                elif self.sink_index != len(self.stack) - 1:
+                    self._fail("the citations boundary must be a direct response child")
+                else:
+                    self.citations_seen = True
+            elif tag not in _APPROVED_INLINE_TAGS:
+                self._fail(f"unexpected {tag} descendant in approved report text")
+            else:
+                self._capture_sink_content(raw)
+        elif not in_sink:
+            sink_kind = next(
+                (
+                    candidate
+                    for (sink_tag, sink_class), candidate in _APPROVED_SINKS.items()
+                    if tag == sink_tag and self._has_class(attrs, sink_class)
+                ),
+                None,
             )
-    decoded = html.unescape(page)
-    plain = re.sub(r"<br\s*/?>", "\n", decoded, flags=re.IGNORECASE)
-    plain = re.sub(r"<[^>]+>", "", plain)
-    projections = (page, decoded, plain)
+            if sink_kind is not None:
+                if empty:
+                    self._fail("an approved privacy sink cannot be self-closing")
+                else:
+                    self.sink_index = len(self.stack)
+                    self.sink_kind = sink_kind
+                    self._sink_content = []
+                    if self.expected_sinks is not None:
+                        expected = self.expected_sinks.get(sink_kind)
+                        seen = self._seen_sinks.get(sink_kind, 0)
+                        if expected is None or seen >= len(expected):
+                            self._fail(f"unexpected {sink_kind} privacy sink")
+
+        if tag == "br":
+            self.visible_parts.append("\n")
+            self.compact_visible_parts.append("\n")
+        if not empty and tag not in _VOID_HTML_TAGS:
+            self.stack.append(tag)
+            if (
+                self.sink_kind == "response"
+                and tag == "span"
+                and self.sink_index is not None
+                and self.citation_index is None
+                and self._has_class(attrs, "citations")
+            ):
+                self.citation_index = len(self.stack) - 1
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        raw = self.get_starttag_text()
+        if raw is None:
+            self._fail("start tag has no raw source")
+            return
+        self._start(tag, attrs, raw, empty=False)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        raw = self.get_starttag_text()
+        if raw is None:
+            self._fail("empty tag has no raw source")
+            return
+        self._start(tag, attrs, raw, empty=True)
+
+    def handle_endtag(self, tag: str) -> None:
+        raw = self._pending_endtag
+        if raw is None:
+            self._fail("end tag has no raw source")
+        else:
+            self.parts.append(raw)
+        tag = tag.lower()
+        if not self.stack or self.stack[-1] != tag:
+            self._fail(f"mismatched or unexpected end tag {tag!r}")
+            return
+        frame_index = len(self.stack) - 1
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+            and frame_index != self.sink_index
+        ):
+            self._capture_sink_content(raw)
+        self._visible_end(tag)
+        self.stack.pop()
+        if self.citation_index == frame_index:
+            self.citation_index = None
+        if self.sink_index == frame_index:
+            self._finish_sink()
+            self.sink_index = None
+            self.sink_kind = None
+            self._sink_content = None
+            self.citations_seen = False
+
+    def handle_data(self, data: str) -> None:
+        if "<" in data:
+            self._fail("literal '<' recovered as HTML data")
+        if self._response_after_citations() and data.strip():
+            self._fail("non-whitespace response text follows the citations")
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        ):
+            self._capture_sink_content(data)
+        self.parts.append(self.sentinel if self._redacting_text() else data)
+        decoded = html.unescape(data)
+        self.visible_parts.append(decoded)
+        if not self._encoded_tag_text:
+            self.compact_visible_parts.append(decoded)
+
+    def handle_entityref(self, name: str) -> None:
+        raw = f"&{name};"
+        decoded = html.unescape(raw)
+        if self._response_after_citations():
+            self._fail("an entity follows the response citations")
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        ):
+            self._capture_sink_content(raw)
+        self.parts.append(self.sentinel if self._redacting_text() else raw)
+        self.visible_parts.append(decoded)
+        if decoded == "<":
+            self._encoded_tag_text = True
+        elif decoded == ">" and self._encoded_tag_text:
+            self._encoded_tag_text = False
+        elif not self._encoded_tag_text:
+            self.compact_visible_parts.append(decoded)
+
+    def handle_charref(self, name: str) -> None:
+        raw = f"&#{name};"
+        decoded = html.unescape(raw)
+        if self._response_after_citations():
+            self._fail("a character reference follows the response citations")
+        if (
+            self.sink_index is not None
+            and self.citation_index is None
+            and not self.citations_seen
+        ):
+            self._capture_sink_content(raw)
+        self.parts.append(self.sentinel if self._redacting_text() else raw)
+        self.visible_parts.append(decoded)
+        if decoded == "<":
+            self._encoded_tag_text = True
+        elif decoded == ">" and self._encoded_tag_text:
+            self._encoded_tag_text = False
+        elif not self._encoded_tag_text:
+            self.compact_visible_parts.append(decoded)
+
+    def handle_comment(self, data: str) -> None:
+        if self.sink_index is not None and self.citation_index is None:
+            self._fail("a comment is not allowed in approved response text")
+        self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl: str) -> None:
+        if self.sink_index is not None and self.citation_index is None:
+            self._fail("a declaration is not allowed in approved response text")
+        self.parts.append(f"<!{decl}>")
+
+    def handle_pi(self, data: str) -> None:
+        if self.sink_index is not None and self.citation_index is None:
+            self._fail("a processing instruction is not allowed in approved response text")
+        self.parts.append(f"<?{data}>")
+
+    def parse_starttag(self, i: int) -> int:
+        result = super().parse_starttag(i)
+        if result < 0:
+            self._fail("malformed or unclosed start tag")
+        return result
+
+    def parse_endtag(self, i: int) -> int:
+        raw_end = _tag_end(self.rawdata, i)
+        self._pending_endtag = (
+            self.rawdata[i : raw_end + 1] if raw_end is not None else None
+        )
+        if self._pending_endtag is not None and re.fullmatch(
+            r"</[A-Za-z][A-Za-z0-9:-]*>", self._pending_endtag
+        ) is None:
+            self._fail("malformed end tag")
+        if self.rawdata[i + 2 : i + 3] == ">":
+            self._fail("missing end-tag name")
+        try:
+            result = super().parse_endtag(i)
+            if result < 0:
+                self._fail("malformed or unclosed end tag")
+        finally:
+            self._pending_endtag = None
+        return result
+
+    def close(self) -> None:
+        if self.rawdata:
+            self._fail("incomplete trailing HTML construct")
+        super().close()
+        if self.stack:
+            self._fail("unclosed HTML element")
+
+
+def _parse_privacy_html(
+    page: str,
+    *,
+    redact_sinks: bool,
+    expected_sinks: Mapping[str, Sequence[str]] | None = None,
+) -> _PrivacyHTMLParser:
+    sentinel = f"friendly-report-allowlisted-{secrets.token_urlsafe(24)}"
+    parser = _PrivacyHTMLParser(
+        redact_sinks=redact_sinks,
+        sentinel=sentinel,
+        expected_sinks=expected_sinks,
+    )
+    try:
+        _RAW_HTMLPARSER_FEED(parser, page)
+        if parser.rawdata:
+            parser._fail("incomplete trailing HTML construct")
+        parser.close()
+        parser._validate_sink_counts()
+    except Exception as error:
+        raise ReportPrivacyError("refusing to write the report: malformed HTML") from error
+    if parser.failed_reason is not None:
+        raise ReportPrivacyError(
+            f"refusing to write the report: {parser.failed_reason}"
+        )
+    return parser
+
+
+def _privacy_projections(page: str) -> tuple[str, str, str, str]:
+    parser = _parse_privacy_html(page, redact_sinks=False)
+    return (
+        page,
+        html.unescape(page),
+        "".join(parser.visible_parts),
+        "".join(parser.compact_visible_parts),
+    )
+
+
+def _dynamic_scan_projection(
+    page: str,
+    *,
+    expected_sinks: Mapping[str, Sequence[str]] | None = None,
+) -> str:
+    return "".join(
+        _parse_privacy_html(
+            page,
+            redact_sinks=True,
+            expected_sinks=expected_sinks,
+        ).parts
+    )
+
+
+def _denylist_values(denylist: Sequence[str] | PrivacyDenylist) -> tuple[str, ...]:
+    if isinstance(denylist, PrivacyDenylist):
+        return denylist._values()
+    return tuple(denylist)
+
+
+def assert_publishable(
+    page: str, denylist: Sequence[str] | PrivacyDenylist = ()
+) -> None:
+    projections = _privacy_projections(page)
+    for pattern, description in _PRIVATE_PATTERNS:
+        for projection in projections:
+            match = re.search(pattern, projection, flags=re.IGNORECASE)
+            if match is not None:
+                raise ReportPrivacyError(
+                    f"refusing to write the report: it contains {description} ({match.group(0)[:24]!r})"
+                )
     normalized_projections = tuple(" ".join(projection.split()) for projection in projections)
-    for value in denylist:
+    for value in _denylist_values(denylist):
         normalized_value = " ".join(value.split()) if value else ""
         if value and (
             any(value in projection for projection in projections)
@@ -289,6 +755,33 @@ def _excerpt(text: str, limit: int = JUDGMENT_EXCERPT_CHARACTERS) -> str:
         return _escape(collapsed)
     head = collapsed[:limit].rsplit(" ", 1)[0].rstrip(",;:.")
     return _escape(f"{head}…")
+
+
+def _expected_sink_values(view: Presentation) -> Mapping[str, Sequence[str]]:
+    """Return the exact field renderings authorized in each privacy sink.
+
+    These queues mirror the renderer's declared topic/answer/citation order.  The
+    dynamic privacy pass consumes one value per actual sink and compares its raw
+    rendered content before redacting it, so a class name alone never authorizes a
+    copied private passage.
+    """
+    expected: dict[str, list[str]] = {
+        "narrative": [],
+        "subnarrative": [],
+        "response": [],
+        "judgment": [],
+    }
+    for topic in view.topics:
+        expected["narrative"].append(_inline(str(topic["narrative"])))
+        expected["subnarrative"].extend(
+            _inline(str(text)) for text in topic["subnarratives"]
+        )
+        for item in topic["answer"]:
+            expected["response"].append(_inline(str(item["text"])))
+            expected["judgment"].extend(
+                _excerpt(str(item["text"])) for _citation in item["citations"]
+            )
+    return expected
 
 
 def _paired(metrics: Mapping[str, Any], precision_key: str, recall_key: str) -> tuple[str, str]:
@@ -348,7 +841,7 @@ def _render_hero(view: Presentation) -> str:
         [
             '    <header class="hero">',
             '      <div class="hero-inner">',
-            '        <p class="eyebrow">Private post-run evaluation</p>',
+            '        <p class="eyebrow">Post-run evaluation</p>',
             "        <h1>Retrieval and answer evaluation</h1>",
             f'        <p class="lede">{len(view.topic_ids)} topic(s) in declared order. '
             f"RAGDoll judged {judged} statement-citation pair(s): "
@@ -758,6 +1251,14 @@ def _render_provenance(view: Presentation) -> str:
             f'        <span>Judge tasks · <strong>{provenance["judge_tasks"]}</strong></span>',
             f'        <span>Hosted calls · <strong>{provenance["hosted_calls"]}</strong></span>',
             f'        <span>Reused from cache · <strong>{provenance["reused_from_cache"]}</strong></span>',
+            *(
+                [
+                    "        <p class=\"caption\">Original generation identity unavailable — "
+                    f'{_escape(provenance["source_identity_reason"] or "reason not recorded")}.</p>',
+                ]
+                if not provenance["source_identity_available"]
+                else []
+            ),
             "      </div>",
             "    </section>",
         ]
@@ -768,13 +1269,34 @@ def write_report(
     manifest: Mapping[str, Any],
     output_path: Path,
     *,
-    denylist: Sequence[str] = (),
+    denylist: Sequence[str] | PrivacyDenylist = (),
     commands: Sequence[str] = (),
 ) -> Path:
     """Render, scan, and only then write — atomically, so a failure never corrupts a
     previously valid report."""
-    page = render_report(build_presentation(manifest, commands=commands))
-    assert_publishable(page, denylist)
+    view = build_presentation(manifest, commands=commands)
+    page = render_report(view)
+    if isinstance(denylist, PrivacyDenylist):
+        identifiers = denylist.identifiers
+        passage_texts = denylist.passage_texts
+    else:
+        # Keep legacy callers fail-closed while the bundle API uses the split type.
+        identifiers = tuple(denylist)
+        passage_texts = identifiers
+    # Generic patterns must inspect the actual page with no dynamic exemption:
+    # allowlisted response text is still forbidden when it contains credentials,
+    # paths, hashes, or provider/runtime fields. Identifiers are always forbidden
+    # too, so they receive a separate all-projection scan of that same page.
+    assert_publishable(page, denylist=())
+    assert_publishable(page, denylist=identifiers)
+    # Passage values are checked against the actual rendered HTML. The parser preserves
+    # every raw tag and attribute and redacts only text events in exact approved sinks.
+    # This catches a renderer copying an allowlisted value into an aside or attribute.
+    scan_page = _dynamic_scan_projection(
+        page,
+        expected_sinks=_expected_sink_values(view),
+    )
+    assert_publishable(scan_page, denylist=passage_texts)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = page.encode("utf-8")
@@ -1036,14 +1558,13 @@ _PAGE = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="robots" content="noindex,nofollow,noarchive">
-  <title>TREC RAG private post-run evaluation</title>
+  <title>TREC RAG post-run evaluation</title>
   <style>{style}  </style>
 </head>
 <body>
   <main>
 {body}
-    <footer>Private post-run evaluation. It intentionally includes narratives, generated
+    <footer>Post-run evaluation. It intentionally includes narratives, generated
     subnarratives, and answer text. It excludes corpus passages, document identifiers,
     credentials, and raw provider responses.</footer>
   </main>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1050" role="img" aria-labelledby="single-title single-desc">
+  <title id="single-title">Single-pass Sol generation with bounded validation retry</title>
+  <desc id="single-desc">The authenticated selected-evidence handoff becomes one deterministic GPT-5.6 Sol request with medium reasoning, strict structured output, and a 12,000-token ceiling. Local validation enforces metadata, citations, exact hints, and 1,024 words. At most one semantic retry returns to Sol before accepted run rag26-ss1 is published.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7;--ok:#277a45;--ok-soft:#ddf2e3}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616;--ok:#82dda0;--ok-soft:#173c25}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:33px;font-weight:700}.label{font-size:27px;font-weight:700}.body{font-size:22px}.small{font-size:19px}.muted{fill:var(--muted)}.gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.gate{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:3}.flow{fill:none;stroke:var(--gen);stroke-width:3;marker-end:url(#arrow)}.retry{stroke:var(--adv);stroke-dasharray:12 8}
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="800" height="1050" fill="var(--bg)"/><text class="title" x="400" y="55" text-anchor="middle">Single-pass: selected evidence → Sol → validate</text>
+  <path class="stage" d="M120 105H680V235H120Z"/><path d="M620 105V165H680" fill="var(--bg)" stroke="var(--line)" stroke-width="2"/><text class="label" x="400" y="157" text-anchor="middle">Authenticated handoff</text><text class="body muted" x="400" y="198" text-anchor="middle">119 exact topic contexts + citation domains</text>
+  <path class="flow" d="M400 235V300" vector-effect="non-scaling-stroke"/>
+  <rect class="gen" x="85" y="310" width="630" height="170" rx="9"/><text class="label" x="400" y="358" text-anchor="middle">openai/gpt-5.6-sol</text><text class="body" x="400" y="400" text-anchor="middle">medium reasoning • strict structured output</text><text class="body" x="400" y="440" text-anchor="middle">12,000-token ceiling • complete selected evidence</text>
+  <path class="flow" d="M400 480V550" vector-effect="non-scaling-stroke"/>
+  <path class="gate" d="M400 550L665 665L400 780L135 665Z"/><text class="label" x="400" y="635" text-anchor="middle">Local validation</text><text class="small" x="400" y="674" text-anchor="middle">exact narrative • allowed citations • unique references</text><text class="small" x="400" y="708" text-anchor="middle">exact hints • answer structure • ≤1,024 words</text>
+  <path class="flow retry" d="M135 665H55V395H85" vector-effect="non-scaling-stroke"/><text class="small muted" x="55" y="540" transform="rotate(-90 55 540)" text-anchor="middle">one semantic retry if needed</text>
+  <path class="flow" d="M400 780V850" vector-effect="non-scaling-stroke"/>
+  <rect class="ok" x="105" y="860" width="590" height="145" rx="9"/><text class="label" x="400" y="910" text-anchor="middle">rag26-ss1</text><text class="body" x="400" y="952" text-anchor="middle">119/119 valid • accepted by Evalbase</text><text class="small muted" x="400" y="985" text-anchor="middle">121 Sol calls • two topics used attempt two</text>
+</svg>

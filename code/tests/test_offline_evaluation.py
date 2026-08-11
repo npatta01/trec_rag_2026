@@ -10,14 +10,20 @@ import json
 import re
 import shutil
 import tempfile
+import threading
+import time
 import unittest
+from copy import deepcopy
+from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Sequence
+from unittest.mock import patch
 
 from offline_evaluation_fixture import (
     RunFixture,
     TopicSpec,
+    build_accepted_run,
     build_run,
     submission_records,
     write_generation_identity,
@@ -25,6 +31,7 @@ from offline_evaluation_fixture import (
 )
 
 from trec_rag import competition_evaluation_report as cli
+import trec_rag.offline_evaluation as offline_module
 from trec_rag.friendly_report import (
     ReportPrivacyError,
     build_presentation,
@@ -91,6 +98,59 @@ class RecordingJudge:
         return JudgeOutcome(status="completed", support_label=label)
 
 
+class ConcurrencyRecordingJudge:
+    """A deterministic fixture judge that records concurrent hosted calls."""
+
+    def __init__(self, label: str = "FS", delay: float = 0.01) -> None:
+        self.label = label
+        self.delay = delay
+        self.calls: list[str] = []
+        self.active = 0
+        self.max_active = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, task: dict[str, Any]) -> JudgeOutcome:
+        task_id = str(task["task_id"])
+        with self._lock:
+            self.calls.append(task_id)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(self.delay)
+            return JudgeOutcome(status="completed", support_label=self.label)
+        finally:
+            with self._lock:
+                self.active -= 1
+
+
+class ControllerRecordingCache(JudgeCache):
+    """Cache fixture that proves writes stay on the resolver/controller thread."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.put_thread_names: list[str] = []
+
+    def put(self, identity: Any, *, support_label: str) -> str:
+        self.put_thread_names.append(threading.current_thread().name)
+        return super().put(identity, support_label=support_label)
+
+
+class CheckpointThenInterruptJudge:
+    """Complete the first task, then emulate an interrupted hosted job."""
+
+    def __init__(self, first_task_id: str) -> None:
+        self.first_task_id = first_task_id
+        self.calls: list[str] = []
+
+    def __call__(self, task: dict[str, Any]) -> JudgeOutcome:
+        task_id = str(task["task_id"])
+        self.calls.append(task_id)
+        if task_id == self.first_task_id:
+            return JudgeOutcome(status="completed", support_label="FS")
+        time.sleep(0.05)
+        raise KeyboardInterrupt("simulated operator interruption")
+
+
 class Headings(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -109,6 +169,9 @@ class EvaluationCase(unittest.TestCase):
 
     def run_fixture(self, specs: Sequence[TopicSpec] = THREE_TOPICS, **kwargs: Any) -> RunFixture:
         return build_run(self.workspace(), list(specs), **kwargs)
+
+    def accepted_fixture(self, specs: Sequence[TopicSpec] = THREE_TOPICS) -> RunFixture:
+        return build_accepted_run(self.workspace(), list(specs))
 
     def build(
         self,
@@ -187,6 +250,267 @@ class CliContractTests(EvaluationCase):
         ):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 cli.main(argv)
+
+    def test_cli_requires_config_mode_or_complete_accepted_mode(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(["--retrieval-config", "r.yaml", "--accepted-rag", "run.jsonl"])
+
+    def test_cli_rejects_source_identity_in_config_mode(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(
+                [
+                    "--retrieval-config", "r.yaml",
+                    "--rag-config", "g.yaml",
+                    "--source-identity", "identity.json",
+                ]
+            )
+
+    def test_accepted_mode_records_post_run_binding(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        bundle = build_evaluation_bundle(
+            retrieval_config_path=fixture.retrieval_config,
+            accepted_submission_path=fixture.rag_output,
+            accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+            handoff_manifest_path=fixture.accepted_handoff,
+            work_dir=fixture.root / "accepted-work",
+            repository_root=REPOSITORY_ROOT,
+            cache_root=fixture.root / "accepted-cache",
+            judge=None,
+            judge_settings=settings(),
+            created_utc="2026-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(
+            bundle.manifest["identities"]["binding_kind"],
+            "accepted_rag_evaluation_binding_v1",
+        )
+        self.assertFalse(bundle.manifest["identities"]["source_identity_available"])
+        self.assertEqual(
+            bundle.manifest["sources"]["rag/rag_output_trec_rag_2026.jsonl"],
+            bundle.manifest["identities"]["submission_sha256"],
+        )
+        self.assertEqual(
+            bundle.manifest["sources"]["rag/accepted_bundle_metadata.json"],
+            sha256(fixture.accepted_bundle_metadata.read_bytes()).hexdigest(),
+        )
+
+    def test_accepted_mode_does_not_claim_missing_generation_identity(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        bundle = build_evaluation_bundle(
+            retrieval_config_path=fixture.retrieval_config,
+            accepted_submission_path=fixture.rag_output,
+            accepted_bundle_metadata_path=fixture.bundle_metadata,
+            handoff_manifest_path=fixture.handoff,
+            work_dir=fixture.root / "accepted-work",
+            repository_root=REPOSITORY_ROOT,
+            cache_root=fixture.root / "accepted-cache",
+            judge=None,
+            judge_settings=settings(),
+            created_utc="2026-01-01T00:00:00+00:00",
+        )
+        self.assertFalse(bundle.manifest["validation"]["handoff_bound_to_generation"])
+        self.assertTrue(bundle.manifest["validation"]["accepted_submission_bound_to_handoff"])
+        page = render_report(build_presentation(bundle.manifest))
+        self.assertIn("Handoff bound to generation: no", page)
+        self.assertIn("Original generation identity unavailable", page)
+        self.assertIn("original generation identity was not preserved", page)
+
+    def test_accepted_mode_rejects_between_phase_submission_replacement(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        real_loader = offline_module.load_debug_report_data
+        binding = offline_module.build_accepted_run_binding(
+            fixture.rag_output,
+            fixture.bundle_metadata,
+            fixture.handoff,
+        )
+        source = offline_module.RagArtifactSource(
+            handoff_manifest_path=fixture.handoff.resolve(),
+            output_path=fixture.rag_output.resolve(),
+            topic_ids=binding.topic_ids,
+            team_id=binding.team_id,
+            run_id=binding.run_id,
+            run_desc=binding.run_desc,
+            provider=binding.provider,
+            model=", ".join(binding.models),
+            accepted_submission_sha256=binding.submission_sha256,
+        )
+        accepted_bytes = fixture.rag_output.read_bytes()
+        replacement_bytes = accepted_bytes.replace(
+            b"First supported answer.", b"Changed supported answer."
+        )
+
+        def load_then_replace(*args: Any, **kwargs: Any) -> Any:
+            fixture.rag_output.write_bytes(replacement_bytes)
+            try:
+                return real_loader(*args, **kwargs)
+            finally:
+                fixture.rag_output.write_bytes(accepted_bytes)
+
+        with patch.object(offline_module, "load_debug_report_data", side_effect=load_then_replace):
+            with self.assertRaisesRegex(ValueError, "sha256|bound bytes"):
+                load_then_replace(
+                    fixture.retrieval_config,
+                    rag_artifact_source=source,
+                )
+
+    def test_accepted_mode_rejects_changed_submission_bytes(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        fixture.rag_output.write_bytes(fixture.rag_output.read_bytes() + b"\n")
+        with self.assertRaises(ValueError):
+            build_evaluation_bundle(
+                retrieval_config_path=fixture.retrieval_config,
+                accepted_submission_path=fixture.rag_output,
+                accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+                handoff_manifest_path=fixture.accepted_handoff,
+                work_dir=fixture.root / "accepted-work",
+                repository_root=REPOSITORY_ROOT,
+                cache_root=fixture.root / "accepted-cache",
+                judge=None,
+                judge_settings=settings(),
+            )
+
+    def test_accepted_mode_rejects_handoff_changed_after_support_materialization(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        real_support_rows = offline_module._selected_support_rows
+        judge = RecordingJudge("FS")
+        cache_root = fixture.root / "accepted-cache"
+
+        def support_then_replace(*args: Any, **kwargs: Any) -> Any:
+            rows = real_support_rows(*args, **kwargs)
+            original = fixture.accepted_handoff.read_bytes()
+            fixture.accepted_handoff.write_bytes(original[:-1] + b"X")
+            return rows
+
+        with patch.object(offline_module, "_selected_support_rows", side_effect=support_then_replace):
+            with self.assertRaisesRegex(ValueError, "handoff.*(?:changed|snapshot|bound)"):
+                build_evaluation_bundle(
+                    retrieval_config_path=fixture.retrieval_config,
+                    accepted_submission_path=fixture.rag_output,
+                    accepted_bundle_metadata_path=fixture.bundle_metadata,
+                    handoff_manifest_path=fixture.handoff,
+                    work_dir=fixture.root / "accepted-work",
+                    repository_root=REPOSITORY_ROOT,
+                    cache_root=cache_root,
+                    judge=judge,
+                    judge_settings=settings(),
+                )
+        self.assertEqual(judge.calls, [])
+        self.assertFalse(any(cache_root.rglob("*.json")))
+
+    def test_accepted_mode_rejects_metadata_changed_after_binding(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        real_loader = offline_module.load_debug_report_data
+
+        def load_then_replace(*args: Any, **kwargs: Any) -> Any:
+            result = real_loader(*args, **kwargs)
+            metadata = json.loads(fixture.accepted_bundle_metadata.read_text(encoding="utf-8"))
+            metadata["provider"] = "changed-after-binding"
+            fixture.accepted_bundle_metadata.write_text(json.dumps(metadata), encoding="utf-8")
+            return result
+
+        with patch.object(offline_module, "load_debug_report_data", side_effect=load_then_replace):
+            with self.assertRaisesRegex(ValueError, "metadata|snapshot|bound"):
+                build_evaluation_bundle(
+                    retrieval_config_path=fixture.retrieval_config,
+                    accepted_submission_path=fixture.rag_output,
+                    accepted_bundle_metadata_path=fixture.bundle_metadata,
+                    handoff_manifest_path=fixture.handoff,
+                    work_dir=fixture.root / "accepted-work",
+                    repository_root=REPOSITORY_ROOT,
+                    cache_root=fixture.root / "accepted-cache",
+                    judge=None,
+                    judge_settings=settings(),
+                )
+
+    def test_accepted_mode_rejects_source_identity_changed_after_binding(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        identity_path = write_generation_identity(fixture)
+        real_loader = offline_module.load_debug_report_data
+
+        def load_then_replace(*args: Any, **kwargs: Any) -> Any:
+            result = real_loader(*args, **kwargs)
+            original = identity_path.read_bytes()
+            identity_path.write_bytes(original[:-1] + b"X")
+            return result
+
+        with patch.object(offline_module, "load_debug_report_data", side_effect=load_then_replace):
+            with self.assertRaisesRegex(ValueError, "source identity|snapshot|bound"):
+                build_evaluation_bundle(
+                    retrieval_config_path=fixture.retrieval_config,
+                    accepted_submission_path=fixture.rag_output,
+                    accepted_bundle_metadata_path=fixture.bundle_metadata,
+                    handoff_manifest_path=fixture.handoff,
+                    source_identity_path=identity_path,
+                    work_dir=fixture.root / "accepted-work",
+                    repository_root=REPOSITORY_ROOT,
+                    cache_root=fixture.root / "accepted-cache",
+                    judge=None,
+                    judge_settings=settings(),
+                )
+
+    def test_accepted_mode_rejects_wrong_run_description(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        metadata = json.loads(fixture.accepted_bundle_metadata.read_text(encoding="utf-8"))
+        metadata["runs"][0]["run_desc"] = "Wrong accepted run description"
+        fixture.accepted_bundle_metadata.write_text(json.dumps(metadata), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            build_evaluation_bundle(
+                retrieval_config_path=fixture.retrieval_config,
+                accepted_submission_path=fixture.rag_output,
+                accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+                handoff_manifest_path=fixture.accepted_handoff,
+                work_dir=fixture.root / "accepted-work",
+                repository_root=REPOSITORY_ROOT,
+                cache_root=fixture.root / "accepted-cache",
+                judge=None,
+                judge_settings=settings(),
+            )
+
+    def test_accepted_mode_rejects_handoff_incompatible_with_retrieval_export(self) -> None:
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        other = self.accepted_fixture(ONE_TOPIC)
+        with self.assertRaises(ValueError):
+            build_evaluation_bundle(
+                retrieval_config_path=fixture.retrieval_config,
+                accepted_submission_path=fixture.rag_output,
+                accepted_bundle_metadata_path=fixture.accepted_bundle_metadata,
+                handoff_manifest_path=other.accepted_handoff,
+                work_dir=fixture.root / "accepted-work",
+                repository_root=REPOSITORY_ROOT,
+                cache_root=fixture.root / "accepted-cache",
+                judge=None,
+                judge_settings=settings(),
+            )
+
+    def test_cli_accepted_mode_writes_portable_command_shape(self) -> None:
+        import contextlib
+        import io
+
+        fixture = self.accepted_fixture(ONE_TOPIC)
+        output = io.StringIO()
+        report = fixture.root / "accepted-report.html"
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--retrieval-config", str(fixture.retrieval_config),
+                        "--accepted-rag", str(fixture.rag_output),
+                        "--accepted-bundle-metadata", str(fixture.accepted_bundle_metadata),
+                        "--handoff-manifest", str(fixture.accepted_handoff),
+                        "--work-dir", str(fixture.root / "accepted-cli-work"),
+                        "--cache-dir", str(fixture.root / "accepted-cli-cache"),
+                        "--output", str(report),
+                    ]
+                ),
+                0,
+            )
+        receipt = json.loads(output.getvalue().strip().splitlines()[-1])
+        page = report.read_text(encoding="utf-8")
+        self.assertIn("--accepted-rag", page)
+        self.assertNotIn(str(fixture.root), page)
+        self.assertEqual(
+            receipt["exact_invocation"].split()[3],
+            "--retrieval-config",
+        )
 
     def test_judge_switch_defaults_to_no_hosted_calls(self) -> None:
         parser_defaults = cli.main.__doc__ or ""
@@ -752,6 +1076,27 @@ class RenderTests(EvaluationCase):
         self.assertNotIn("http://", page)
         self.assertNotIn("https://", page)
 
+    def test_render_is_independent_of_worker_count(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        one = self.build(
+            fixture,
+            judge=RecordingJudge("FS"),
+            work_dir=fixture.root / "one-worker",
+            cache_root=fixture.root / "one-worker-cache",
+            judge_workers=1,
+        )
+        many = self.build(
+            fixture,
+            judge=ConcurrencyRecordingJudge("FS"),
+            work_dir=fixture.root / "many-workers",
+            cache_root=fixture.root / "many-workers-cache",
+            judge_workers=2,
+        )
+        self.assertEqual(
+            render_report(build_presentation(one.manifest)),
+            render_report(build_presentation(many.manifest)),
+        )
+
 
 class PrivacyTests(EvaluationCase):
     def test_dynamic_docid_leak_is_rejected(self) -> None:
@@ -776,6 +1121,208 @@ class PrivacyTests(EvaluationCase):
             from trec_rag.friendly_report import assert_publishable
 
             assert_publishable(page + evidence, denylist_from_bundle(bundle.work_dir))
+
+    def test_response_docid_leak_is_rejected_inside_allowlisted_text(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = "The answer cites doc-original."
+        with self.assertRaises(ReportPrivacyError):
+            write_report(
+                manifest,
+                fixture.root / "response-docid-leak.html",
+                denylist=denylist_from_bundle(bundle.work_dir),
+            )
+
+    def test_generic_patterns_scan_raw_decoded_and_plain_projections(self) -> None:
+        from trec_rag.friendly_report import assert_publishable
+
+        formatted_leaks = (
+            'OPEN<span title="&gt;">ROUTER</span>',
+            "OPEN&#x3c;strong&#x3e;ROUTER&#x3c;/strong&#x3e;",
+            "/ho<strong>me</strong>/private/report",
+            "a1b2c3<strong>d4e5f6</strong>7890",
+            "doc-<span>original</span>",
+            "Shared selected <span>evidence passage.</span>",
+        )
+        denylist_by_leak = {
+            "doc-<span>original</span>": ("doc-original",),
+            "Shared selected <span>evidence passage.</span>": (
+                "Shared selected evidence passage.",
+            ),
+        }
+        for leaked in formatted_leaks:
+            with self.subTest(leaked=leaked), self.assertRaises(ReportPrivacyError):
+                assert_publishable(f"<p>{leaked}</p>", denylist_by_leak.get(leaked, ()))
+
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        for leaked in ("OPEN**ROUTER**", "/ho**me**/private/report"):
+            manifest = deepcopy(bundle.manifest)
+            manifest["topics"][0]["answer"][0]["text"] = leaked
+            with self.subTest(formatted_answer=leaked), self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / f"formatted-{len(leaked)}.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
+    def test_renderer_injected_nested_attribute_leak_is_rejected(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values()))
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+
+        def render_with_nested_leak(view: Any) -> str:
+            page = original_render_report(view)
+            marker = '<p class="response-text">'
+            self.assertIn(marker, page)
+            return page.replace(
+                marker,
+                f'{marker}<span data-leak="{evidence}"><strong>{evidence}</strong></span>',
+                1,
+            )
+
+        with patch.object(
+            friendly_report, "render_report", side_effect=render_with_nested_leak
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    bundle.manifest,
+                    fixture.root / "nested-renderer-leak.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
+    def test_renderer_dynamic_answer_copy_is_rejected(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values()))
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = f"The answer repeats {evidence}."
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+
+        def render_with_dynamic_copy(view: Any) -> str:
+            page = original_render_report(view)
+            source = view.topics[0]["answer"][0]["text"]
+            return page + f'<aside data-copy="{source}"><strong>{source}</strong></aside>'
+
+        with patch.object(
+            friendly_report, "render_report", side_effect=render_with_dynamic_copy
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / "dynamic-answer-copy-leak.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
+    def test_renderer_live_answer_after_citations_is_rejected(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values()))
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = f"The answer repeats {evidence}."
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+
+        def render_with_post_citation_copy(view: Any) -> str:
+            page = original_render_report(view)
+            source = view.topics[0]["answer"][0]["text"]
+            citation_tail = "</span></span></p></div>"
+            self.assertIn(citation_tail, page)
+            return page.replace(
+                citation_tail,
+                f"</span></span>{source}</p></div>",
+                1,
+            )
+
+        with patch.object(
+            friendly_report, "render_report", side_effect=render_with_post_citation_copy
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / "post-citation-answer-leak.html",
+                    denylist=denylist_from_bundle(bundle.work_dir),
+                )
+
+    def test_privacy_parser_fails_closed_on_unexpected_sink_markup(self) -> None:
+        from trec_rag.friendly_report import assert_publishable
+
+        malformed = (
+            '<p class="response-text"><div>unexpected block</div></p>',
+            '<p class="response-text"><strong>unclosed',
+            '<p class="response-text"><strong>mismatched</p>',
+        )
+        for page in malformed:
+            with self.subTest(page=page), self.assertRaises(ReportPrivacyError):
+                assert_publishable(page)
+
+        lexical_tails = (
+            "<p>safe<",
+            "<p>safe<!--",
+            "<p>safe<!DOCTYPE",
+            "<p>safe<?pi",
+            "<p>safe</p extra>",
+            "<p>safe</p/>",
+        )
+        for page in lexical_tails:
+            with self.subTest(lexical_tail=page), self.assertRaises(ReportPrivacyError):
+                assert_publishable(page)
+
+        assert_publishable("<!doctype html><!-- valid comment --><p>valid</p>")
+        assert_publishable('<p class="response-text">a valid zero-citation answer</p>')
+
+    def test_citation_subtree_is_not_allowlisted(self) -> None:
+        from trec_rag.friendly_report import assert_publishable
+
+        with self.assertRaises(ReportPrivacyError):
+            assert_publishable(
+                '<p class="response-text">safe'
+                '<span class="citations">private selected passage</span></p>',
+                ("private selected passage",),
+            )
+
+    def test_allowlisted_evidence_reuse_passes_but_template_leak_fails(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        bundle = self.build(fixture, judge=RecordingJudge("FS"))
+        evidence = next(
+            iter(_rows(bundle.work_dir / "support_input.jsonl")[0]["segments"].values())
+        )
+        manifest = deepcopy(bundle.manifest)
+        manifest["topics"][0]["answer"][0]["text"] = f"The answer repeats {evidence}."
+        manifest["topics"][0]["subnarratives"][0] = f"The subnarrative repeats {evidence}."
+        denylist = denylist_from_bundle(bundle.work_dir)
+        self.assertIn("doc-original", denylist.identifiers)
+        self.assertIn(evidence, denylist.passage_texts)
+        self.assertNotIn(evidence, denylist.identifiers)
+        output = fixture.root / "allowlisted-evidence.html"
+
+        write_report(manifest, output, denylist=denylist)
+        self.assertTrue(output.is_file())
+
+        from trec_rag import friendly_report
+
+        original_render_report = friendly_report.render_report
+        with patch.object(
+            friendly_report,
+            "render_report",
+            side_effect=lambda view: original_render_report(view) + f"<aside>{evidence}</aside>",
+        ):
+            with self.assertRaises(ReportPrivacyError):
+                write_report(
+                    manifest,
+                    fixture.root / "non-allowlisted-evidence.html",
+                    denylist=denylist,
+                )
 
     def test_html_escaped_private_text_is_rejected(self) -> None:
         from trec_rag.friendly_report import assert_publishable
@@ -803,7 +1350,7 @@ class PrivacyTests(EvaluationCase):
         write_report(bundle.manifest, output)
         original = output.read_bytes()
         with self.assertRaises(ReportPrivacyError):
-            write_report(bundle.manifest, output, denylist=("Private post-run evaluation",))
+            write_report(bundle.manifest, output, denylist=("Post-run evaluation",))
         self.assertEqual(output.read_bytes(), original)
         self.assertEqual([p for p in output.parent.glob("*.tmp-*")], [])
 
@@ -1068,6 +1615,135 @@ class JudgeLimitTests(EvaluationCase):
         self.assertEqual(bundle.manifest["judge"]["skipped_by_judge_limit"], 0)
         self.assertTrue(bundle.manifest["judgments"]["fully_judged"])
 
+    def test_judge_workers_bound_concurrency_and_preserve_order(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        judge = ConcurrencyRecordingJudge()
+        bundle = self.build(fixture, judge=judge, judge_workers=2)
+        rows = _rows(bundle.work_dir / "support_judgments.jsonl")
+        expected = [
+            row["task_id"] for row in _rows(bundle.work_dir / "support_tasks.jsonl")
+        ]
+        self.assertEqual(judge.max_active, 2)
+        self.assertEqual([row["task_id"] for row in rows], expected)
+        self.assertEqual(bundle.manifest["judge"]["judge_workers"], 2)
+
+    def test_cache_writes_are_owned_by_the_controller_thread(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        baseline = self.build(fixture, judge=None, work_dir=fixture.root / "baseline")
+        tasks = _rows(baseline.work_dir / "support_tasks.jsonl")
+        cache = ControllerRecordingCache(fixture.root / "controller-cache")
+        judgments, report = _resolve_judgments(
+            tasks,
+            cache=cache,
+            judge=ConcurrencyRecordingJudge(),
+            settings=settings(),
+            ragdoll=ragdoll_identity(REPOSITORY_ROOT),
+            judge_workers=3,
+        )
+        self.assertEqual(report["completed"], len(judgments))
+        self.assertTrue(cache.put_thread_names)
+        self.assertEqual(
+            set(cache.put_thread_names),
+            {threading.current_thread().name},
+        )
+
+    def test_completed_future_is_checkpointed_before_later_interruption(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        baseline = self.build(fixture, judge=None, work_dir=fixture.root / "baseline")
+        tasks = _rows(baseline.work_dir / "support_tasks.jsonl")
+        cache = JudgeCache(fixture.root / "checkpoint-cache")
+        interrupted = CheckpointThenInterruptJudge(str(tasks[0]["task_id"]))
+
+        with self.assertRaises(KeyboardInterrupt):
+            _resolve_judgments(
+                tasks,
+                cache=cache,
+                judge=interrupted,
+                settings=settings(),
+                ragdoll=ragdoll_identity(REPOSITORY_ROOT),
+                judge_workers=2,
+            )
+
+        first_identity = _judge_identity(
+            tasks[0], settings=settings(), ragdoll=ragdoll_identity(REPOSITORY_ROOT)
+        )
+        self.assertEqual(cache.read(first_identity).support_label, "FS")
+
+        resume = RecordingJudge("PS")
+        judgments, report = _resolve_judgments(
+            tasks,
+            cache=cache,
+            judge=resume,
+            settings=settings(),
+            ragdoll=ragdoll_identity(REPOSITORY_ROOT),
+            judge_workers=2,
+        )
+        self.assertEqual(len(resume.calls), 1)
+        self.assertNotIn(str(tasks[0]["task_id"]), resume.calls)
+        self.assertEqual(report["reused_from_cache"], 1)
+        self.assertEqual(report["hosted_calls"], 1)
+        self.assertEqual(
+            [row["task_id"] for row in judgments],
+            [task["task_id"] for task in tasks],
+        )
+
+    def test_probe_limit_preselects_one_miss_even_with_four_workers(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        judge = ConcurrencyRecordingJudge()
+        bundle = self.build(fixture, judge=judge, judge_limit=1, judge_workers=4)
+        self.assertEqual(bundle.manifest["judge"]["hosted_calls"], 1)
+        self.assertEqual(len(judge.calls), 1)
+        self.assertEqual(bundle.manifest["judge"]["judge_workers"], 4)
+
+    def test_cached_tasks_never_occupy_workers(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        cache_root = fixture.root / "cache"
+        seed = self.build(fixture, judge=RecordingJudge("FS"), cache_root=cache_root)
+        task_ids = {row["task_id"] for row in _rows(seed.work_dir / "support_tasks.jsonl")}
+        judge = ConcurrencyRecordingJudge("PS")
+        bundle = self.build(
+            fixture,
+            judge=judge,
+            cache_root=cache_root,
+            work_dir=fixture.root / "resume",
+            judge_workers=4,
+        )
+        self.assertEqual(judge.calls, [])
+        self.assertEqual(bundle.manifest["judge"]["reused_from_cache"], len(task_ids))
+        self.assertEqual(bundle.manifest["judge"]["hosted_calls"], 0)
+
+    def test_failed_calls_are_not_cached_and_resume_retries_only_failures(self) -> None:
+        fixture = self.run_fixture(THREE_TOPICS)
+        cache_root = fixture.root / "cache"
+        first = RecordingJudge([None, "FS", None, "FS", None, "FS"])
+        # Keep the label sequence deterministic while exercising resumability. The two
+        # default-answer topics intentionally share cache identities, so there are five
+        # unique judge calls for seven materialized tasks.
+        partial = self.build(fixture, judge=first, cache_root=cache_root, judge_workers=1)
+        self.assertEqual(partial.manifest["judge"]["failed"], 3)
+        self.assertEqual(partial.manifest["cache"]["writes"], 2)
+
+        retry = RecordingJudge("PS")
+        complete = self.build(
+            fixture,
+            judge=retry,
+            cache_root=cache_root,
+            work_dir=fixture.root / "retry",
+            judge_workers=2,
+        )
+        self.assertEqual(len(retry.calls), 3)
+        self.assertEqual(
+            complete.manifest["judge"]["reused_from_cache"],
+            partial.manifest["judge"]["completed"],
+        )
+        self.assertEqual(complete.manifest["judge"]["hosted_calls"], 3)
+        self.assertTrue(complete.manifest["judgments"]["fully_judged"])
+
+    def test_judge_workers_must_be_positive(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        with self.assertRaisesRegex(EvaluationError, "judge_workers"):
+            self.build(fixture, judge=None, judge_workers=0)
+
     def test_cli_rejects_a_limit_without_run_judge(self) -> None:
         with self.assertRaises(SystemExit):
             cli.main(
@@ -1080,6 +1756,24 @@ class JudgeLimitTests(EvaluationCase):
                 [
                     "--retrieval-config", "a.yaml", "--rag-config", "b.yaml",
                     "--run-judge", "--judge-limit", "0",
+                ]
+            )
+
+    def test_cli_rejects_non_default_workers_without_run_judge(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(
+                [
+                    "--retrieval-config", "a.yaml", "--rag-config", "b.yaml",
+                    "--judge-workers", "2",
+                ]
+            )
+
+    def test_cli_rejects_non_positive_workers(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.main(
+                [
+                    "--retrieval-config", "a.yaml", "--rag-config", "b.yaml",
+                    "--run-judge", "--judge-workers", "0",
                 ]
             )
 
@@ -1107,6 +1801,162 @@ class ReportWordingTests(EvaluationCase):
         self.assertIn("not the exact invocation", page)
 
 
+class AcceptedWorkflowDocumentationTests(unittest.TestCase):
+    """Both docs must carry a semantically complete accepted-run preflight section."""
+
+    DOCUMENTS = (
+        (
+            REPOSITORY_ROOT / ".agents/skills/trec-rag-competition-debug-report/SKILL.md",
+            "### accepted evalbase rag jsonl preflight",
+        ),
+        (
+            REPOSITORY_ROOT / "code/trec_rag/README.md",
+            "#### accepted evalbase rag preflight (119 topics)",
+        ),
+    )
+
+    @staticmethod
+    def _section(content: str, heading: str) -> str:
+        """Return one accepted-workflow section, stopping at its next peer heading."""
+        lines = content.splitlines()
+        start = next(
+            index for index, line in enumerate(lines) if line.strip() == heading
+        )
+        level = len(heading.split()[0])
+        for end in range(start + 1, len(lines)):
+            match = re.match(r"^(#+)\s+", lines[end])
+            if match and len(match.group(1)) <= level:
+                return "\n".join(lines[start:end])
+        return "\n".join(lines[start:])
+
+    @staticmethod
+    def _subsection(section: str, marker: str, next_marker: str | None = None) -> str:
+        start = section.index(marker)
+        end = section.index(next_marker, start) if next_marker is not None else len(section)
+        return section[start:end]
+
+    COMMON_TEXT = (
+        "--accepted-rag",
+        "--accepted-bundle-metadata",
+        "--handoff-manifest",
+        "--source-identity",
+        "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json",
+        "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl",
+        "submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl",
+        "/home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json",
+        "/home/npatta01/.codex/worktrees/rag26-ms1-full-run-1786308971/outputs/rag26-ms1-multistage-final/work/multistage_generation_identity.json",
+        "one-task probe",
+        "--judge-limit 1",
+        "--judge-workers 1",
+        "--judge-workers 4",
+        "bounded",
+        "full resume",
+        "qrels",
+        "gold nuggets",
+        "unavailable",
+        "partial",
+        "github pages",
+        "reports/2026-ragdoll-rag26-ss1.html",
+        "reports/2026-ragdoll-rag26-ms1-final.html",
+    )
+
+    SCOPE_TEXT = (
+        "stdout receipt's top-level `topic_ids`",
+        "receipt's `manifest_path`",
+        "manifest file's `scope.topic_ids`",
+        "exact ordered 119 topic ids",
+        "rag26-ss1",
+        "judgment_tasks: 3155",
+        "rag26-ms1-final",
+        "judgment_tasks: 7008",
+    )
+
+    IDENTITY_TOTAL_TEXT = (
+        "3155 judgment tasks / 3148 unique judge identities",
+        "7008 judgment tasks / 6974 unique judge identities",
+        "inventory and probe receipts determine actual calls",
+        "hard maxima and do not assume an empty preexisting cache",
+    )
+
+    BOUND_TEXT = (
+        "after one successful new identity probe, `hosted_calls <= 3147` for `rag26-ss1`",
+        "after one successful new identity probe, `hosted_calls <= 6973` for `rag26-ms1-final`",
+    )
+
+    FINAL_TEXT = (
+        "missing_judgments: 0",
+        "failed_judgments: 0",
+        "conflicting_judgments: 0",
+        "fully_judged: true",
+        "partial output must never be called complete",
+        "fresh cache-only replay is the exact completion authority",
+    )
+
+    DEDUP_TEXT = (
+        "task counts differ from unique judge prompt identities",
+        "one hosted success may fill multiple tasks",
+        "hosted_calls",
+        "selected unique uncached identities",
+        "fresh cache-only replay",
+    )
+
+    PAYLOAD_TEXT = (
+        "private `support_input.jsonl` retains the accepted narrative in row `metadata`",
+        "private `support_tasks.jsonl` `metadata.source` retains `topic_id`, `run_id`, `sentence_index`, `citation_index`, `docid`, and same-topic `sentence_context` (not narrative)",
+        "`task_id`, `evaluator`, and `instruction` are local `run_prompt` arguments/bookkeeping",
+        "provider-visible rendered prompt contains only one generated statement and its cited selected-evidence text",
+        "no narrative/source metadata, unrelated topic data, or `task_id`/`evaluator` fields is in the provider prompt",
+    )
+
+    def test_accepted_workflow_documentation(self) -> None:
+        for path, heading in self.DOCUMENTS:
+            content = path.read_text(encoding="utf-8").lower()
+            section = re.sub(r"\s+", " ", self._section(content, heading)).strip()
+            with self.subTest(document=path.name):
+                for required in self.COMMON_TEXT:
+                    self.assertIn(required, section)
+
+                inventory = self._subsection(
+                    section,
+                    "1. cache-only inventory",
+                    "2. one-task probe",
+                )
+                full_resume = self._subsection(
+                    section,
+                    "3. bounded full resume",
+                    "4. final cache-only replay",
+                )
+                payload_layers = self._subsection(
+                    section,
+                    "payload layers (private versus provider)",
+                    "1. cache-only inventory",
+                )
+                final_replay = self._subsection(section, "4. final cache-only replay")
+                for required in self.SCOPE_TEXT:
+                    with self.subTest(phase="cache-only inventory", required=required):
+                        self.assertIn(required, inventory)
+                    with self.subTest(phase="final cache-only replay", required=required):
+                        self.assertIn(required, final_replay)
+                for required in self.IDENTITY_TOTAL_TEXT:
+                    with self.subTest(phase="accepted identity totals", required=required):
+                        self.assertIn(required, inventory)
+                for required in self.BOUND_TEXT:
+                    with self.subTest(phase="post-probe bounds", required=required):
+                        self.assertIn(required, full_resume)
+                for required in self.FINAL_TEXT:
+                    with self.subTest(phase="final cache-only replay", required=required):
+                        self.assertIn(required, final_replay)
+                for required in self.DEDUP_TEXT:
+                    with self.subTest(phase="deduplication", required=required):
+                        self.assertIn(required, section)
+                for required in self.PAYLOAD_TEXT:
+                    with self.subTest(phase="payload boundary", required=required):
+                        self.assertIn(required, payload_layers)
+                self.assertNotIn("manifest.scope.topic_ids", section)
+                self.assertNotIn("transport/evaluator envelope", section)
+                self.assertNotIn("hosted calls equal only to remaining misses", section)
+
+
 class ReceiptContractTests(EvaluationCase):
     """The stdout receipt must expose everything the documented workflow checks."""
 
@@ -1114,7 +1964,7 @@ class ReceiptContractTests(EvaluationCase):
         "schema_version", "manifest_path", "report_path", "work_dir", "topic_ids",
         "judgment_tasks", "completed_judgments", "failed_judgments", "missing_judgments",
         "conflicting_judgments", "reused_from_cache", "hosted_calls", "cache", "label_counts", "fully_judged",
-        "judge_limit", "skipped_by_judge_limit", "exact_invocation",
+        "judge_limit", "judge_workers", "skipped_by_judge_limit", "exact_invocation",
     )
 
     def receipt(self, fixture: RunFixture, *extra: str, cache_dir: Path | None = None,
@@ -1140,6 +1990,7 @@ class ReceiptContractTests(EvaluationCase):
         for field in self.REQUIRED:
             with self.subTest(field=field):
                 self.assertIn(field, receipt)
+        self.assertEqual(receipt["judge_workers"], 1)
         self.assertEqual(set(receipt["cache"]), {"hits", "misses", "invalidations", "writes"})
 
     def test_cache_only_receipt_counts_missing_judgments(self) -> None:
@@ -1151,6 +2002,20 @@ class ReceiptContractTests(EvaluationCase):
         self.assertEqual(receipt["failed_judgments"], 0)
         self.assertEqual(receipt["reused_from_cache"], 0)
         self.assertFalse(receipt["fully_judged"])
+
+    def test_receipt_records_effective_non_default_workers(self) -> None:
+        fixture = self.run_fixture(ONE_TOPIC)
+        with patch.object(cli, "hosted_judge", return_value=RecordingJudge("FS")):
+            receipt = self.receipt(
+                fixture,
+                "--run-judge",
+                "--judge-workers",
+                "2",
+                work="workers",
+            )
+        self.assertEqual(receipt["judge_workers"], 2)
+        manifest = json.loads(Path(receipt["manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["judge"]["judge_workers"], 2)
 
     def test_receipt_fields_track_the_validated_bundle(self) -> None:
         fixture = self.run_fixture(ONE_TOPIC)

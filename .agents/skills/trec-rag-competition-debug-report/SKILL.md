@@ -114,7 +114,10 @@ or more topics or for all topics; use the bundle command above.
 
 ## Evaluated Friendly Report
 
-The full response-and-judgment report is one repository CLI. Both configs are required; the retrieval-only command above is a different, raw artifact and must not be presented as this report.
+The full response-and-judgment report is one repository CLI. Standard completed-run mode
+uses both configs; the accepted-artifact mode below uses the authenticated accepted JSONL,
+bundle metadata, and handoff instead. The retrieval-only command above is a different, raw
+artifact and must not be presented as this report.
 
 ```bash
 .venv/bin/python \
@@ -129,6 +132,136 @@ The full response-and-judgment report is one repository CLI. Both configs are re
 Omit `--topic` to evaluate every completed topic in declared order. Add `--qrels` or `--gold-nuggets` only when they match the selected topics. Everything else resolves from the configs and the authenticated manifests they name; never pass or hardcode an output directory, topic count, or expected label.
 
 Without `--run-judge` the command makes no hosted calls: it reuses validated cache entries and reports anything unjudged as explicitly unavailable. Pass `--run-judge` only with explicit evaluation authorization, and only to fill validated cache misses.
+
+### Accepted Evalbase RAG JSONL preflight
+
+Use this workflow for the two immutable Evalbase-accepted RAG JSONLs. It is the canonical
+cache-only → one-task probe → bounded resumable full judging → final cache-only replay
+sequence. Run from the repository root. The accepted files are never regenerated, reformatted,
+or overwritten:
+
+- `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl`
+- `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl`
+- `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json`
+
+The handoff is the private main-checkout source
+`/home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json`.
+The preserved multi-stage source identity is the private path
+`/home/npatta01/.codex/worktrees/rag26-ms1-full-run-1786308971/outputs/rag26-ms1-multistage-final/work/multistage_generation_identity.json`.
+The single-pass binding intentionally records that the original generation identity was not
+preserved; do not invent one from the post-run binding.
+
+#### Payload layers (private versus provider)
+
+Private `support_input.jsonl` retains the accepted narrative in row `metadata`. Private
+`support_tasks.jsonl` `metadata.source` retains `topic_id`, `run_id`, `sentence_index`,
+`citation_index`, `docid`, and same-topic `sentence_context` (not narrative). Its `task_id`,
+`evaluator`, and `instruction` are local `run_prompt` arguments/bookkeeping. The
+provider-visible rendered prompt contains only one generated statement and its cited
+selected-evidence text; no narrative/source metadata, unrelated topic data, or
+`task_id`/`evaluator` fields is in the provider prompt. Retrieval TSV, full-text archive,
+qrels, gold nuggets, generated-claim-as-gold data, and credentials remain excluded. Keep
+private work, support tasks, raw events, judgments, manifests, and reports outside git.
+
+The exact accepted-mode flags are `--accepted-rag`, `--accepted-bundle-metadata`,
+`--handoff-manifest`, and (only for the multi-stage run) `--source-identity`. The command
+also accepts `--work-dir`, `--cache-dir`, and `--output`; these private directories must be
+mode `0700`, with report files mode `0600`.
+
+#### 1. Cache-only inventory (zero hosted calls)
+
+Use the same cache directory for every phase of a run. First run each accepted JSONL without
+`--run-judge` and save the JSON receipt. Confirm `hosted_calls: 0`, then record the pre-probe
+`completed_judgments`, `missing_judgments`, `failed_judgments`, `conflicting_judgments`,
+`reused_from_cache`, and `fully_judged` values. If `fully_judged: true` and all missing,
+failed, and conflicting counts are zero, no probe is needed.
+
+Single-pass inventory:
+
+```bash
+.venv/bin/python -m trec_rag.competition_evaluation_report \
+  --retrieval-config /home/npatta01/data/competitions/trec_rag_2026/configs/rag26_competition_retrieval_v2.yaml \
+  --accepted-rag submissions/trec-rag-2026/rag/selected-evidence-sol-v1/singlepass/rag_output_trec_rag_2026.jsonl \
+  --accepted-bundle-metadata submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json \
+  --handoff-manifest /home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json \
+  --work-dir /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ss1 \
+  --cache-dir /home/npatta01/data/competitions/trec_rag_2026/cache/ragdoll_support_judge \
+  --output /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ss1/evaluation_report.html
+```
+
+Repeat the same command for multi-stage, replacing only the accepted JSONL, work/output
+namespace, and adding the source identity:
+
+```bash
+.venv/bin/python -m trec_rag.competition_evaluation_report \
+  --retrieval-config /home/npatta01/data/competitions/trec_rag_2026/configs/rag26_competition_retrieval_v2.yaml \
+  --accepted-rag submissions/trec-rag-2026/rag/selected-evidence-sol-v1/multistage/rag_output_trec_rag_2026.jsonl \
+  --accepted-bundle-metadata submissions/trec-rag-2026/rag/selected-evidence-sol-v1/metadata.json \
+  --handoff-manifest /home/npatta01/data/competitions/trec_rag_2026/outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json \
+  --source-identity /home/npatta01/.codex/worktrees/rag26-ms1-full-run-1786308971/outputs/rag26-ms1-multistage-final/work/multistage_generation_identity.json \
+  --work-dir /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ms1-final \
+  --cache-dir /home/npatta01/data/competitions/trec_rag_2026/cache/ragdoll_support_judge \
+  --output /home/npatta01/data/competitions/trec_rag_2026/outputs/final-evaluation/rag26-ms1-final/evaluation_report.html
+```
+
+Before any probe, enforce the exact accepted scope and task inventory. The stdout receipt's
+top-level `topic_ids` must equal the authenticated handoff's exact ordered 119 topic IDs.
+Follow that receipt's `manifest_path`; the manifest file's `scope.topic_ids` must equal the
+same ordered list. Do not pass a `--topic` subset. The cache-only receipt must show
+`judgment_tasks: 3155` for `rag26-ss1` and `judgment_tasks: 7008` for `rag26-ms1-final`,
+alongside the recorded hit/miss fields above. These are scope gates, not estimates.
+
+The accepted identity totals are `3155 judgment tasks / 3148 unique judge identities` for
+`rag26-ss1` and `7008 judgment tasks / 6974 unique judge identities` for `rag26-ms1-final`.
+Inventory and probe receipts determine actual calls; the post-probe bounds below are hard
+maxima and do not assume an empty preexisting cache.
+
+#### 2. One-task probe (one authorized hosted call)
+
+Only after reviewing the cache-only receipt and explicit evaluation authorization, rerun the
+same command against the same cache with `--run-judge --judge-limit 1 --judge-workers 1`.
+The worker bound is exact: one probe task, one worker, and at most one new hosted call. The
+probe must report `hosted_calls: 1`, `failed_judgments: 0`, `conflicting_judgments: 0`, and
+an increase in `completed_judgments` over the cache-only receipt. Stop on any discrepancy;
+do not spend the remaining quota. `--judge-limit` and non-default `--judge-workers` are
+valid only with `--run-judge`.
+
+#### 3. Bounded full resume
+
+If the probe is not fully judged, rerun the identical accepted command against the same cache
+with `--run-judge --judge-workers 4` and no judge limit. This is a bounded full resume: at
+most four hosted judge calls run concurrently, and cached tasks never occupy workers. Do not
+run concurrent evaluator commands against the same cache. Resume the same command after an
+interruption. Require `reused_from_cache >= 1`, `failed_judgments: 0`,
+`conflicting_judgments: 0`. Task counts differ from unique judge prompt identities: one hosted
+success may fill multiple tasks. Therefore `hosted_calls` is bounded by the selected unique
+uncached identities, not raw missing tasks; `--judge-limit` limits those selected identities.
+After one successful new identity probe, `hosted_calls <= 3147` for `rag26-ss1`. After one
+successful new identity probe, `hosted_calls <= 6973` for `rag26-ms1-final`; actual calls may
+be lower when the inventory or probe receipt already shows cache hits.
+
+#### 4. Final cache-only replay
+
+After the bounded resume, run each accepted command once more with `--run-judge` omitted,
+the same cache, and a fresh private replay work/output directory. A fresh cache-only replay is
+the exact completion authority. Its stdout receipt's top-level `topic_ids` must equal the
+authenticated handoff's exact ordered 119 topic IDs. Follow that receipt's `manifest_path`;
+the manifest file's `scope.topic_ids` must equal the same ordered list. It must show
+`judgment_tasks: 3155` for `rag26-ss1` or `judgment_tasks: 7008` for
+`rag26-ms1-final`, plus `hosted_calls: 0`, `missing_judgments: 0`,
+`failed_judgments: 0`, `conflicting_judgments: 0`, and `fully_judged: true`. A partial output
+must never be called complete; a report is complete only after this replay proves all checks.
+Missing qrels/gold
+metrics remain `Unavailable`: qrels-based retrieval metrics require matching qrels, and nugget
+coverage requires released gold nuggets plus complete assignments. Never render either as zero
+or treat generated claims as gold.
+
+Only the authoritative HTML from `trec_rag.friendly_report.write_report` after its fail-closed
+privacy scan may be published. Keep all adjacent JSON/JSONL/event files and private work
+artifacts out of git. The two approved public GitHub Pages reports are:
+
+- `reports/2026-ragdoll-rag26-ss1.html`
+- `reports/2026-ragdoll-rag26-ms1-final.html`
 
 ### Cache first, then probe one task, then resume
 
@@ -173,7 +306,12 @@ If the probe receipt is already `fully_judged: true`, finish there. Otherwise re
   --run-judge
 ```
 
-Require `reused_from_cache >= 1` (the probe was reused, not re-sent), `failed_judgments: 0`, `conflicting_judgments: 0`, and `hosted_calls` equal to the remaining misses rather than the full task count. `--judge-limit` requires `--run-judge` and must be a positive number. Do not run concurrent judging commands against the same cache directory.
+Require `reused_from_cache >= 1` (the probe was reused, not re-sent), `failed_judgments: 0`,
+and `conflicting_judgments: 0`. Task counts can exceed unique judge prompt identities, so
+one hosted success may fill multiple tasks; `hosted_calls` is bounded by selected unique
+uncached identities rather than raw remaining misses. `--judge-limit` requires `--run-judge`
+and must be a positive number. Do not run concurrent judging commands against the same cache
+directory.
 
 The command writes a private `evaluation_manifest.json` bundle and renders the HTML from it. Read the receipt and confirm `hosted_calls`, the cache counters, the topic order, and `fully_judged` before reporting results. A complete cache hit must show `hosted_calls: 0`.
 
