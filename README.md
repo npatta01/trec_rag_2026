@@ -17,9 +17,9 @@ each factual claim traceable to an allowed source. Our submission addresses
 both sides of that problem: variable-depth Retrieval rankings and cited RAG
 answers derived from one authenticated evidence source.
 
-[![The NP Labs TREC RAG 2026 system: bounded source retrieval creates one authenticated source, which branches into three Retrieval submissions and two evidence-grounded RAG submissions.](reports/2026-competition-architecture/01-whole-system.svg)](reports/2026-competition-architecture.html)
+[![The NP Labs TREC RAG 2026 system: bounded source retrieval creates one authenticated source, which branches into three Retrieval submissions and two evidence-grounded RAG submissions.](reports/2026-competition-architecture/01-whole-system.svg)](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
 
-*Open the diagram in the [Architecture Report](reports/2026-competition-architecture.html) for the full guided walkthrough.*
+*Explore the diagram and the full guided walkthrough in the [published artifact hub](https://npatta01.github.io/trec_rag_2026/).*
 
 ## Project at a glance
 
@@ -32,13 +32,13 @@ answers derived from one authenticated evidence source.
 
 ### Reports for reviewers
 
-- [Architecture Report](reports/2026-competition-architecture.html) — the final
+- [Architecture Report](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html) — the final
   system from bounded source retrieval through all five accepted files.
-- [Retrieval Quality Report](reports/2026-retrieval-nugget-coverage.html) —
+- [Retrieval Quality Report](https://npatta01.github.io/trec_rag_2026/reports/2026-retrieval-nugget-coverage.html) —
   evidence coverage analysis across the 119 official narratives.
-- [RAGDoll Evaluation — Single-pass RAG](reports/2026-ragdoll-rag26-ss1.html) —
+- [RAGDoll Evaluation — Single-pass RAG](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html) —
   citation-support analysis for `rag26-ss1`.
-- [RAGDoll Evaluation — Multi-stage RAG](reports/2026-ragdoll-rag26-ms1-final.html)
+- [RAGDoll Evaluation — Multi-stage RAG](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ms1-final.html)
   — citation-support analysis for `rag26-ms1-final`.
 
 ## Repository references
