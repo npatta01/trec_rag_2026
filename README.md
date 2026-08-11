@@ -1,102 +1,80 @@
-# TREC RAG Workspace
+# NP Labs · TREC RAG 2026
 
-This completed project contains the final TREC RAG 2026 Retrieval and RAG
-submissions, their architecture and validation records, supporting reports, and
-the reusable implementation that produced them. All five checked-in organizer
-files were uploaded and accepted by Evalbase.
+This repository contains the NP Labs submission for TREC RAG 2026.
 
-## Final Project Artifacts
+## [View the project artifact hub](https://npatta01.github.io/trec_rag_2026/)
 
-- [`index.html`](index.html) - compact entrypoint to the final project.
-- [`reports/2026-competition-architecture.html`](reports/2026-competition-architecture.html)
-  - image-led walkthrough of the final frozen-source architecture and its two
-  submission branches.
-- [`reports/2026-competition-architecture.qmd`](reports/2026-competition-architecture.qmd)
-  - canonical Quarto source for the generated architecture report.
-- [`submissions/trec-rag-2026/SUBMISSION_LEDGER.md`](submissions/trec-rag-2026/SUBMISSION_LEDGER.md)
-  - control sheet for the five accepted files, hashes, priorities, and portal
-  notes.
-- [`submissions/trec-rag-2026/retrieval/cache-first-candidate-core-v1/README.md`](submissions/trec-rag-2026/retrieval/cache-first-candidate-core-v1/README.md)
-  - final three-run Retrieval bundle.
-- [`submissions/trec-rag-2026/rag/selected-evidence-sol-v1/README.md`](submissions/trec-rag-2026/rag/selected-evidence-sol-v1/README.md)
-  - final two-run RAG bundle.
+The published hub is the best place to start. It presents the final system
+architecture, accepted submission records, the 2026 Retrieval quality report,
+and both 2026 RAGDoll evaluations in one reader-friendly site.
+
+## Repository references
+
+- [Submission ledger](submissions/trec-rag-2026/SUBMISSION_LEDGER.md) — exact
+  accepted files, hashes, priorities, and Evalbase confirmations.
+- [Architecture report](reports/2026-competition-architecture.html) — rendered
+  system walkthrough; its [Quarto source](reports/2026-competition-architecture.qmd)
+  is canonical.
 - [Submission validation skill](.agents/skills/validate-trec-rag-2026-submissions/SKILL.md)
-  - combined structural and organizer AutoJudge preflight.
-- [`reports/index.html`](reports/index.html) - supporting report collection.
-- [`code/trec_rag/README.md`](code/trec_rag/README.md) - implementation and
-  reproduction reference.
+  — combined Retrieval format and organizer AutoJudge preflight.
+- [Implementation reference](code/trec_rag/README.md) — pipeline behavior,
+  commands, reproduction boundaries, and evaluation workflow.
 
-The final system starts from one authenticated source retrieval artifact and
-then branches. Cache-first replay produces three variable-depth Retrieval TSVs;
-the sealed selected-evidence handoff independently feeds single-pass and
-multi-stage RAG generation. The organizer Retrieval TSV is not a Generation
-input.
+The completed architecture starts from one authenticated source-retrieval
+artifact. Cache-first replay produces the Retrieval submissions, while a sealed
+selected-evidence handoff independently feeds the single-pass and bounded
+multi-stage RAG systems. The organizer-facing Retrieval TSV is not used as
+Generation input.
 
-## Supporting Contents
+## Developer notes
 
-- `reports/index.html` - common entrypoint for the interactive reports.
-- `reports/trec-rag-briefing-report.html` - interactive 2026 briefing report
-  covering ClimbMix, sample documents, answer nuggets, and solution strategy.
-- `reports/trec-rag-2025-writeups/` - standalone interactive report for the
-  TREC RAG 2025 team writeups, downloaded PDFs, extracted figures, source
-  manifest, and smoke test.
-- `reports/notebooks/pyserini_collection_exploration.ipynb` - minimal notebook
-  for querying the external Pyserini API.
-- `docs/superpowers/` - design and implementation notes produced while building
-  the report.
-- `configs/` - checked-in experiment configurations.
-- `code/` - reusable helpers for remote Pyserini access, topic loading, and the
-  config-driven BM25 RAG pipeline.
-- `.agents/skills/trec-rag-competition-debug-report/` - repo-local agent skill
-  for privately explaining completed competition retrieval and RAG runs.
-- `.agents/skills/validate-trec-rag-2026-submissions/` - repo-local validator
-  for the exact organizer-facing Retrieval and RAG formats.
+### Repository layout
 
-## Upstream Inputs
+- `submissions/trec-rag-2026/` — immutable accepted organizer artifacts and
+  their provenance records.
+- `reports/` — the public artifact hub and supporting source-backed reports.
+- `code/` — reusable evaluation, retrieval, generation, and validation code.
+- `configs/` — checked-in experiment and reproduction configurations.
+- `docs/superpowers/` — design specifications and implementation plans.
+- `.agents/skills/` — repository-local validation and analysis workflows.
 
-Official TREC RAG inputs are tracked as git submodules:
+### Clone and initialize
 
-- `trec-rag-data/` - development and test data used by configs and reports.
-- `trec-rag-skills/` - official task, Pyserini, and corpus-creation reference
-  material used as source provenance. Repository-specific agent workflows live
-  under `.agents/skills/` and do not depend on unpublished submodule revisions.
-
-After cloning, initialize them with:
+Official TREC RAG data and task guidance are tracked as git submodules:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-This repo includes tracked Git hooks under `.githooks/` that run
-`git submodule sync --recursive` and `git submodule update --init --recursive`
-after checkout and merge. Enable them once per clone:
+The repository includes hooks that keep submodules synchronized after checkout
+and merge. Enable them once per clone:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-With that setting in place, `git worktree add ...` checks out a worktree and
-then initializes or updates its submodules automatically.
-
-## Agent Workflow
-
-This repo is intended to be usable by both Codex and Claude. Shared agent
-instructions live in `AGENTS.md`; `CLAUDE.md` is a symlink to that file so the
-two tools do not drift.
-
-Before changing generated reports, run the relevant local smoke tests and, when
-touching rendered UI, use Playwright screenshots at desktop and mobile widths.
-The current report smoke tests are:
+Set up the pinned Python environment with:
 
 ```bash
+code/tools/setup_env.sh
+```
+
+### Verification
+
+Run the complete Python suite:
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+Run the public landing and report smoke tests:
+
+```bash
+node README.test.js
+node index.test.js
 node reports/index.test.js
-node reports/trec-rag-briefing-report.test.js
-node reports/2025-promising-rag-architecture.test.js
-node reports/trec-rag-2025-writeups/interactive-writeup.test.js
+node reports/2026-competition-architecture.test.js
 ```
 
-The Python helper and baseline tests are:
-
-```bash
-uv run pytest -q
-```
+Shared instructions for Codex, Claude, and future coding agents live in
+[`AGENTS.md`](AGENTS.md).
