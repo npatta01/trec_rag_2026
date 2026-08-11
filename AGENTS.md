@@ -54,9 +54,9 @@ Final analyses and their boundary:
 
 Treat the five organizer files under `submissions/trec-rag-2026/` as immutable
 accepted artifacts. Documentation may link and verify them, but must not
-regenerate, reformat, or overwrite them. Evalbase submission IDs and upload
-timestamps were not recorded; preserve that unknown explicitly rather than
-inventing values.
+regenerate, reformat, or overwrite them. The submission ledger records the
+Evalbase run-page identifiers and the available portal dates/timestamps; do not
+replace those observed values with reconstructed precision.
 
 ## Repository Shape
 

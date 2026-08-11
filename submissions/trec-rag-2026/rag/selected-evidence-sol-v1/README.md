@@ -18,6 +18,9 @@ notes for both runs. The [final architecture report](../../../../reports/2026-co
 shows how both strategies consume the sealed handoff without reading the
 organizer Retrieval TSV.
 
+Both upload files use `NP`, the registered Evalbase short identifier for the
+`NP Labs` organization, in every record's required `metadata.team_id` field.
+
 ## Shared retrieval and evidence boundary
 
 Both runs consume the authenticated 119-topic handoff produced by

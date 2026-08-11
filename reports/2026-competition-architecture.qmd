@@ -1,7 +1,7 @@
 ---
 title: "From one frozen source to five accepted TREC RAG 2026 runs"
 subtitle: "The final Retrieval and RAG submission architecture, told as a guided story"
-author: "Team castorini"
+author: "NP Labs"
 date: "2026-08-09"
 format:
   html:
@@ -481,8 +481,8 @@ Single-pass Sol<br>
 
 The [submission ledger](../submissions/trec-rag-2026/SUBMISSION_LEDGER.md)
 links every exact file, its full SHA-256, and the corresponding archived portal
-response. Evalbase submission IDs and upload timestamps were not recorded; the
-ledger says so instead of reconstructing them.
+response. It records the Evalbase run-page identifiers and the portal timestamps
+that were actually observed, without inventing finer precision.
 
 Fresh local preflight produced three Retrieval PASS results—each 4,246 rows,
 119 topics, depth 1–121—and two RAG PASS results with 119/119 organizer-valid

@@ -56,11 +56,9 @@ for (const runId of [
     .split("\n")
     .filter((line) => line.startsWith("|") && line.includes(`\`${runId}\``));
   assert(rows.length === 2, `ledger should contain artifact and confirmation rows for ${runId}`);
-  assert(rows.every((line) => line.includes("Accepted by Evalbase")), `ledger should mark ${runId} accepted`);
-  assert(
-    rows[1].includes("| Not recorded | Not recorded | Accepted by Evalbase |"),
-    `ledger should preserve unknown portal metadata for ${runId}`,
-  );
+  assert(rows[0].includes("Accepted by Evalbase"), `ledger should mark ${runId} accepted`);
+  assert(rows[1].includes("validation succeeded"), `ledger should record ${runId} validation success`);
+  assert(rows[1].includes(`/evalbase/run/trec-2026/`), `ledger should record ${runId} run-page path`);
 }
 
 const analysisLinks = [
