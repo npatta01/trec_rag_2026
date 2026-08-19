@@ -42,7 +42,7 @@ local_artifacts:
 remote:
   run_name: rag25-reranker-1k-a40-20260806-v2
   gpu: NVIDIA A40 48GB
-  result_prefix: hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/rag25-reranker-1k-a40-20260806-v2
+  result_prefix: hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/rag25-reranker-1k-a40-20260806-v2
   successful_cost_usd: 0.9032
   total_cost_including_failed_preflight_usd: 0.9518
 

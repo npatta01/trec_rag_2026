@@ -45,7 +45,7 @@ def _args() -> list[str]:
         "--source-run-id",
         "nonagentic-rag25-dev-20260806",
         "--baseline-uri",
-        "hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807",
+        "hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807",
         "--config",
         "configs/rag25_competition_retrieval_v1.yaml",
     ]

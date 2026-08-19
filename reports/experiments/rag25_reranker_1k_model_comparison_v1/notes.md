@@ -148,10 +148,11 @@ rather than inferred from these rankings.
 - Tracked aggregate record: `manifest.yaml`, `config.yaml`, `metrics.json`,
   and `topic_metrics.csv` in this directory.
 - Private dstack run: `rag25-reranker-1k-a40-20260806-v2`
-- Private result prefix:
-  `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/rag25-reranker-1k-a40-20260806-v2`
-- Raw score/ranking outputs remain in the private ignored experiment workspace;
-  they are not part of this report PR.
+- Public, privacy-scanned result prefix:
+  `hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/rag25-reranker-1k-a40-20260806-v2`
+- The checksumed score artifacts contain identifiers, hashes, scores, and
+  runtime metadata, but no raw document text. The ignored experiment workspace
+  remains private and is not part of this report PR.
 
 Tables are used instead of charts because this is a two-model, five-depth
 audit comparison where exact values, denominators, and caveats are more useful
