@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-BUCKET_ID="Npatta01/trec_mlm_2026"
+BUCKET_ID="Npatta01/trec-rag-2026-artifacts"
 BUCKET_PREFIX="trec_rag_2026"
 TOPICS=("14" "31" "37" "58" "72" "84" "144" "161" "200" "213" "219" "224" "225" "233" "273" "300" "407" "477" "499" "515" "707" "897")
 MIXEDBREAD_REVISION="3ea9d4dffa7d12a4f366be8e275c349de9fc9865"

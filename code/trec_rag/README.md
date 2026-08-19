@@ -474,10 +474,10 @@ shard_root="$(pwd)/outputs/private-cache-shards/nonagentic-rag25-dev-20260806"
 mkdir -p "$shard_root/14" "$shard_root/37"
 
 .venv/bin/hf buckets sync \
-  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/14 \
+  hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/14 \
   "$shard_root/14"
 .venv/bin/hf buckets sync \
-  hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/37 \
+  hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806/37 \
   "$shard_root/37"
 
 .venv/bin/python -m trec_rag.competition_cache_bundle verify \
@@ -896,11 +896,20 @@ The worker also verifies bucket privacy, exact one-file input, and an empty
 output prefix before loading the model:
 
 ```bash
-BASELINE_INPUT_PREFIX=hf://buckets/Npatta01/trec_mlm_2026/artifacts/retrieval-baseline-candidate-core-v1
-BASELINE_OUTPUT_PREFIX=hf://buckets/Npatta01/trec_mlm_2026/experiments/retrieval-baseline-candidate-core-v1
-.venv/bin/hf buckets info hf://buckets/Npatta01/trec_mlm_2026 --format json
+BASELINE_INPUT_PREFIX=hf://buckets/<owner>/<confirmed-private-bucket>/artifacts/retrieval-baseline-candidate-core-v1
+BASELINE_OUTPUT_PREFIX=hf://buckets/<owner>/<confirmed-private-bucket>/experiments/retrieval-baseline-candidate-core-v1
+.venv/bin/hf buckets info hf://buckets/<owner>/<confirmed-private-bucket> --format json
 .venv/bin/hf buckets cp "$BASELINE_ARCHIVE" "$BASELINE_INPUT_PREFIX/input.tar.gz"
 ```
+
+The preserved candidate-core input and privacy-scanned, checksumed score
+publication are available in the canonical project artifact bucket at
+`hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/artifacts/retrieval-baseline-candidate-core-v1`
+and
+`hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/retrieval-baseline-candidate-core-v3`.
+The input archive embeds raw corpus documents and is public by explicit project
+authorization; new worker runs should still use a fresh private prefix because
+the worker's execution contract verifies bucket privacy.
 
 Preview H200 first. Preview is declined by default and must be inspected before
 launch. H100 is only a fallback when no acceptable H200 offer exists. Both

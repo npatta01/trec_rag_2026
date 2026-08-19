@@ -55,7 +55,7 @@
 
 - Work only in `/home/npatta01/data/competitions/trec_rag_2026/.worktrees/fix-sentence-segmentation` on `codex/fix-sentence-segmentation`.
 - Topics: `14,31,37,58,72,84,144,161,200,213,219,224,225,233,273,300,407,477,499,515,707,897`.
-- Source: private immutable `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806`.
+- Source: public immutable `hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-rag25-dev-20260806`.
 - Destination run ID: `nonagentic-rag25-segmentation-fixed-20260809-r7`; never overwrite a remote prefix.
 - Planning, retrieval, document materialization, and passage scoring are fail-closed cache-only/read-only.
 - Sentence scoring and similarity may use local GPU work. Canonicalization may make bounded hosted calls.
@@ -443,7 +443,7 @@ git commit -m "Bundle cached segmentation validation results"
 run_cached_segmentation_validation.sh [--preflight]
   --run-id nonagentic-rag25-segmentation-fixed-20260809-r7
   --source-run-id nonagentic-rag25-dev-20260806
-  --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807
+  --baseline-uri hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807
   --config configs/rag25_competition_retrieval_v1.yaml
 ```
 
@@ -501,7 +501,7 @@ price cap, RunPod/Vast.ai, and bounded `no-capacity` retry.
 bash code/tools/run_cached_segmentation_validation.sh --preflight \
   --run-id nonagentic-rag25-segmentation-fixed-20260809-r7 \
   --source-run-id nonagentic-rag25-dev-20260806 \
-  --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
+  --baseline-uri hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
   --config configs/rag25_competition_retrieval_v1.yaml
 git add code/tools/run_cached_segmentation_validation.sh \
   code/tools/apply_cached_segmentation_validation.sh \
@@ -518,8 +518,8 @@ git commit -m "Run cached segmentation validation on dstack"
 
 - Update: this plan with verification/live evidence
 - Private baseline source: `outputs/nonagentic-rag25-dev-all22-replay-p4-20260807`
-- Private baseline prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807`
-- Private result prefix: `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-rag25-segmentation-fixed-20260809-r7`
+- Public baseline prefix: `hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807`
+- Historical intended result prefix (the failed `r7` run published no files): `hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-rag25-segmentation-fixed-20260809-r7`
 
 **Interfaces:**
 
@@ -567,7 +567,7 @@ bash code/tools/apply_cached_segmentation_validation.sh \
   --preview --name rag25-segfix-all22-20260809-r7 -- \
   --run-id nonagentic-rag25-segmentation-fixed-20260809-r7 \
   --source-run-id nonagentic-rag25-dev-20260806 \
-  --baseline-uri hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
+  --baseline-uri hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/artifacts/rag25-segmentation-baseline-20260807 \
   --config configs/rag25_competition_retrieval_v1.yaml
 ```
 

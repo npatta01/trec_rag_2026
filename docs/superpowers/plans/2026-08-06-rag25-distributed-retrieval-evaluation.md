@@ -179,7 +179,7 @@ ClimbMix, projected RAG 2025 development qrels.
 **Interfaces:**
 
 - Consumes: the active remote wrapper and immutable HF prefix
-  `hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0`.
+  `hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0`.
 - Produces: one locally verified archive hash, one staging merge receipt, one
   zero-work offline receipt, and one promoted shared-cache merge receipt.
 
@@ -226,7 +226,7 @@ ClimbMix, projected RAG 2025 development qrels.
   topic_id=rag2026-0
   config=/workflow/configs/local/nonagentic-two-topic-20260806-rag2026-0.yaml
   bundle_dir=/tmp/trec-rag-cache-shards/nonagentic-two-topic-20260806/rag2026-0/bundle
-  remote_prefix=hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0
+  remote_prefix=hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0
   cache_root=/tmp/trec-rag-cache-shards/nonagentic-two-topic-20260806/rag2026-0/cache
   recovery_root=/tmp/trec-rag-cache-shards/nonagentic-two-topic-20260806/rag2026-0/recovery-v1
   log=/tmp/rag2026-0-recovery.log
@@ -307,7 +307,7 @@ ClimbMix, projected RAG 2025 development qrels.
   recovery_status=complete
   topic_id=rag2026-0
   archive_sha256=<verified digest>
-  remote_prefix=hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0
+  remote_prefix=hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0
   ```
 
   Independently list the prefix and require exactly the archive and completion
@@ -325,7 +325,7 @@ ClimbMix, projected RAG 2025 development qrels.
   shard_root="$PWD/outputs/private-cache-shards/nonagentic-two-topic-20260806"
   mkdir -p "$shard_root/rag2026-0"
   .venv/bin/hf buckets sync \
-    hf://buckets/Npatta01/trec_mlm_2026/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0 \
+    hf://buckets/Npatta01/trec-rag-2026-artifacts/trec_rag_2026/experiments/nonagentic-two-topic-20260806/rag2026-0 \
     "$shard_root/rag2026-0"
   .venv/bin/python -m trec_rag.competition_cache_bundle verify \
     "$shard_root/rag2026-0"
