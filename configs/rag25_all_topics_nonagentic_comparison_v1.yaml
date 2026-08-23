@@ -1,0 +1,8 @@
+topic_ids: all
+embedding_model: BAAI/bge-small-en-v1.5
+
+inputs:
+  manifest: reports/2026-competition-architecture/generation_handoff_manifest.json
+  organizer_nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+
+output_dir: outputs/rag25_all_topics_nonagentic_comparison_v1
