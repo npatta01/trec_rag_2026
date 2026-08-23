@@ -1,0 +1,61 @@
+{
+  "budget_gate_smoke": {
+    "approved_for_full_run": false,
+    "dtype": "bfloat16",
+    "elapsed_seconds": 204.357797949,
+    "estimated_cost_usd": 0.16705023835543054,
+    "gpu": "A100-80GB",
+    "inference_seconds": 61.260653588999986,
+    "model": "Qwen/Qwen3-Reranker-8B",
+    "model_load_seconds": 138.014428113,
+    "model_revision": "77d193c791ed757ca307ee72715aa132723da912",
+    "output": "qwen3_reranker_8b_bf16_smoke_scores.jsonl",
+    "projected_full_inference_seconds": 6419.076082645986,
+    "prompt_tokens": 890529,
+    "prompt_tokens_per_second": 14536.720518435737,
+    "rows": 256,
+    "schema_version": "organizer-pointwise-runtime-v1",
+    "stage": "smoke",
+    "worst_case_total_usd": 9.841632
+  },
+  "configured_worst_case_usd": 6.7437644,
+  "estimated_total_cost_usd": 6.767343479901254,
+  "hard_cap_usd": 10.0,
+  "incremental_worst_case_usd": 0.3437643999999999,
+  "listwise": {
+    "dtype": "bfloat16",
+    "elapsed_seconds": 244.974625112,
+    "estimated_cost_usd": 0.20025205755155326,
+    "gpu": "A100-80GB",
+    "inference_seconds": 52.78553636400005,
+    "minimum_passage_words_used": 125,
+    "model": "castorini/first_qwen3_8b",
+    "model_load_seconds": 121.43899808600001,
+    "model_revision": "90e4165ef17f68f00df6be91826524fcba7df4b2",
+    "output": "first_qwen3_8b_bf16_mixedbread_top100.jsonl",
+    "prompt_tokens": 793059,
+    "rows": 2200,
+    "schema_version": "organizer-listwise-runtime-v1",
+    "seed": "mixedbread_top100_seed_canonical.jsonl",
+    "topics": 22,
+    "windows": 198
+  },
+  "prior_spend_estimate_usd": 6.4,
+  "schema_version": "organizer-cascade-runtime-v1",
+  "staging": {
+    "elapsed_seconds": 0.9368515529999999,
+    "estimated_cost_usd": 4.118399426987999e-05,
+    "schema_version": "organizer-model-staging-v1",
+    "snapshots": {
+      "Qwen/Qwen3-Reranker-8B": {
+        "revision": "77d193c791ed757ca307ee72715aa132723da912",
+        "snapshot": "/__modal/volumes/vo-8UKVNTNTtYCRlgw02OaI0r/hub/models--Qwen--Qwen3-Reranker-8B/snapshots/77d193c791ed757ca307ee72715aa132723da912"
+      },
+      "castorini/first_qwen3_8b": {
+        "revision": "90e4165ef17f68f00df6be91826524fcba7df4b2",
+        "snapshot": "/__modal/volumes/vo-8UKVNTNTtYCRlgw02OaI0r/hub/models--castorini--first_qwen3_8b/snapshots/90e4165ef17f68f00df6be91826524fcba7df4b2"
+      }
+    },
+    "worst_case_total_usd": 9.841632
+  }
+}
