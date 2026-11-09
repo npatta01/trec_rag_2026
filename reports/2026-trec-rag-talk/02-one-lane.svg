@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 620" role="img" aria-labelledby="ln-title ln-desc">
+  <title id="ln-title">What one BM25 query lane contributes, stage by stage</title>
+  <desc id="ln-desc">One planned BM25 query, the preterm birth child maltreatment risk lane, retrieves up to 1,000 documents. Those documents are chunked and reranked down to at most 100 kept passages, then reduced to at most 40 evidence groups, which produce at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory hints, not authoritative evidence. Every figure is a per-query ceiling set by configuration, not a measured yield.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .title{font-size:38px;font-weight:720}
+    .num{font-size:40px;font-weight:780}
+    .label{font-size:27px;font-weight:700}
+    .small{font-size:22px}
+    .muted{fill:var(--muted)}
+    .bar{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}
+    .bar-adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3;stroke-dasharray:9 6}
+    .query{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}
+    .flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#ar2)}
+    .base{stroke:var(--line);stroke-width:2}
+  </style>
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="1400" height="620" fill="var(--bg)"/>
+
+  <text class="title" x="700" y="38" text-anchor="middle">One lane of 13 · subnarrative 1, query 1</text>
+
+  <rect class="query" x="250" y="62" width="900" height="70" rx="10"/>
+  <text class="label" x="700" y="106" text-anchor="middle">“preterm birth child maltreatment risk”</text>
+
+  <path class="flow" d="M700 132V162" vector-effect="non-scaling-stroke"/>
+
+  <!-- stage bars, left to right, each a configured ceiling -->
+  <rect class="bar" x="155" y="200" width="210" height="300" rx="8"/>
+  <text class="num" x="260" y="185" text-anchor="middle">≤1,000</text>
+  <text class="label" x="260" y="534" text-anchor="middle">documents</text>
+  <text class="small muted" x="260" y="562" text-anchor="middle">BM25 · Pyserini</text>
+
+  <path class="flow" d="M375 470H445" vector-effect="non-scaling-stroke"/>
+
+  <rect class="bar" x="455" y="320" width="210" height="180" rx="8"/>
+  <text class="num" x="560" y="305" text-anchor="middle">≤100</text>
+  <text class="label" x="560" y="534" text-anchor="middle">passages kept</text>
+  <text class="small muted" x="560" y="562" text-anchor="middle">chunk + Mixedbread</text>
+
+  <path class="flow" d="M675 470H745" vector-effect="non-scaling-stroke"/>
+
+  <rect class="bar" x="755" y="385" width="210" height="115" rx="8"/>
+  <text class="num" x="860" y="370" text-anchor="middle">≤40</text>
+  <text class="label" x="860" y="534" text-anchor="middle">evidence groups</text>
+  <text class="small muted" x="860" y="562" text-anchor="middle">dedup + diversify</text>
+
+  <path class="flow" d="M975 470H1045" vector-effect="non-scaling-stroke"/>
+
+  <rect class="bar-adv" x="1055" y="430" width="210" height="70" rx="8"/>
+  <text class="num" x="1160" y="415" text-anchor="middle">≤20</text>
+  <text class="label" x="1160" y="534" text-anchor="middle">nuggets</text>
+  <text class="small muted" x="1160" y="562" text-anchor="middle">advisory hints only</text>
+
+  <line class="base" x1="120" y1="500" x2="1300" y2="500"/>
+
+  <text class="small muted" x="700" y="604" text-anchor="middle">Bar heights are conceptual. Every number is a configured per-query ceiling, not a measured yield.</text>
+</svg>

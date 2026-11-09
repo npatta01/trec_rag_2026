@@ -1,0 +1,522 @@
+---
+title: "TREC RAG 2026"
+subtitle: "Single-pass and multi-stage answer generation, traced through one request"
+author: "Nidhin Pattaniyil · Tanwir Zaman · Semih Yagli — NP Labs"
+date: "2026-11-16"
+format:
+  revealjs:
+    theme: [default, 2026-trec-rag-talk/theme.scss]
+    embed-resources: true
+    slide-number: c/t
+    progress: true
+    history: false
+    hash-type: number
+    transition: fade
+    transition-speed: fast
+    width: 1280
+    height: 760
+    margin: 0.06
+    center: true
+---
+
+## What the track asks
+
+::: {.eyebrow}
+The task
+:::
+
+::: {.grid-2-1}
+::: {.card .card-plain}
+[Input]{.card-label}
+One of **119 long-form requests** — called *narratives* — plus access to the
+ClimbMix document collection.
+
+[Output]{.card-label}
+An answer of **at most 1,024 words**, every statement citing the documents
+it came from.
+:::
+
+::: {.card .card-ret}
+[What we compared]{.card-label}
+Two ways to write the answer **from identical evidence**.
+
+**Single-pass** drafts once.
+
+**Multi-stage** plans, drafts, audits the draft, then screens proposed edits.
+
+Same retrieval. Same passages. Only the writing differs.
+:::
+:::
+
+::: {.boundary}
+**This talk is about how the approach works**, not a claim that it is novel.
+Every number shown is the organizers' own, from the score files they released.
+:::
+
+::: {.notes}
+Set up the comparison as the one controlled thing: evidence is held fixed, the
+writing procedure is the variable.
+:::
+
+## The whole approach
+
+::: {.eyebrow}
+How it works
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/01-approach.svg){fig-alt="One planned source retrieval feeds a Retrieval branch and a RAG branch. A narrative is planned once into subnarratives and BM25 queries, searched, chunked and reranked into passages, then reduced to selected evidence with advisory nuggets. That frozen source splits: a cache-first branch emits three Retrieval TSVs, and a sealed evidence handoff feeds single-pass and multi-stage generation."}
+:::
+
+::: {.note}
+Plan once, search wide, narrow to evidence, then write twice. The rest of this
+talk walks the left-to-right path with one real request.
+:::
+
+## The request we will follow
+
+::: {.trace-step}
+The example · rag2026-17
+:::
+
+::: {.quote}
+I work for a county public health agency that is trying to redesign how we
+support families after a baby leaves the NICU. Some staff want to flag every
+premature birth for extra follow-up, while others worry that this could feel
+punitive or overwhelm families already under stress. **What should we understand
+about prematurity as a child welfare risk factor? How strong is the evidence
+that preterm or medically fragile infants face higher maltreatment or
+out-of-home placement risks**, what mechanisms seem to drive that risk, and what
+kinds of supports should we prioritize from birth through the first few years?
+:::
+
+::: {.note}
+One request, several questions inside it: a risk claim, the strength of its
+evidence, the mechanisms, and a practical recommendation. Note the bolded
+phrase — it comes back later.
+:::
+
+## Planning: how it works
+
+::: {.eyebrow}
+How it works
+:::
+
+::: {.grid-2}
+::: {.card .card-source}
+[One bounded model call]{.card-label}
+`deepseek/deepseek-v4-flash-20260423` reads **only the narrative** and returns a
+schema-constrained plan.
+
+It never sees a document, and it is never called again for this topic.
+:::
+
+::: {.card .card-plain}
+[The limits are hard]{.card-label}
+- **1–8 subnarratives**, each a focused question inside the request
+- **1–3 plain BM25 queries** per subnarrative
+- no operators, no field syntax
+- the **original narrative stays its own lane**
+
+At most **25 searches** per topic.
+:::
+:::
+
+::: {.note}
+Bounded and one-shot. This is deliberately not an agentic search loop — there
+is no feedback from results back into planning.
+:::
+
+## Planning: this request
+
+::: {.trace-step}
+The example · 4 subnarratives, 12 queries
+:::
+
+::: {.grid-2}
+::: {.card .card-ret}
+[1 · Is the risk real?]{.card-label}
+Evidence linking preterm birth to maltreatment or out-of-home placement
+
+`preterm birth child maltreatment risk` · `premature infant abuse neglect
+out-of-home placement` · `prematurity child welfare involvement`
+:::
+
+::: {.card .card-ret}
+[2 · Why?]{.card-label}
+Mechanisms explaining higher risk for preterm or medically fragile infants
+
+`mechanisms preterm infant maltreatment risk` · `parental stress prematurity
+child abuse pathway` · `NICU discharge child welfare risk factors`
+:::
+
+::: {.card .card-ret}
+[3 · What helps?]{.card-label}
+Support interventions from birth through early childhood
+
+`support programs preterm infants prevent maltreatment` · `early intervention
+NICU graduates child abuse prevention` · `family support prematurity first years`
+:::
+
+::: {.card .card-ret}
+[4 · Universal or targeted?]{.card-label}
+Balancing universal follow-up against stigma and burden
+
+`universal follow-up preterm birth stigma` · `targeted support NICU families
+punitive` · `redesigning NICU follow-up family engagement`
+:::
+:::
+
+::: {.note}
+The staff disagreement in the request became subnarrative 4 on its own. The
+plan tracks the question's structure, not a guess at the answer.
+:::
+
+## Searching: how it works
+
+::: {.eyebrow}
+How it works
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/02-one-lane.svg){fig-alt="One BM25 query lane, stage by stage: up to 1,000 documents retrieved, chunked and reranked down to at most 100 kept passages, reduced to at most 40 evidence groups, producing at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory, not authoritative."}
+:::
+
+::: {.grid-2}
+::: {.note}
+**Documents in, passages out.** We chunk retrieved documents ourselves —
+3,500 characters with 350 of overlap — then score each query–passage pair with
+`mxbai-rerank-base-v2`.
+:::
+
+::: {.boundary}
+**These are ceilings, not yields.** Each number is a configured per-query cap.
+Nothing here says how many useful passages actually came back.
+:::
+:::
+
+## Evidence and nuggets: how it works
+
+::: {.eyebrow}
+How it works
+:::
+
+::: {.grid-2}
+::: {.card .card-ret}
+[Selected evidence — the authority]{.card-label}
+Group repeated passages: exact matches first, then MiniLM embeddings for
+near-duplicates, checking type, numbers, dates, names and negation before
+grouping anything.
+
+Keep the strongest representative **in its original wording**, with its
+citation links. Up to **40 groups per subnarrative**.
+:::
+
+::: {.card .card-source}
+[Generated nuggets — advisory only]{.card-label}
+Each subnarrative's evidence goes to Nuggetizer separately, returning up to
+**20 short claims**, each linked back to the evidence and at most three
+documents.
+
+These organize the answer. **They never replace the evidence**, and they are
+not the organizers' gold nuggets.
+:::
+:::
+
+::: {.boundary}
+Both writers then receive one frozen package: the original request, the exact
+evidence, the generated nuggets, and the list of citation IDs they may use.
+:::
+
+## Evidence and nuggets: this request
+
+::: {.trace-step}
+The example · what the search actually found
+:::
+
+::: {.card .card-source}
+[Generated nuggets, subnarrative 1]{.card-label}
+**n001** — Preterm infants are at increased risk for maltreatment **and
+out-of-home placement**.
+
+**n002** — Children born preterm are at least **1.5 times** more likely to be
+placed outside the home.
+
+**n003** — Early term babies (37–38 weeks) have a **10–15% higher** chance of
+maltreatment.
+
+**n008** — Evidence rating level for the link is **2 (Good)**.
+
+**n029** — The precise reasons for higher maltreatment risk in preterm infants
+are **not fully clear**.
+:::
+
+::: {.note}
+The request asked how strong the evidence is. The retrieval came back with a
+graded evidence rating and an explicit statement of what remains unknown.
+Remember n001 and n002 — both mention out-of-home placement.
+:::
+
+## Two writers: how it works
+
+::: {.eyebrow}
+How it works
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/03-two-writers.svg){fig-alt="Both writers start from the same sealed evidence and neither searches again. Single-pass: Sol drafts, local code validates schema, citations and word limit, with one bounded retry. Multi-stage: Luna plans, Sol drafts, Luna audits for omissions, Sol proposes edits, Luna screens each edit, and local code applies only accepted ones, keeping the validated draft if revision fails."}
+:::
+
+::: {.note}
+GPT-5.6 Sol writes both answers. Multi-stage adds Luna as planner, auditor and
+screener. Multi-stage does not revise the single-pass answer — both start from
+the same evidence independently. The amber fallback path matters: if revision
+fails, the already validated draft stands, so the extra stages can only add.
+:::
+
+## Two writers: this request
+
+::: {.trace-step}
+The example · both submitted answers
+:::
+
+::: {.grid-2}
+::: {.card .card-ret}
+[Single-pass · 393 words, 24 statements]{.card-label}
+"Preterm birth is birth before 37 completed weeks of gestation."
+
+"Premature infants have an elevated risk of maltreatment, particularly when
+caregiver disadvantages are also present."
+:::
+
+::: {.card .card-gen}
+[Multi-stage · 875 words, 45 statements]{.card-label}
+"Preterm birth means birth before 37 completed weeks of pregnancy."
+
+"A **medically fragile infant** is defined by dependence on life-sustaining
+medication, treatment, or equipment rather than by gestational age alone."
+:::
+:::
+
+::: {.note}
+Both open by defining preterm birth. Multi-stage also defines "medically
+fragile" — a phrase the request used and single-pass left undefined.
+:::
+
+## The difference you can see
+
+::: {.trace-step}
+The example · one phrase, traced end to end
+:::
+
+::: {.card .card-plain}
+[The request asked]{.card-label}
+"...higher maltreatment **or out-of-home placement** risks"
+:::
+
+::: {.grid-3}
+::: {.card .card-source}
+[The retrieval found it]{.card-label}
+**n001** and **n002** both state the out-of-home placement risk, with a
+figure: at least **1.5×**.
+:::
+
+::: {.card .card-ret}
+[Single-pass used it]{.card-label}
+**0 times.**
+
+The phrase "out-of-home" does not appear anywhere in its 24 statements.
+:::
+
+::: {.card .card-gen}
+[Multi-stage used it]{.card-label}
+**3 times.**
+
+Including the 1.5× figure and its link to children with disabilities.
+:::
+:::
+
+::: {.boundary}
+The evidence was identical. One writer answered half the question asked, and
+the extra stages are what caught it.
+:::
+
+## What the organizers said about it
+
+::: {.trace-step}
+The example · rag2026-17, Batch 1
+:::
+
+| Measure | Single-pass | Multi-stage | Field median |
+|---|---|---|---|
+| Vital strict | 0.833 | [**1.000**]{.win} | 0.667 |
+| All strict | 0.750 | [**1.000**]{.win} | 0.625 |
+| Human head-to-head (W/T/L) | 0 / 3 / 3 | [**6 / 4 / 0**]{.win} | — |
+
+::: {.note}
+Both measures agree here. Multi-stage covered every rubric item and was never
+once preferred against — six wins, four ties, no losses.
+:::
+
+::: {.boundary}
+**Field median** covers all 114 evaluated runs from 27 teams, each weighted
+equally. It is not a per-team statistic and it is not our rank.
+:::
+
+## When the two measures disagree
+
+::: {.trace-step}
+The counter-example · rag2026-13, founder/CEO transition
+:::
+
+| Measure | Single-pass | Multi-stage | Field median |
+|---|---|---|---|
+| Vital strict | [**1.000**]{.win} | 0.800 | 0.600 |
+| All strict | [**1.000**]{.win} | 0.857 | 0.714 |
+| Human head-to-head (W/T/L) | 5 / 0 / 5 | [**8 / 0 / 4**]{.win} | — |
+
+::: {.grid-2}
+::: {.note}
+This is the **only one of 42 scored topics** where single-pass beat multi-stage
+on the rubric. Multi-stage wrote more — 917 words against 441, with a
+month-by-month plan (0–2, 2–4, 4–9, 9–12) that single-pass did not attempt.
+:::
+
+::: {.boundary}
+**The humans preferred multi-stage 8–4 on this same topic.** The automated
+rubric scorer and the human assessors disagreed. The rubric items were not
+released, so we cannot say which item multi-stage missed.
+:::
+:::
+
+## Overall: 42 scored topics
+
+::: {.eyebrow}
+Results
+:::
+
+::: {.stat-row}
+::: {.stat .stat-gen}
+[26]{.n}[topics multi-stage ahead]{.k}
+:::
+::: {.stat}
+[15]{.n}[tied]{.k}
+:::
+::: {.stat .stat-adv}
+[1]{.n}[single-pass ahead]{.k}
+:::
+:::
+
+| Collection | Measure | Single-pass | Multi-stage | Median |
+|---|---|---|---|---|
+| Batch 1 rubrics (17) | All strict | 0.7740 | [**0.8738**]{.win} | 0.7325 |
+| Batch 2 human nuggets (25) | All strict | 0.5705 | [**0.6578**]{.win} | 0.5556 |
+| Batch 2 automatic nuggets (25) | All strict | 0.1280 | [**0.2496**]{.win} | 0.1280 |
+
+: Each collection is a separate evaluation over a different narrative set. They do not average together.
+
+::: {.note}
+Human preference agreed: Bradley–Terry 1179.8 vs 1019.7 in Batch 1 and
+1181.4 vs 1026.0 in Batch 2, with non-overlapping 95% intervals in both.
+:::
+
+## Retrieval, briefly
+
+::: {.eyebrow}
+Results · secondary
+:::
+
+::: {.grid-2-1}
+::: {.card .card-plain}
+[Three runs, one document set]{.card-label}
+The three Retrieval submissions reuse the same saved searches and passage
+scores, and differ **only in ordering**: whole-request relevance, breadth across
+subnarratives, or a blend.
+
+All three received **identical scores, including per topic** — the measures
+score the full submitted set, which the three share.
+:::
+
+| Measure | Ours | Median |
+|---|---|---|
+| Precision | [**0.4116**]{.win} | 0.3499 |
+| Recall | 0.0897 | 0.1002 |
+| Documents | 38.6 | 100.0 |
+:::
+
+::: {.boundary}
+We returned about **a third as many documents** as the median run, with higher
+precision and lower recall. This evaluates our *selection*; it says nothing
+about which ordering puts useful documents first.
+:::
+
+## What this does and does not establish
+
+::: {.eyebrow}
+Limits
+:::
+
+::: {.grid-2}
+::: {.card .card-ok}
+[Supported]{.card-label}
+With evidence held fixed, the complete multi-stage configuration received
+higher organizer preference and higher coverage, on every collection.
+:::
+
+::: {.card .card-source}
+[Not supported]{.card-label}
+**Which stage caused it.** Planning, auditing, revision, model mix and answer
+length all changed together.
+
+**That length is not the explanation.** Multi-stage wrote 531–1,011 words
+against 203–749.
+
+**Better citation grounding.** A separate RAGDoll check favoured *single-pass*
+— 0.757 against 0.653 on weighted first-citation support.
+:::
+:::
+
+::: {.boundary}
+The organizer gains should not be read as better grounding. Coverage and
+citation support are different questions, and here they point different ways.
+:::
+
+## Look it all up
+
+::: {.eyebrow}
+Everything behind these slides is published
+:::
+
+::: {.grid-2}
+::: {.card .card-ret}
+[Per-topic scores]{.card-label}
+[Organizer Score Explorer](https://npatta01.github.io/trec_rag_2026/reports/2026-organizer-score-explorer.html)
+— all 530 released rows, filterable by run, metric and field median.
+:::
+
+::: {.card .card-ret}
+[The full trace, per topic]{.card-label}
+[Retrieval Quality Analysis](https://npatta01.github.io/trec_rag_2026/reports/2026-retrieval-nugget-coverage.html)
+— every subnarrative, BM25 query and nugget for all 119 topics.
+:::
+
+::: {.card .card-gen}
+[Both answers, judged]{.card-label}
+[rag26-ss1](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html)
+·
+[rag26-ms1-final](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ms1-final.html)
+— per-citation support judgments.
+:::
+
+::: {.card .card-plain}
+[How it was built]{.card-label}
+[Architecture walkthrough](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
+·
+[project hub](https://npatta01.github.io/trec_rag_2026/)
+:::
+:::
+
+::: {.note}
+rag2026-17 and rag2026-13 are both in the coverage report and both RAGDoll
+reports — the trace shown here can be checked end to end.
+:::
