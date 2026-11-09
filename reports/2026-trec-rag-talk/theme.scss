@@ -103,6 +103,10 @@ $code-block-font-size: 0.6em !default;
   --adv-soft: #433616;
 }
 
+// Light is the base. Dark arrives two ways: because the system asks for it,
+// or because the reader pinned it with the control. Pinning has to work on a
+// machine whose system says the opposite — a hall laptop in light mode, a
+// presenter who wants dark at 9am — so the media query yields to a pin.
 :root {
   color-scheme: light dark;
   @include slate-light;
@@ -112,17 +116,32 @@ $code-block-font-size: 0.6em !default;
   @include forest-light;
 }
 
+// Dark by system preference, unless the reader pinned light.
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     @include slate-dark;
   }
 
-  // Same specificity as the rule above, written after it, so Forest wins for a
-  // reader who chose it.
-  :root[data-palette="forest"] {
+  // Same specificity as the rule above, written after it, so Forest wins.
+  :root:not([data-theme="light"])[data-palette="forest"] {
     @include forest-dark;
   }
 }
+
+// Dark because the reader pinned it, whatever the system says. Written after
+// the media query so it also beats the light defaults above.
+:root[data-theme="dark"] {
+  @include slate-dark;
+}
+
+:root[data-theme="dark"][data-palette="forest"] {
+  @include forest-dark;
+}
+
+// Keep scrollbars, form controls and the browser's own canvas in step with a
+// pinned choice rather than the system's.
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
 
 html.reveal-full-page,
 body.reveal-viewport,
@@ -777,6 +796,10 @@ body.reveal-viewport,
 }
 
 .qgrid summary {
+  // Quarto styles bare <summary> a slate blue, which is readable on white and
+  // washed out on a dark panel (2.74:1). These are the clickable questions, so
+  // they take the deck's own ink.
+  color: var(--ink);
   cursor: pointer;
   font-size: 0.62em;
   font-weight: 700;
@@ -874,12 +897,18 @@ body.reveal-viewport,
   overflow: visible;
 }
 
-// The palette control. Faint until wanted, and never printed.
-#palette-toggle {
+// The deck controls: light/dark, and palette. Faint until wanted, never
+// printed, and out of the way of every slide's content.
+#deck-controls {
   position: fixed;
   top: 0.75rem;
   right: 1rem;
   z-index: 50;
+  display: flex;
+  gap: 0.4rem;
+}
+
+#deck-controls button {
   display: inline-flex;
   align-items: center;
   gap: 0.45em;
@@ -897,20 +926,41 @@ body.reveal-viewport,
   transition: opacity 0.15s ease, color 0.15s ease;
 }
 
-#palette-toggle:hover,
-#palette-toggle:focus-visible {
+#deck-controls button:hover,
+#deck-controls button:focus-visible {
   opacity: 1;
   color: var(--ink);
 }
 
-#palette-toggle .swatch {
+#deck-controls .swatch,
+#deck-controls .dot {
   width: 0.9em;
   height: 0.9em;
   border-radius: 50%;
   border: 1px solid var(--hairline);
+}
+
+#palette-toggle .swatch {
   background: linear-gradient(135deg, var(--ret) 0 50%, var(--gen) 50% 100%);
 }
 
+// The dot says which of the three states is on without needing the word.
+#theme-toggle .dot {
+  border-color: currentColor;
+}
+
+#theme-toggle[data-state="dark"] .dot {
+  background: currentColor;
+}
+
+#theme-toggle[data-state="light"] .dot {
+  background: transparent;
+}
+
+#theme-toggle[data-state="auto"] .dot {
+  background: linear-gradient(90deg, transparent 0 50%, currentColor 50% 100%);
+}
+
 @media print {
-  #palette-toggle { display: none; }
+  #deck-controls { display: none; }
 }

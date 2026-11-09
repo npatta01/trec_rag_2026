@@ -252,4 +252,31 @@ assert(/:root\[data-palette="forest"\]/.test(scss),
 assert(/id="palette-toggle"/.test(html), "the palette control should be in the deck");
 assert(/trec-talk-palette/.test(html), "the chosen palette should be remembered");
 
+// ---- pinned light/dark -----------------------------------------------------
+// The deck is often shown on a machine whose system setting is the opposite of
+// what the room needs, so a pinned choice has to beat prefers-color-scheme.
+assert(/id="theme-toggle"/.test(html), "the brightness control should be in the deck");
+assert(/trec-talk-theme/.test(html), "the brightness choice should be remembered");
+
+// The media query must yield to a pin, or pinning light on a dark machine does
+// nothing.
+assert(/@media \(prefers-color-scheme: dark\)[\s\S]{0,200}:root:not\(\[data-theme="light"\]\)/.test(scss),
+  "the dark media query must step aside for a pinned light theme");
+
+// And the forced-dark rules must come after the media query, since they carry
+// the same specificity and order is what decides.
+const mediaAt = scss.indexOf("@media (prefers-color-scheme: dark)");
+const pinnedAt = scss.indexOf(':root[data-theme="dark"] {');
+assert(mediaAt > 0 && pinnedAt > mediaAt,
+  "forced-dark rules must be written after the dark media query to win on ties");
+assert(/:root\[data-theme="dark"\]\[data-palette="forest"\]/.test(scss),
+  "each palette needs its own forced-dark rule");
+assert(/:root\[data-theme="dark"\]\s*\{\s*color-scheme: dark/.test(scss),
+  "color-scheme should follow a pinned theme, not the system");
+
+// Quarto colours a bare <summary> a slate blue that falls to 2.74:1 on a dark
+// panel. These are the clickable questions, so the deck sets its own.
+assert(/\.qgrid summary \{[\s\S]*?color: var\(--ink\)/.test(scss),
+  "the expandable questions must set their own colour, not inherit Quarto's");
+
 console.log("reports/2026-trec-rag-talk.test.js OK");
