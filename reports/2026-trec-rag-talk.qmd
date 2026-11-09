@@ -227,18 +227,20 @@ The example · same sealed evidence, two strategies
 :::
 
 ::: {.grid-2}
+::: {.scene}
+![](2026-trec-rag-talk/08-writers.svg){fig-alt="Two desks. At the left a single figure writes alone over one page. At the right three figures stand over a larger page together, one pointing, with marks where it has been revised. Both desks hold the same stack of source documents."}
+:::
+
+::: {}
 ::: {.card .card-ret}
 [Single-pass]{.card-label}
 **22 statements · 504 words**
-
-Drafted once, validated locally, published.
 :::
 
 ::: {.card .card-gen}
 [Multi-stage]{.card-label}
 **38 statements · 800 words**
-
-Planned, drafted, audited for omissions, revised under screening.
+:::
 :::
 :::
 

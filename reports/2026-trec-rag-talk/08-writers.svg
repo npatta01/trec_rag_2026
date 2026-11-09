@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" role="img" aria-labelledby="wr-title wr-desc">
+  <title id="wr-title">One writer working alone beside three working over the same page</title>
+  <desc id="wr-desc">A simple flat illustration of two desks. At the left desk a single figure writes alone at a lit lamp, with one sheet of paper. At the right desk three figures stand around a larger sheet together, one of them pointing at it, with marks on the page where it has been revised. Both desks hold the same stack of source documents, standing for the two writing strategies working from identical evidence.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616}}
+    .desk{stroke:var(--line);stroke-width:3;fill:none}
+    .page{fill:var(--panel);stroke:var(--line);stroke-width:2.5}
+    .src{fill:var(--adv-soft);stroke:var(--adv);stroke-width:2.5}
+    .figA{fill:var(--ret)}
+    .figB{fill:var(--gen)}
+    .rule{stroke:var(--muted);stroke-width:2.5;opacity:.55;stroke-linecap:round}
+    .edit{stroke:var(--gen);stroke-width:3;stroke-linecap:round}
+    .glow{fill:var(--adv);opacity:.9}
+    .div{stroke:var(--line);stroke-width:2;stroke-dasharray:5 7;opacity:.55}
+  </style>
+  <rect width="900" height="460" fill="var(--bg)"/>
+  <line class="div" x1="450" y1="40" x2="450" y2="420"/>
+
+  <!-- left: one writer alone -->
+  <circle class="glow" cx="150" cy="96" r="13"/>
+  <line class="rule" x1="150" y1="109" x2="150" y2="150"/>
+  <g class="figA">
+    <circle cx="112" cy="206" r="21"/>
+    <path d="M91 318V258a21 21 0 0 1 42 0v60Z"/>
+  </g>
+  <rect class="page" x="168" y="246" width="104" height="72" rx="5"/>
+  <g class="rule">
+    <line x1="184" y1="268" x2="256" y2="268"/>
+    <line x1="184" y1="284" x2="256" y2="284"/>
+    <line x1="184" y1="300" x2="240" y2="300"/>
+  </g>
+  <rect class="src" x="292" y="276" width="62" height="42" rx="5"/>
+  <line class="desk" x1="60" y1="320" x2="380" y2="320"/>
+  <line class="desk" x1="92" y1="320" x2="92" y2="392"/>
+  <line class="desk" x1="348" y1="320" x2="348" y2="392"/>
+
+  <!-- right: three working the same page -->
+  <circle class="glow" cx="700" cy="96" r="13"/>
+  <line class="rule" x1="700" y1="109" x2="700" y2="150"/>
+  <g class="figB">
+    <circle cx="556" cy="212" r="19"/>
+    <path d="M537 318V262a19 19 0 0 1 38 0v56Z"/>
+    <circle cx="776" cy="206" r="19"/>
+    <path d="M757 318V256a19 19 0 0 1 38 0v62Z"/>
+    <circle cx="700" cy="180" r="19"/>
+    <path d="M681 318V230a19 19 0 0 1 38 0v88Z"/>
+  </g>
+  <rect class="page" x="612" y="246" width="128" height="72" rx="5"/>
+  <g class="rule">
+    <line x1="628" y1="268" x2="724" y2="268"/>
+    <line x1="628" y1="300" x2="700" y2="300"/>
+  </g>
+  <g class="edit">
+    <line x1="628" y1="284" x2="690" y2="284"/>
+    <line x1="700" y1="277" x2="716" y2="291"/>
+    <line x1="716" y1="277" x2="700" y2="291"/>
+  </g>
+  <path class="edit" d="M742 258 L762 248" fill="none"/>
+  <rect class="src" x="812" y="276" width="62" height="42" rx="5"/>
+  <line class="desk" x1="520" y1="320" x2="860" y2="320"/>
+  <line class="desk" x1="552" y1="320" x2="552" y2="392"/>
+  <line class="desk" x1="828" y1="320" x2="828" y2="392"/>
+</svg>
