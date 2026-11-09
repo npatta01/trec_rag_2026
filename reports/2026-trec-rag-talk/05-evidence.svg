@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 540" role="img" aria-labelledby="ev-title ev-desc">
+  <title id="ev-title">Repeated passages become selected evidence, which then produces advisory nuggets</title>
+  <desc id="ev-desc">Many retrieved passages, several of them near-duplicates, are grouped so that one strongest representative survives per group in its original wording. These selected evidence groups are the authority the answer must cite, capped at forty per subnarrative. They are then passed separately to a nugget generator, which returns up to twenty short claims drawn from them. The nuggets are drawn in amber with a dashed edge because they are advisory hints that organize the answer and never replace the evidence.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .hd{font-size:33px;font-weight:760}
+    .role{font-size:23px;font-weight:800;letter-spacing:.07em}
+    .sm{font-size:24px;fill:var(--muted)}
+    .flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#evar)}
+  </style>
+  <defs>
+    <marker id="evar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="1500" height="540" fill="var(--bg)"/>
+
+  <text class="hd" x="30" y="56">Retrieved passages</text>
+  <text class="sm" x="30" y="88">many say the same thing</text>
+  <g fill="var(--panel)" stroke="var(--line)" stroke-width="2.5">
+    <rect x="30"  y="118" width="150" height="54" rx="7"/>
+    <rect x="196" y="118" width="150" height="54" rx="7"/>
+    <rect x="30"  y="186" width="150" height="54" rx="7"/>
+    <rect x="196" y="186" width="150" height="54" rx="7"/>
+    <rect x="30"  y="254" width="150" height="54" rx="7"/>
+    <rect x="196" y="254" width="150" height="54" rx="7"/>
+    <rect x="30"  y="322" width="150" height="54" rx="7"/>
+    <rect x="196" y="322" width="150" height="54" rx="7"/>
+    <rect x="30"  y="390" width="150" height="54" rx="7"/>
+    <rect x="196" y="390" width="150" height="54" rx="7"/>
+  </g>
+
+  <path class="flow" d="M360 281 H442"/>
+  <text class="sm" x="356" y="262">group</text>
+  <text class="sm" x="356" y="326">duplicates</text>
+
+  <rect x="452" y="96" width="470" height="356" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3.5"/>
+  <text class="role" x="476" y="138" fill="var(--ret)">THE AUTHORITY</text>
+  <text class="hd"   x="476" y="180">Selected evidence</text>
+  <g fill="var(--panel)" stroke="var(--ret)" stroke-width="2.5">
+    <rect x="476" y="206" width="422" height="50" rx="7"/>
+    <rect x="476" y="268" width="422" height="50" rx="7"/>
+    <rect x="476" y="330" width="422" height="50" rx="7"/>
+  </g>
+  <text class="sm" x="476" y="400">original wording · citation IDs</text>
+  <text class="sm" x="476" y="430">≤40 groups per subnarrative</text>
+
+  <path class="flow" d="M936 281 H1014" stroke="var(--adv)" stroke-dasharray="8 6"/>
+
+  <rect x="1024" y="96" width="446" height="356" rx="14" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3.5" stroke-dasharray="9 7"/>
+  <text class="role" x="1048" y="138" fill="var(--adv)">ADVISORY ONLY</text>
+  <text class="hd"   x="1048" y="180">Generated nuggets</text>
+  <g fill="none" stroke="var(--adv)" stroke-width="2.5" stroke-dasharray="6 5">
+    <rect x="1048" y="206" width="398" height="44" rx="7"/>
+    <rect x="1048" y="262" width="398" height="44" rx="7"/>
+    <rect x="1048" y="318" width="398" height="44" rx="7"/>
+  </g>
+  <text class="sm" x="1048" y="402">≤20 short claims, each linked</text>
+  <text class="sm" x="1048" y="430">back to the evidence above</text>
+</svg>

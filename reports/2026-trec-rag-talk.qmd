@@ -25,39 +25,27 @@ format:
 The task
 :::
 
-::: {.grid-2-1}
-::: {.card .card-plain}
-[Input]{.card-label}
-One of **119 long-form requests** — called *narratives* — plus access to the
-ClimbMix document collection.
-
-[Output]{.card-label}
-An answer of **at most 1,024 words**, every statement citing the documents
-it came from.
+::: {.stat-row}
+::: {.stat}
+[119]{.n} [long-form requests, each a paragraph of context and several questions]{.k}
+:::
+::: {.stat .stat-adv}
+[1,024]{.n} [words allowed in the answer, at most]{.k}
+:::
+::: {.stat .stat-ok}
+[every]{.n} [statement has to cite the documents it came from]{.k}
+:::
 :::
 
-::: {.card .card-ret}
-[What we compared]{.card-label}
-Two ways to write the answer **from identical evidence**.
-
-**Single-pass** drafts once.
-
-**Multi-stage** plans, drafts, audits the draft, then screens proposed edits.
-
-Same retrieval. Same passages. Only the writing differs.
-:::
+::: {.cap}
+One variable in this talk: given **identical evidence**, does drafting once
+differ from drafting, auditing and revising? Same retrieval, same passages.
 :::
 
 ::: {.boundary}
-**This talk is about how the approach works**, not a claim that it is novel.
-Every number shown is the organizers' own, from the score files they released.
+**This is about how the approach works**, not a claim that it is novel. Every
+number shown is the organizers' own, from the score files they released.
 :::
-
-::: {.notes}
-Set up the comparison as the one controlled thing: evidence is held fixed, the
-writing procedure is the variable.
-:::
-
 ## The whole approach
 
 ::: {.eyebrow}
@@ -153,52 +141,24 @@ How it works
 ![](2026-trec-rag-talk/02-one-lane.svg){fig-alt="One BM25 query lane, stage by stage: up to 1,000 documents retrieved, chunked and reranked down to at most 100 kept passages, reduced to at most 40 evidence groups, producing at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory, not authoritative."}
 :::
 
-::: {.grid-2}
-::: {.note}
-**Documents in, passages out.** We chunk retrieved documents ourselves —
-3,500 characters with 350 of overlap — then score each query–passage pair with
-`mxbai-rerank-base-v2`.
-:::
-
 ::: {.boundary}
-**These are ceilings, not yields.** Each number is a configured per-query cap.
-Nothing here says how many useful passages actually came back.
+**These are ceilings, not yields.** Every number is a configured per-query cap,
+not a count of what actually came back.
 :::
-:::
-
 ## Evidence and nuggets: how it works
 
 ::: {.eyebrow}
 How it works
 :::
 
-::: {.grid-2}
-::: {.card .card-ret}
-[Selected evidence — the authority]{.card-label}
-Group repeated passages: exact matches first, then MiniLM embeddings for
-near-duplicates, checking type, numbers, dates, names and negation before
-grouping anything.
-
-Keep the strongest representative **in its original wording**, with its
-citation links. Up to **40 groups per subnarrative**.
-:::
-
-::: {.card .card-source}
-[Generated nuggets — advisory only]{.card-label}
-Each subnarrative's evidence goes to Nuggetizer separately, returning up to
-**20 short claims**, each linked back to the evidence and at most three
-documents.
-
-These organize the answer. **They never replace the evidence**, and they are
-not the organizers' gold nuggets.
-:::
+::: {.diagram}
+![](2026-trec-rag-talk/05-evidence.svg){fig-alt="Many retrieved passages, several near-duplicates, are grouped so one strongest representative survives per group in its original wording. These selected evidence groups are the authority the answer must cite, capped at forty per subnarrative. They are passed separately to a nugget generator returning up to twenty short claims, drawn in amber with a dashed edge because they are advisory hints that never replace the evidence."}
 :::
 
 ::: {.boundary}
-Both writers then receive one frozen package: the original request, the exact
-evidence, the generated nuggets, and the list of citation IDs they may use.
+Both writers then get one frozen package: the request, the exact evidence, the
+nuggets, and the citation IDs they are allowed to use. **Nothing else.**
 :::
-
 ## Evidence and nuggets: this request
 
 ::: {.trace-step}
@@ -236,13 +196,11 @@ How it works
 ![](2026-trec-rag-talk/03-two-writers.svg){fig-alt="Both writers start from the same sealed evidence and neither searches again. Single-pass: Sol drafts, local code validates schema, citations and word limit, with one bounded retry. Multi-stage: Luna plans, Sol drafts, Luna audits for omissions, Sol proposes edits, Luna screens each edit, and local code applies only accepted ones, keeping the validated draft if revision fails."}
 :::
 
-::: {.note}
-GPT-5.6 Sol writes both answers. Multi-stage adds Luna as planner, auditor and
-screener. Multi-stage does not revise the single-pass answer — both start from
-the same evidence independently. The amber fallback path matters: if revision
-fails, the already validated draft stands, so the extra stages can only add.
+::: {.cap}
+Sol writes both. Multi-stage adds Luna as planner, auditor and screener — and
+starts from the evidence, not from the single-pass answer. If revision fails the
+validated draft stands, so the extra stages can only add.
 :::
-
 ## Two writers: this request
 
 ::: {.trace-step}
@@ -374,30 +332,15 @@ Multi-stage costs several extra model calls per topic for this. Nothing here is
 Results · secondary
 :::
 
-::: {.grid-2-1}
-::: {.card .card-plain}
-[Three runs, one document set]{.card-label}
-The three Retrieval submissions reuse the same saved searches and passage
-scores, and differ **only in ordering**: whole-request relevance, breadth across
-subnarratives, or a blend.
-
-All three received **identical scores, including per topic** — the measures
-score the full submitted set, which the three share.
-:::
-
-| Measure | Ours | Median |
-|---|---|---|
-| Precision | [**0.4116**]{.win} | 0.3499 |
-| Recall | 0.0897 | 0.1002 |
-| Documents | 38.6 | 100.0 |
+::: {.diagram}
+![](2026-trec-rag-talk/06-retrieval.svg){fig-alt="Three paired bars comparing our retrieval run with the field median. Precision: ours 0.4116 against 0.3499. Recall: ours 0.0897 against 0.1002. Documents returned per topic: ours 38.6 against 100.0, roughly a third as many. Each pair is scaled to its own larger value."}
 :::
 
 ::: {.boundary}
-We returned about **a third as many documents** as the median run, with higher
-precision and lower recall. This evaluates our *selection*; it says nothing
-about which ordering puts useful documents first.
+All three Retrieval runs differ **only in ordering** and scored identically, per
+topic included. This measures what we *selected*; it says nothing about which
+ordering puts useful documents first.
 :::
-
 ## What this does and does not establish
 
 ::: {.eyebrow}
@@ -407,28 +350,26 @@ Limits
 ::: {.grid-2}
 ::: {.card .card-ok}
 [Supported]{.card-label}
-With evidence held fixed, the complete multi-stage configuration received
-higher organizer preference and higher coverage, on every collection.
+With evidence held fixed, multi-stage got higher coverage and a better
+assessor record, on every collection.
 :::
 
 ::: {.card .card-source}
 [Not supported]{.card-label}
-**Which stage caused it.** Planning, auditing, revision, model mix and answer
-length all changed together.
+**Which stage caused it** — planning, auditing, revision, model mix and length
+all moved together.
 
-**That length is not the explanation.** Multi-stage wrote 531–1,011 words
-against 203–749.
+**That length explains it.** Multi-stage wrote 531–1,011 words against 203–749.
 
-**Better citation grounding.** A separate RAGDoll check favoured *single-pass*
-— 0.757 against 0.653 on weighted first-citation support.
+**Better grounding.** A separate RAGDoll check favoured *single-pass*, 0.757
+against 0.653.
 :::
 :::
 
 ::: {.boundary}
-The organizer gains should not be read as better grounding. Coverage and
+The organizer gains **should not be read as better grounding**. Coverage and
 citation support are different questions, and here they point different ways.
 :::
-
 ## Look it all up
 
 ::: {.eyebrow}
@@ -439,32 +380,33 @@ Everything behind these slides is published
 ::: {.card .card-ret}
 [Per-topic scores]{.card-label}
 [Organizer Score Explorer](https://npatta01.github.io/trec_rag_2026/reports/2026-organizer-score-explorer.html)
-— all 530 released rows, filterable by run, metric and field median.
+
+All 530 released rows, filterable.
 :::
 
 ::: {.card .card-ret}
-[The full trace, per topic]{.card-label}
+[The full trace]{.card-label}
 [Retrieval Quality Analysis](https://npatta01.github.io/trec_rag_2026/reports/2026-retrieval-nugget-coverage.html)
-— every subnarrative, BM25 query and nugget for all 119 topics.
+
+Every subnarrative, query and nugget, all 119 topics.
 :::
 
 ::: {.card .card-gen}
 [Both answers, judged]{.card-label}
-[rag26-ss1](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html)
-·
+[rag26-ss1](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html) ·
 [rag26-ms1-final](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ms1-final.html)
-— per-citation support judgments.
+
+Per-citation support judgments.
 :::
 
 ::: {.card .card-plain}
 [How it was built]{.card-label}
-[Architecture walkthrough](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
-·
+[Architecture walkthrough](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html) ·
 [project hub](https://npatta01.github.io/trec_rag_2026/)
 :::
 :::
 
-::: {.note}
-rag2026-18 and rag2026-13 are both in the coverage report and both RAGDoll
-reports — every step shown here can be checked end to end.
+::: {.cap}
+rag2026-18 and rag2026-13 appear in the coverage report and both RAGDoll
+reports, so every step shown here can be checked end to end.
 :::
