@@ -23,6 +23,7 @@ for (const asset of [
   "2026-trec-rag-talk/01-approach.svg",
   "2026-trec-rag-talk/02-one-lane.svg",
   "2026-trec-rag-talk/03-two-writers.svg",
+  "2026-trec-rag-talk/04-plan.svg",
 ]) {
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
@@ -36,7 +37,7 @@ assert(runtimeRefs.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 3, `expected 3 fig-alt diagrams, found ${figAlts.length}`);
+assert(figAlts.length === 4, `expected 4 fig-alt diagrams, found ${figAlts.length}`);
 assert(!/!\[[^\]]+\]\(/.test(qmd),
   "diagrams must use ![](src){fig-alt=...}, never a bracketed caption");
 
@@ -52,16 +53,13 @@ for (const stage of ["Planning", "Two writers", "Evidence and nuggets"]) {
 
 // Both worked examples, and the numbers quoted for them.
 const requiredFacts = [
-  "rag2026-17",
+  "rag2026-18",
   "rag2026-13",
-  "out-of-home placement",
-  "0.833", "1.000", "0.667",      // rag2026-17 rubric and field median
-  "6 / 4 / 0",                     // rag2026-17 head-to-head
-  "8 / 0 / 4",                     // rag2026-13 head-to-head, humans favour multi-stage
-  "0.7740", "0.8738",              // Batch 1 all-strict
-  "0.5705", "0.6578",              // Batch 2 human nuggets all-strict
-  "0.4116", "0.3499",              // retrieval precision vs median
-  "0.757", "0.653",                // RAGDoll citation support, favours single-pass
+  "lead hazards", "made lead-safe",
+  "0.857", "1.000", "0.929", "0.786",   // rag2026-18 nuggets vs field median
+  "62.9%", "45.0%",                      // assessor battle win rates
+  "0.4116", "0.3499",                    // retrieval precision vs median
+  "0.757", "0.653",                      // RAGDoll citation support, favours single-pass
 ];
 for (const fact of requiredFacts) {
   assert(qmd.includes(fact), `deck should quote: ${fact}`);
@@ -74,10 +72,11 @@ const flat = qmd.replace(/\s+/g, " ");
 const requiredBoundaries = [
   "not a claim that it is novel",
   "ceilings, not yields",
-  "only one of 42 scored topics",
+  "one of 42 scored topics",
   "rubric items were not released",
-  "114 evaluated runs from 27 teams",
   "should not be read as better grounding",
+  // The battle counts are per-run against the field, never head to head.
+  "not against the other one of",
 ];
 for (const boundary of requiredBoundaries) {
   assert(flat.includes(boundary), `deck should keep the boundary note: ${boundary}`);
@@ -87,5 +86,10 @@ for (const boundary of requiredBoundaries) {
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
 assert(sections.length >= 17,
   `expected at least 17 content slides, found ${sections.length}`);
+
+// The organizers define wins/ties/losses as battles against the whole field,
+// so the deck must never describe them as a duel between our two runs.
+assert(!/head-to-head/i.test(qmd),
+  "side-by-side counts are per-run against the field, not head-to-head");
 
 console.log("reports/2026-trec-rag-talk.test.js OK");

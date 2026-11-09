@@ -1,95 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 700" role="img" aria-labelledby="ap-title ap-desc">
-  <title id="ap-title">One planned source retrieval feeds a Retrieval branch and a RAG branch</title>
-  <desc id="ap-desc">An official narrative is planned once into subnarratives and BM25 queries, searched with BM25 over ClimbMix, chunked into passages and reranked, then reduced to selected evidence with advisory nuggets. That authenticated frozen source splits two ways. A cache-first Retrieval branch builds one shared candidate core and orders it three ways, producing three Retrieval TSVs of 4,246 rows each at depth 1 to 121. A sealed evidence handoff feeds single-pass and multi-stage generation, producing two RAG JSONLs with 119 answers each. Both branches were accepted.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="ap-title ap-desc">
+  <title id="ap-title">One request widens into a search, narrows to evidence, then splits into two submissions</title>
+  <desc id="ap-desc">A funnel read left to right, where band height is proportional to how much material is in play. One narrative becomes sixteen queries, which retrieve up to sixteen thousand documents — the widest point. Reranking narrows that to about sixteen hundred passages, and grouping narrows it again to at most three hundred and twenty evidence groups. The funnel then forks into two submissions built from that same evidence: a ranked retrieval run and a written answer with citations.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .title{font-size:38px;font-weight:720}
-    .label{font-size:30px;font-weight:720}
-    .body{font-size:25px}
-    .small{font-size:22px}
-    .muted{fill:var(--muted)}
-    .stage{fill:var(--panel);stroke:var(--line);stroke-width:2}
-    .source{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}
-    .retrieval{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}
-    .generation{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}
-    .accepted{fill:var(--ok-soft);stroke:var(--ok);stroke-width:3}
-    .flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#ar)}
-    .ret-flow{stroke:var(--ret)}
-    .gen-flow{stroke:var(--gen)}
+    .count{font-size:46px;font-weight:800;font-variant-numeric:tabular-nums}
+    .unit{font-size:27px;font-weight:600;fill:var(--muted)}
+    .edge{font-size:27px;font-weight:700;fill:var(--muted)}
+    .out{font-size:31px;font-weight:740}
+    .tick{font-size:24px;fill:var(--muted)}
   </style>
-  <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
-  <rect width="1400" height="700" fill="var(--bg)"/>
+  <defs>
+    <marker id="apar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="1600" height="620" fill="var(--bg)"/>
 
-  <text class="title" x="700" y="40" text-anchor="middle">Plan once, search, select evidence — then branch</text>
+  <path d="M60 285 L280 255 L520 80 L780 150 L1000 210 L1150 245
+           L1150 375 L1000 410 L780 470 L520 540 L280 365 L60 335 Z"
+        fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3" stroke-linejoin="round"/>
 
-  <!-- Row 1: the bounded source pipeline -->
-  <rect class="stage" x="15" y="82" width="248" height="160" rx="10"/>
-  <text class="label" x="139" y="130" text-anchor="middle">Official</text>
-  <text class="label" x="139" y="164" text-anchor="middle">narrative</text>
-  <text class="small muted" x="139" y="204" text-anchor="middle">119 requests</text>
-  <text class="small muted" x="139" y="230" text-anchor="middle">≤1,024-word answer</text>
+  <g stroke="var(--ret)" stroke-width="2" opacity=".5">
+    <line x1="280"  y1="255" x2="280"  y2="365"/>
+    <line x1="520"  y1="80"  x2="520"  y2="540"/>
+    <line x1="780"  y1="150" x2="780"  y2="470"/>
+    <line x1="1000" y1="210" x2="1000" y2="410"/>
+  </g>
 
-  <path class="flow" d="M267 162H289" vector-effect="non-scaling-stroke"/>
+  <text class="edge" x="60" y="238">The request</text>
 
-  <rect class="source" x="293" y="82" width="248" height="160" rx="10"/>
-  <text class="label" x="417" y="126" text-anchor="middle">Plan once</text>
-  <text class="body" x="417" y="162" text-anchor="middle">DeepSeek V4 Flash</text>
-  <text class="small muted" x="417" y="200" text-anchor="middle">≤8 subnarratives</text>
-  <text class="small muted" x="417" y="226" text-anchor="middle">1–3 BM25 queries each</text>
+  <text class="count" x="400"  y="302" text-anchor="middle">16</text>
+  <text class="unit"  x="400"  y="340" text-anchor="middle">queries</text>
 
-  <path class="flow" d="M545 162H567" vector-effect="non-scaling-stroke"/>
+  <text class="count" x="650"  y="302" text-anchor="middle">16,000</text>
+  <text class="unit"  x="650"  y="340" text-anchor="middle">documents</text>
 
-  <rect class="retrieval" x="571" y="82" width="248" height="160" rx="10"/>
-  <text class="label" x="695" y="126" text-anchor="middle">Search</text>
-  <text class="body" x="695" y="162" text-anchor="middle">BM25 · Pyserini</text>
-  <text class="small muted" x="695" y="200" text-anchor="middle">≤1,000 documents</text>
-  <text class="small muted" x="695" y="226" text-anchor="middle">per query</text>
+  <text class="count" x="890"  y="302" text-anchor="middle">1,600</text>
+  <text class="unit"  x="890"  y="340" text-anchor="middle">passages</text>
 
-  <path class="flow" d="M823 162H845" vector-effect="non-scaling-stroke"/>
+  <text class="count" x="1075" y="302" text-anchor="middle">320</text>
+  <text class="unit"  x="1075" y="340" text-anchor="middle">groups</text>
 
-  <rect class="retrieval" x="849" y="82" width="248" height="160" rx="10"/>
-  <text class="label" x="973" y="126" text-anchor="middle">Passages</text>
-  <text class="body" x="973" y="162" text-anchor="middle">chunk + rerank</text>
-  <text class="small muted" x="973" y="200" text-anchor="middle">3,500 chars / 350 overlap</text>
-  <text class="small muted" x="973" y="226" text-anchor="middle">Mixedbread · ≤100 kept</text>
+  <path d="M1156 290 H1200 V196 H1240" fill="none" stroke="var(--line)" stroke-width="3" marker-end="url(#apar)"/>
+  <path d="M1156 330 H1200 V444 H1240" fill="none" stroke="var(--line)" stroke-width="3" marker-end="url(#apar)"/>
 
-  <path class="flow" d="M1101 162H1123" vector-effect="non-scaling-stroke"/>
+  <rect x="1244" y="152" width="326" height="88" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="out"  x="1407" y="190" text-anchor="middle">Retrieval run</text>
+  <text class="tick" x="1407" y="220" text-anchor="middle">ranked documents</text>
 
-  <rect class="retrieval" x="1127" y="82" width="248" height="160" rx="10"/>
-  <text class="label" x="1251" y="126" text-anchor="middle">Select</text>
-  <text class="label" x="1251" y="160" text-anchor="middle">evidence</text>
-  <text class="small muted" x="1251" y="200" text-anchor="middle">group duplicates</text>
-  <text class="small muted" x="1251" y="226" text-anchor="middle">≤40 groups per facet</text>
+  <rect x="1244" y="400" width="326" height="88" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <text class="out"  x="1407" y="438" text-anchor="middle">Written answer</text>
+  <text class="tick" x="1407" y="468" text-anchor="middle">with citations</text>
 
-  <!-- down into the frozen source -->
-  <path class="flow" d="M1251 242V268H700V292" vector-effect="non-scaling-stroke"/>
-
-  <rect class="source" x="150" y="296" width="1100" height="104" rx="10"/>
-  <text class="label" x="700" y="340" text-anchor="middle">Authenticated frozen source · facet-deepseek-b40-v3</text>
-  <text class="body muted" x="700" y="378" text-anchor="middle">exact passages are the authority · generated nuggets are advisory hints</text>
-
-  <!-- branch -->
-  <path class="flow ret-flow" d="M700 400V428H400V452" vector-effect="non-scaling-stroke"/>
-  <path class="flow gen-flow" d="M700 400V428H1000V452" vector-effect="non-scaling-stroke"/>
-
-  <rect class="retrieval" x="60" y="456" width="680" height="142" rx="10"/>
-  <text class="label" x="400" y="500" text-anchor="middle">Retrieval branch · cache-first replay</text>
-  <text class="body" x="400" y="536" text-anchor="middle">robust score gate → one shared candidate core</text>
-  <text class="small muted" x="400" y="574" text-anchor="middle">three orderings over an identical document set</text>
-
-  <rect class="generation" x="660" y="456" width="680" height="142" rx="10"/>
-  <text class="label" x="1000" y="500" text-anchor="middle">RAG branch · sealed evidence handoff</text>
-  <text class="body" x="1000" y="536" text-anchor="middle">single-pass Sol · multi-stage Luna + Sol</text>
-  <text class="small muted" x="1000" y="574" text-anchor="middle">never opens the TSV, ZIP, qrels or gold nuggets</text>
-
-  <path class="flow ret-flow" d="M400 598V632" vector-effect="non-scaling-stroke"/>
-  <path class="flow gen-flow" d="M1000 598V632" vector-effect="non-scaling-stroke"/>
-
-  <rect class="accepted" x="100" y="636" width="600" height="54" rx="27"/>
-  <text class="body" x="400" y="670" text-anchor="middle">✓ 3 Retrieval TSVs · 4,246 rows · depth 1–121</text>
-
-  <rect class="accepted" x="700" y="636" width="600" height="54" rx="27"/>
-  <text class="body" x="1000" y="670" text-anchor="middle">✓ 2 RAG JSONLs · 119 answers each</text>
+  <text class="tick" x="1407" y="306" text-anchor="middle">same evidence,</text>
+  <text class="tick" x="1407" y="334" text-anchor="middle">two submissions</text>
 </svg>

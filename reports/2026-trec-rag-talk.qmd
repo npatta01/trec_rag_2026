@@ -76,102 +76,73 @@ talk walks the left-to-right path with one real request.
 ## The request we will follow
 
 ::: {.trace-step}
-The example · rag2026-17
+The example · rag2026-18
 :::
 
-::: {.quote}
-I work for a county public health agency that is trying to redesign how we
-support families after a baby leaves the NICU. Some staff want to flag every
-premature birth for extra follow-up, while others worry that this could feel
-punitive or overwhelm families already under stress. **What should we understand
-about prematurity as a child welfare risk factor? How strong is the evidence
-that preterm or medically fragile infants face higher maltreatment or
-out-of-home placement risks**, what mechanisms seem to drive that risk, and what
-kinds of supports should we prioritize from birth through the first few years?
+::: {.pull}
+Six weeks of housing for a family of three — without booking
+[something illegal or unreliable]{.hl}.
 :::
 
-::: {.note}
-One request, several questions inside it: a risk claim, the strength of its
-evidence, the mechanisms, and a practical recommendation. Note the bolded
-phrase — it comes back later.
+::: {.redact}
+Our family of three may need furnished temporary housing in New York City for
+about six weeks **while our apartment is repaired** … whether to use Airbnb/Vrbo,
+an extended-stay hotel, corporate housing, or a short sublet … how should we
+compare the real costs, safety, cancellation risk, space, location, and
+day-to-day practicality, especially **with a child** and remote work needs?
 :::
 
+::: {.cap}
+Eight things asked at once. Hold on to the two bold facts — they sit in
+different sentences, and only one of the two answers ever joins them.
+:::
 ## Planning: how it works
 
 ::: {.eyebrow}
 How it works
 :::
 
-::: {.grid-2}
-::: {.card .card-source}
-[One bounded model call]{.card-label}
-`deepseek/deepseek-v4-flash-20260423` reads **only the narrative** and returns a
-schema-constrained plan.
-
-It never sees a document, and it is never called again for this topic.
+::: {.diagram}
+![](2026-trec-rag-talk/04-plan.svg){fig-alt="The request goes into a single DeepSeek call, which returns up to eight subnarratives, each carrying one to three plain BM25 queries shown as dots. The untouched request is kept as its own search lane. The planner never sees a document and is never called again."}
 :::
 
-::: {.card .card-plain}
-[The limits are hard]{.card-label}
-- **1–8 subnarratives**, each a focused question inside the request
-- **1–3 plain BM25 queries** per subnarrative
-- no operators, no field syntax
-- the **original narrative stays its own lane**
-
-At most **25 searches** per topic.
-:::
-:::
-
-::: {.note}
-Bounded and one-shot. This is deliberately not an agentic search loop — there
-is no feedback from results back into planning.
+::: {.cap}
+Planning only — it never sees a document and is never called again. Deliberately
+not an agentic loop. **At most 25 searches** per topic.
 :::
 
 ## Planning: this request
 
 ::: {.trace-step}
-The example · 4 subnarratives, 12 queries
+The example · 8 subnarratives · 16 queries
 :::
 
 ::: {.grid-2}
-::: {.card .card-ret}
-[1 · Is the risk real?]{.card-label}
-Evidence linking preterm birth to maltreatment or out-of-home placement
-
-`preterm birth child maltreatment risk` · `premature infant abuse neglect
-out-of-home placement` · `prematurity child welfare involvement`
-:::
-
-::: {.card .card-ret}
-[2 · Why?]{.card-label}
-Mechanisms explaining higher risk for preterm or medically fragile infants
-
-`mechanisms preterm infant maltreatment risk` · `parental stress prematurity
-child abuse pathway` · `NICU discharge child welfare risk factors`
-:::
-
-::: {.card .card-ret}
-[3 · What helps?]{.card-label}
-Support interventions from birth through early childhood
-
-`support programs preterm infants prevent maltreatment` · `early intervention
-NICU graduates child abuse prevention` · `family support prematurity first years`
-:::
-
-::: {.card .card-ret}
-[4 · Universal or targeted?]{.card-label}
-Balancing universal follow-up against stigma and burden
-
-`universal follow-up preterm birth stigma` · `targeted support NICU families
-punitive` · `redesigning NICU follow-up family engagement`
+::: {}
+::: {.facets}
+- What options exist?
+- How do they compare?
+- Which ones are illegal?
+- What do they really cost?
+- Is it safe for a child?
+- What if we cancel?
+- Is there room to work?
+- Is the location practical?
 :::
 :::
 
-::: {.note}
-The staff disagreement in the request became subnarrative 4 on its own. The
-plan tracks the question's structure, not a guess at the answer.
+::: {.card .card-ret .chips}
+[Subnarrative 3, expanded]{.card-label}
+`illegal short term rental NYC avoid scams`
+
+`unreliable temporary housing New York City red flags`
+:::
 :::
 
+::: {.cap}
+One subnarrative per thing the family asked, two plain keyword queries each.
+This request pushed the planner to its ceiling of eight.
+:::
 ## Searching: how it works
 
 ::: {.eyebrow}
@@ -231,32 +202,30 @@ evidence, the generated nuggets, and the list of citation IDs they may use.
 ## Evidence and nuggets: this request
 
 ::: {.trace-step}
-The example · what the search actually found
+The example · facet f001, legality and reliability
 :::
 
-::: {.card .card-source}
-[Generated nuggets, subnarrative 1]{.card-label}
-**n001** — Preterm infants are at increased risk for maltreatment **and
-out-of-home placement**.
+::: {.grid-2}
+::: {.card .card-ret}
+[Passages — the authority]{.card-label}
+Exact retrieved text, plus the citation IDs this answer is allowed to use.
 
-**n002** — Children born preterm are at least **1.5 times** more likely to be
-placed outside the home.
-
-**n003** — Early term babies (37–38 weeks) have a **10–15% higher** chance of
-maltreatment.
-
-**n008** — Evidence rating level for the link is **2 (Good)**.
-
-**n029** — The precise reasons for higher maltreatment risk in preterm infants
-are **not fully clear**.
+Every claim has to land on one of these.
 :::
 
-::: {.note}
-The request asked how strong the evidence is. The retrieval came back with a
-graded evidence rating and an explicit statement of what remains unknown.
-Remember n001 and n002 — both mention out-of-home placement.
+::: {.card .card-source .chips}
+[Nuggets — advisory hints]{.card-label}
+`n092` NYC defines a short-term rental as fewer than 30 consecutive days
+
+`n094` NYC has cracked down on illegal rentals, including raids and fines
+:::
 :::
 
+::: {.boundary}
+**These are our own hints, not the organizers' gold nuggets** — and `n092` is a
+trap. The family needs six weeks, which is *longer* than 30 days, so the
+definition settles nothing on its own.
+:::
 ## Two writers: how it works
 
 ::: {.eyebrow}
@@ -277,149 +246,128 @@ fails, the already validated draft stands, so the extra stages can only add.
 ## Two writers: this request
 
 ::: {.trace-step}
-The example · both submitted answers
+The example · same sealed evidence, two strategies
 :::
 
 ::: {.grid-2}
 ::: {.card .card-ret}
-[Single-pass · 393 words, 24 statements]{.card-label}
-"Preterm birth is birth before 37 completed weeks of gestation."
+[Single-pass]{.card-label}
+**22 statements · 504 words**
 
-"Premature infants have an elevated risk of maltreatment, particularly when
-caregiver disadvantages are also present."
+Drafted once, validated locally, published.
 :::
 
 ::: {.card .card-gen}
-[Multi-stage · 875 words, 45 statements]{.card-label}
-"Preterm birth means birth before 37 completed weeks of pregnancy."
+[Multi-stage]{.card-label}
+**38 statements · 800 words**
 
-"A **medically fragile infant** is defined by dependence on life-sustaining
-medication, treatment, or equipment rather than by gestational age alone."
+Planned, drafted, audited for omissions, revised under screening.
 :::
 :::
 
-::: {.note}
-Both open by defining preterm birth. Multi-stage also defines "medically
-fragile" — a phrase the request used and single-pass left undefined.
+::: {.cap}
+Both spotted the 30-day trap. Single-pass noted six weeks exceeds it;
+multi-stage added that the definition alone *does not establish* whether a
+particular six-week sublet is lawful.
 :::
-
 ## The difference you can see
 
 ::: {.trace-step}
-The example · one phrase, traced end to end
+The example · one difference you can read
 :::
 
-::: {.card .card-plain}
-[The request asked]{.card-label}
-"...higher maltreatment **or out-of-home placement** risks"
-:::
-
-::: {.grid-3}
-::: {.card .card-source}
-[The retrieval found it]{.card-label}
-**n001** and **n002** both state the out-of-home placement risk, with a
-figure: at least **1.5×**.
-:::
-
+::: {.grid-2}
 ::: {.card .card-ret}
-[Single-pass used it]{.card-label}
-**0 times.**
+[Single-pass · 22 statements]{.card-label}
+Covers legality, cost, safety, space, location.
 
-The phrase "out-of-home" does not appear anywhere in its 24 statements.
+**The word "lead" never appears.**
 :::
 
 ::: {.card .card-gen}
-[Multi-stage used it]{.card-label}
-**3 times.**
-
-Including the 1.5× figure and its link to children with disabilities.
+[Multi-stage · statement 24]{.card-label}
+"If the apartment repairs involve [lead hazards]{.hl}, ask whether the temporary
+unit is appropriate for a child and has been [made lead-safe]{.hl}."
 :::
 :::
 
 ::: {.boundary}
-The evidence was identical. One writer answered half the question asked, and
-the extra stages are what caught it.
+**The request never says "lead."** It says the apartment is being repaired, and
+separately that there is a child. One writer joined those two facts. That is a
+difference you can read — not a claim about which nugget the scoring counted.
 :::
-
 ## What the organizers said about it
 
 ::: {.trace-step}
-The example · rag2026-17, Batch 1
+The example · NIST Batch 2, human-written nuggets
 :::
 
-| Measure | Single-pass | Multi-stage | Field median |
-|---|---|---|---|
-| Vital strict | 0.833 | [**1.000**]{.win} | 0.667 |
-| All strict | 0.750 | [**1.000**]{.win} | 0.625 |
-| Human head-to-head (W/T/L) | 0 / 3 / 3 | [**6 / 4 / 0**]{.win} | — |
-
-::: {.note}
-Both measures agree here. Multi-stage covered every rubric item and was never
-once preferred against — six wins, four ties, no losses.
-:::
+| rag2026-18 | Single-pass | Multi-stage | Field median |
+|:---|---:|---:|---:|
+| Vital nuggets supported | 0.857 | [**1.000**]{.win} | 0.857 |
+| All nuggets supported | 0.929 | [**1.000**]{.win} | 0.786 |
+| Assessor battles fought | 10 | 6 | — |
+| … answer preferred | 7 | 6 | — |
+| … answer rejected | 3 | [**0**]{.win} | — |
 
 ::: {.boundary}
-**Field median** covers all 114 evaluated runs from 27 teams, each weighted
-equally. It is not a per-team statistic and it is not our rank.
+**Each run is judged against other teams' answers, not against the other one of
+ours.** The battle counts are separate samples, so they do not say a human ever
+chose between these two. This is also **one of 42 scored topics**.
 :::
-
 ## When the two measures disagree
 
 ::: {.trace-step}
-The counter-example · rag2026-13, founder/CEO transition
+A different topic · rag2026-13, a founder scaling a startup
 :::
 
-| Measure | Single-pass | Multi-stage | Field median |
-|---|---|---|---|
-| Vital strict | [**1.000**]{.win} | 0.800 | 0.600 |
-| All strict | [**1.000**]{.win} | 0.857 | 0.714 |
-| Human head-to-head (W/T/L) | 5 / 0 / 5 | [**8 / 0 / 4**]{.win} | — |
+| rag2026-13 | Single-pass | Multi-stage |
+|:---|---:|---:|
+| All nuggets supported | [**1.000**]{.win} | 0.857 |
+| Assessor battles fought | 10 | 12 |
+| … answer preferred | 5 | [**8**]{.win} |
 
-::: {.grid-2}
-::: {.note}
-This is the **only one of 42 scored topics** where single-pass beat multi-stage
-on the rubric. Multi-stage wrote more — 917 words against 441, with a
-month-by-month plan (0–2, 2–4, 4–9, 9–12) that single-pass did not attempt.
+::: {.cap}
+The automated rubric scored single-pass **higher**. The human assessors
+preferred multi-stage in 8 of its 12 battles, against 5 of single-pass's 10.
+The two measures rank our runs the opposite way round.
 :::
 
 ::: {.boundary}
-**The humans preferred multi-stage 8–4 on this same topic.** The automated
-rubric scorer and the human assessors disagreed. The rubric items were not
-released, so we cannot say which item multi-stage missed.
+**The rubric items were not released**, so we cannot name what was credited or
+missed — only that the two measures disagree here.
 :::
-:::
-
 ## Overall: 42 scored topics
 
 ::: {.eyebrow}
-Results
+Across everything NIST scored
 :::
 
 ::: {.stat-row}
-::: {.stat .stat-gen}
-[26]{.n}[topics multi-stage ahead]{.k}
-:::
 ::: {.stat}
-[15]{.n}[tied]{.k}
+[26]{.n} [topics where multi-stage supported more nuggets]{.k}
 :::
 ::: {.stat .stat-adv}
-[1]{.n}[single-pass ahead]{.k}
+[15]{.n} [topics where the two tied exactly]{.k}
+:::
+::: {.stat .stat-gen}
+[1]{.n} [topic where single-pass did better]{.k}
 :::
 :::
 
-| Collection | Measure | Single-pass | Multi-stage | Median |
-|---|---|---|---|---|
-| Batch 1 rubrics (17) | All strict | 0.7740 | [**0.8738**]{.win} | 0.7325 |
-| Batch 2 human nuggets (25) | All strict | 0.5705 | [**0.6578**]{.win} | 0.5556 |
-| Batch 2 automatic nuggets (25) | All strict | 0.1280 | [**0.2496**]{.win} | 0.1280 |
-
-: Each collection is a separate evaluation over a different narrative set. They do not average together.
-
-::: {.note}
-Human preference agreed: Bradley–Terry 1179.8 vs 1019.7 in Batch 1 and
-1181.4 vs 1026.0 in Batch 2, with non-overlapping 95% intervals in both.
+::: {.stat-row}
+::: {.stat .stat-ok}
+[62.9%]{.n} [of multi-stage's 399 assessor battles were won]{.k}
+:::
+::: {.stat}
+[45.0%]{.n} [of single-pass's 422 battles were won]{.k}
+:::
 :::
 
+::: {.boundary}
+Multi-stage costs several extra model calls per topic for this. Nothing here is
+**a claim that it is novel** — only that the extra passes did something visible.
+:::
 ## Retrieval, briefly
 
 ::: {.eyebrow}
@@ -517,6 +465,6 @@ Everything behind these slides is published
 :::
 
 ::: {.note}
-rag2026-17 and rag2026-13 are both in the coverage report and both RAGDoll
-reports — the trace shown here can be checked end to end.
+rag2026-18 and rag2026-13 are both in the coverage report and both RAGDoll
+reports — every step shown here can be checked end to end.
 :::

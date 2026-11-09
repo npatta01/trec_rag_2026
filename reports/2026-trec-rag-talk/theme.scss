@@ -179,7 +179,7 @@ body.reveal-viewport,
   border: 1px solid var(--hairline);
   border-radius: 10px;
   padding: 0.7em 0.85em;
-  font-size: 0.72em;
+  font-size: 0.82em;
   line-height: 1.4;
 
   p {
@@ -248,7 +248,7 @@ body.reveal-viewport,
 
 // Verbatim corpus or model text.
 .quote {
-  font-size: 0.78em;
+  font-size: 0.84em;
   line-height: 1.45;
   background: var(--panel);
   border: 1px solid var(--hairline);
@@ -359,7 +359,7 @@ body.reveal-viewport,
 // ---------------------------------------------------------------- tables
 
 .reveal table {
-  font-size: 0.64em;
+  font-size: 0.74em;
   border-collapse: collapse;
   width: 100%;
   margin: 0.2em 0 0.3em;
@@ -403,7 +403,7 @@ body.reveal-viewport,
 
 .note,
 .boundary {
-  font-size: 0.58em;
+  font-size: 0.62em;
   line-height: 1.4;
   color: var(--muted);
   margin-top: 0.5em;
@@ -444,7 +444,7 @@ body.reveal-viewport,
 
 .reveal ul,
 .reveal ol {
-  font-size: 0.68em;
+  font-size: 0.84em;
   line-height: 1.42;
 }
 
@@ -486,20 +486,190 @@ body.reveal-viewport,
 // Keep a slide's content inside the frame rather than scrolling it.
 .reveal .slides section { overflow: visible; }
 
-// Quarto pins reveal's own `center` to false, so centre the visible slide here.
-// Scoped to .present: hidden sections keep reveal's display:none.
+// ---------------------------------------------------------------- layout
+// Quarto pins reveal's own `center` to false, so the slide box is laid out
+// here instead: a fixed header, a body that grows to fill whatever is left,
+// and a caption pinned to the bottom edge. Without this every slide was a
+// centred stack, so short slides floated in a band and tall ones overflowed.
+// Scoped to .present so hidden sections keep reveal's display:none.
+
 .reveal .slides > section.present {
   display: flex !important;
   flex-direction: column;
-  justify-content: center;
   height: 100%;
+  padding: 0.2em 0 0;
 }
 
-// A tall diagram slide should pack tighter than a sparse one.
-.reveal .slides > section.present > * {
+// Header: title and its kicker, natural height.
+.reveal .slides > section > h2,
+.reveal .slides > section > .eyebrow,
+.reveal .slides > section > .trace-step {
   flex: 0 0 auto;
 }
 
-.reveal .slides > section.present > h2 {
-  margin-bottom: 0.45em;
+.reveal .slides > section > h2 {
+  margin: 0 0 0.16em;
+}
+
+// Body: everything that should expand into the free space.
+// Only the forms that genuinely read better when larger. A bordered text
+// block or a table stretched to fill just draws a long empty rule.
+.reveal .slides > section > .diagram,
+.reveal .slides > section > .grid-2,
+.reveal .slides > section > .grid-3,
+.reveal .slides > section > .grid-2-1,
+.reveal .slides > section > .stat-row {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+// Grids keep their cards at natural height but sit centred in the free space,
+// rather than stretching a two-line card down the whole slide.
+.reveal .slides > section > .grid-2,
+.reveal .slides > section > .grid-3,
+.reveal .slides > section > .grid-2-1 {
+  align-content: center;
+}
+
+// Footer: the caption sits on the bottom edge, which is what makes the body
+// above it actually use the height.
+.reveal .slides > section > .note,
+.reveal .slides > section > .cap,
+.reveal .slides > section > .boundary {
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+
+// A diagram fills its box in both axes and keeps its aspect ratio, instead of
+// being capped at a fraction of the viewport and leaving the rest empty.
+.diagram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 0;
+
+  p,
+  figure,
+  .quarto-figure {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+
+  img,
+  svg {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    object-fit: contain;
+  }
+}
+
+.diagram-tall img,
+.diagram-tall svg {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+// ------------------------------------------------- highlight over disclosure
+// Long source text stays on the slide for provenance, but dimmed, so the eye
+// lands on the operative clause instead of reading ninety-five words of prose.
+
+.pull {
+  font-size: 1.42em;
+  font-weight: 760;
+  line-height: 1.18;
+  color: var(--ink);
+  margin: 0.1em 0 0.5em;
+}
+
+.hl {
+  background: var(--adv-soft);
+  color: var(--ink);
+  padding: 0.04em 0.2em;
+  border-radius: 5px;
+  box-shadow: inset 0 -0.14em 0 var(--adv);
+}
+
+.redact {
+  font-size: 0.62em;
+  line-height: 1.5;
+  color: var(--muted);
+  border-left: 3px solid var(--hairline);
+  padding-left: 0.8em;
+  margin-top: 0.2em;
+}
+
+.redact strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+// One short caption under a figure, pinned to the bottom edge by the layout.
+.cap {
+  font-size: 0.6em;
+  line-height: 1.4;
+  color: var(--muted);
+  margin-top: 0.5em;
+}
+
+// A short numbered stack naming the parts of something without explaining
+// each one. Markdown nests a <ul> inside the div, so the reset targets that.
+.facets {
+  font-size: 1.02em;
+  margin: 0;
+
+  ul {
+    counter-reset: facet;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 1em;
+  }
+
+  li {
+    counter-increment: facet;
+    position: relative;
+    padding-left: 1.75em;
+    margin-bottom: 0.72em;
+    font-weight: 680;
+    line-height: 1.22;
+  }
+
+  li::marker {
+    content: "";
+  }
+
+  li::before {
+    content: counter(facet);
+    position: absolute;
+    left: 0;
+    top: -0.04em;
+    width: 1.3em;
+    height: 1.3em;
+    border-radius: 50%;
+    background: var(--ret-soft);
+    color: var(--ret);
+    border: 2px solid var(--ret);
+    font-size: 0.68em;
+    font-weight: 800;
+    display: grid;
+    place-items: center;
+    line-height: 1;
+  }
+}
+
+// Query strings as chips rather than one run-on code line.
+.chips code {
+  display: block;
+  margin: 0 0 0.4em;
+  font-size: 0.82em;
+  padding: 0.32em 0.55em;
 }
