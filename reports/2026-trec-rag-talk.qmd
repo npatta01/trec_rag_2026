@@ -3,9 +3,12 @@ title: "TREC RAG 2026"
 subtitle: "Single-pass and multi-stage answer generation, traced through one request"
 author: "Nidhin Pattaniyil · Tanwir Zaman · Semih Yagli — NP Labs"
 date: "2026-11-16"
+filters:
+  - 2026-trec-rag-talk/inline-svg.lua
 format:
   revealjs:
     theme: [default, 2026-trec-rag-talk/theme.scss]
+    include-after-body: 2026-trec-rag-talk/palette-toggle.html
     embed-resources: true
     slide-number: c/t
     progress: true

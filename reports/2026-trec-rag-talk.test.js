@@ -195,4 +195,61 @@ assert(/svg\.glyph\{[^}]*display:inline-block/.test(html.replace(/\s+/g, "")) ||
 const glyphs = (qmd.match(/class="glyph"/g) || []).length;
 assert(glyphs === 4, `expected 4 role glyphs in the deck, found ${glyphs}`);
 
+// ---- palettes and inlined figures -----------------------------------------
+// A linked <img src="x.svg"> is a separate document, so the page's CSS custom
+// properties cannot reach inside it and no palette switch could repaint the
+// diagrams. inline-svg.lua inlines them instead.
+assert(!/<img[^>]+src="[^"]*\.svg"/i.test(html),
+  "figures must be inlined, not linked, or the palette cannot reach them");
+const inlined = (html.match(/<svg\b/gi) || []).length;
+assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> elements`);
+
+// Each figure keeps its own accessible name once inlined.
+for (const id of ["ap", "ln", "tw", "pl", "ev", "rt"]) {
+  assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
+    `inlined figure ${id} should keep its <title> and <desc>`);
+}
+
+// Six style blocks now share one document, so every figure class is namespaced.
+for (const [fig, tok] of [["01-approach", "ap"], ["02-one-lane", "ln"],
+                          ["03-two-writers", "tw"], ["04-plan", "pl"],
+                          ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
+  const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
+  const classes = new Set();
+  for (const m of svg.matchAll(/class="([^"]*)"/g)) {
+    m[1].split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+  }
+  const bare = [...classes].filter((c) => !c.startsWith(`${tok}-`));
+  assert(bare.length === 0,
+    `${fig}.svg has un-namespaced classes that would collide once inlined: ${bare.join(", ")}`);
+}
+
+// The figures' own colour blocks are dropped on the way in; the page owns them.
+assert(!/:root\s*\{\s*color-scheme/.test(html),
+  "inlined figures must not carry their own :root palette into the page");
+// ...but they keep it on disk, so each file still renders when opened alone.
+for (const fig of ["01-approach", "03-two-writers", "05-evidence"]) {
+  const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
+  assert(/:root\s*\{[^}]*--bg:/.test(svg),
+    `${fig}.svg should keep its own :root so it renders standalone`);
+}
+
+// Two palettes, and they must actually differ in the dominant accent.
+const scss = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
+for (const mix of ["slate-light", "slate-dark", "forest-light", "forest-dark"]) {
+  assert(scss.includes(`@mixin ${mix}`), `theme should define the ${mix} palette`);
+}
+const retOf = (mix) => {
+  const body = scss.split(`@mixin ${mix} {`)[1].split("}")[0];
+  return (body.match(/--ret:\s*(#[0-9a-f]{6})/i) || [])[1];
+};
+assert(retOf("slate-dark") !== retOf("forest-dark"),
+  "the palettes must differ in --ret, the accent used most in the figures");
+assert(/:root\[data-palette="forest"\]/.test(scss),
+  "Forest must be selectable by attribute");
+
+// The control itself.
+assert(/id="palette-toggle"/.test(html), "the palette control should be in the deck");
+assert(/trec-talk-palette/.test(html), "the chosen palette should be remembered");
+
 console.log("reports/2026-trec-rag-talk.test.js OK");

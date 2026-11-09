@@ -1,9 +1,8 @@
 /*-- scss:defaults --*/
 
-// Shares the palette used by the repository's architecture SVGs so diagrams
-// and slide chrome never disagree. Light values are the defaults; the dark
-// overrides live in scss:rules behind the same prefers-color-scheme query the
-// SVGs use, so a figure and its slide always switch together.
+// Figures are inlined by inline-svg.lua with their own :root colour blocks
+// stripped, so the variables below are the single source of colour for both
+// the slide chrome and every diagram. A palette switches the chrome only.
 
 $font-family-sans-serif: Inter, ui-sans-serif, system-ui, -apple-system,
   BlinkMacSystemFont, "Segoe UI", sans-serif !default;
@@ -12,20 +11,71 @@ $presentation-heading-font-weight: 680 !default;
 $presentation-heading-line-height: 1.12 !default;
 $presentation-line-height: 1.38 !default;
 
-$body-bg: #f6f8f7 !default;
-$body-color: #13231c !default;
+$body-bg: #f7f8fa !default;
+$body-color: #151a21 !default;
 $link-color: #087c72 !default;
-$presentation-heading-color: #13231c !default;
+$presentation-heading-color: #151a21 !default;
 $code-block-font-size: 0.6em !default;
 
 /*-- scss:rules --*/
 
-:root {
+// ---- palettes --------------------------------------------------------------
+// Two palettes, switched by the control at the top right (or the "p" key).
+//
+// Slate is the default: neutral chrome, and a cyan/violet accent pair. Forest
+// is the original — green-tinted chrome with teal/indigo — kept because the
+// repository's other diagrams use it.
+//
+// What stays put in both: amber always means advisory, green always means
+// validated, and the retrieval accent is always the cooler of the pair while
+// generation is always the warmer. Colour is never the only cue — cards carry
+// a left bar and a text label too — so the pair only has to be telling apart,
+// not memorised.
+//
+// Figures are inlined by inline-svg.lua with their own :root blocks stripped,
+// so these variables repaint the diagrams as well as the slides.
+
+@mixin slate-light {
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --ink: #151a21;
+  --muted: #515a67;
+  --line: #646d7a;
+  --hairline: rgb(100 109 122 / 0.28);
+  --ret: #0a6d8a;
+  --ret-soft: #d7eef7;
+  --gen: #6a46c9;
+  --gen-soft: #ebe5ff;
+  --ok: #277a45;
+  --ok-soft: #ddf2e3;
+  --adv: #91610d;
+  --adv-soft: #faecc7;
+}
+
+@mixin slate-dark {
+  --bg: #101318;
+  --panel: #1a1f26;
+  --ink: #eef1f6;
+  --muted: #b6bec9;
+  --line: #8d96a3;
+  --hairline: rgb(141 150 163 / 0.34);
+  --ret: #5fc6e4;
+  --ret-soft: #11323f;
+  --gen: #b9a3ff;
+  --gen-soft: #2b2452;
+  --ok: #82dda0;
+  --ok-soft: #173c25;
+  --adv: #f0c46f;
+  --adv-soft: #433616;
+}
+
+@mixin forest-light {
   --bg: #f6f8f7;
   --panel: #ffffff;
   --ink: #13231c;
   --muted: #4b5d54;
   --line: #5e6d66;
+  --hairline: rgb(94 109 102 / 0.28);
   --ret: #087c72;
   --ret-soft: #d9f1ed;
   --gen: #5664c7;
@@ -34,25 +84,43 @@ $code-block-font-size: 0.6em !default;
   --ok-soft: #ddf2e3;
   --adv: #91610d;
   --adv-soft: #faecc7;
-  --hairline: rgb(94 109 102 / 0.28);
+}
+
+@mixin forest-dark {
+  --bg: #0d1411;
+  --panel: #17211c;
+  --ink: #f0f6f2;
+  --muted: #bac7bf;
+  --line: #9cada3;
+  --hairline: rgb(156 173 163 / 0.34);
+  --ret: #69d8ca;
+  --ret-soft: #183d38;
+  --gen: #aab4ff;
+  --gen-soft: #242b57;
+  --ok: #82dda0;
+  --ok-soft: #173c25;
+  --adv: #f0c46f;
+  --adv-soft: #433616;
+}
+
+:root {
+  color-scheme: light dark;
+  @include slate-light;
+}
+
+:root[data-palette="forest"] {
+  @include forest-light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1411;
-    --panel: #17211c;
-    --ink: #f0f6f2;
-    --muted: #bac7bf;
-    --line: #9cada3;
-    --ret: #69d8ca;
-    --ret-soft: #183d38;
-    --gen: #aab4ff;
-    --gen-soft: #242b57;
-    --ok: #82dda0;
-    --ok-soft: #173c25;
-    --adv: #f0c46f;
-    --adv-soft: #433616;
-    --hairline: rgb(156 173 163 / 0.34);
+    @include slate-dark;
+  }
+
+  // Same specificity as the rule above, written after it, so Forest wins for a
+  // reader who chose it.
+  :root[data-palette="forest"] {
+    @include forest-dark;
   }
 }
 
@@ -804,4 +872,45 @@ body.reveal-viewport,
   margin: 0 0.16em 0 0;
   vertical-align: -0.17em;
   overflow: visible;
+}
+
+// The palette control. Faint until wanted, and never printed.
+#palette-toggle {
+  position: fixed;
+  top: 0.75rem;
+  right: 1rem;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.32em 0.7em 0.32em 0.5em;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+#palette-toggle:hover,
+#palette-toggle:focus-visible {
+  opacity: 1;
+  color: var(--ink);
+}
+
+#palette-toggle .swatch {
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  background: linear-gradient(135deg, var(--ret) 0 50%, var(--gen) 50% 100%);
+}
+
+@media print {
+  #palette-toggle { display: none; }
 }

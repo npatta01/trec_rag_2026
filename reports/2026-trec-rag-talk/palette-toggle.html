@@ -1,0 +1,51 @@
+<button id="palette-toggle" type="button" aria-live="polite">
+  <span class="swatch" aria-hidden="true"></span><span id="palette-name">Slate</span>
+</button>
+<script>
+(function () {
+  // Chrome only. The accents (teal, indigo, amber, green) carry meaning in the
+  // figures, so they stay fixed across palettes.
+  var ORDER = ["slate", "forest"];
+  var LABEL = { slate: "Slate", forest: "Forest" };
+  var KEY = "trec-talk-palette";
+  var root = document.documentElement;
+  var button = document.getElementById("palette-toggle");
+  var name = document.getElementById("palette-name");
+
+  function remember(value) {
+    try { localStorage.setItem(KEY, value); } catch (err) { /* private window */ }
+  }
+
+  function recall() {
+    try { return localStorage.getItem(KEY); } catch (err) { return null; }
+  }
+
+  function apply(value) {
+    root.setAttribute("data-palette", value);
+    if (name) { name.textContent = LABEL[value] || value; }
+    if (button) {
+      button.setAttribute("aria-label", "Colour palette: " + (LABEL[value] || value) + ". Click to change.");
+    }
+    remember(value);
+  }
+
+  var saved = recall();
+  apply(ORDER.indexOf(saved) >= 0 ? saved : ORDER[0]);
+
+  if (button) {
+    button.addEventListener("click", function () {
+      var at = ORDER.indexOf(root.getAttribute("data-palette"));
+      apply(ORDER[(at + 1) % ORDER.length]);
+    });
+  }
+
+  // "p" cycles the palette, but not while Reveal's own overlays are up.
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "p" || event.metaKey || event.ctrlKey || event.altKey) { return; }
+    var target = event.target;
+    if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) { return; }
+    if (document.querySelector(".reveal.overview, .slide-menu-wrapper.active")) { return; }
+    if (button) { button.click(); }
+  });
+})();
+</script>
