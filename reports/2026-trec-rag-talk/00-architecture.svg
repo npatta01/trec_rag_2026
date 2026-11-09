@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="ar-title ar-desc">
+  <title id="ar-title">The five components, the model behind each, and where each one runs</title>
+  <desc id="ar-desc">A left to right chain of five components. Plan the search, using the hosted deepseek v4 flash model. Search, using a hosted Pyserini BM25 endpoint over the ClimbMix collection. Rerank, using mxbai rerank base v2 on a local GPU. Select the evidence, using all MiniLM L6 v2 on a local GPU. Write, using gpt 5.6 sol alone or gpt 5.6 luna together with sol, hosted. A band underneath marks which steps are hosted model calls and which are local GPU work: only the two middle steps are local. The chain forks at the end into the two submitted artefacts: three ranked retrieval files, taken from the scored candidates, and two answer files, taken from the writing step.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .ar-step{font-size:27px;font-weight:740}
+    .ar-model{font-size:18px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .ar-num{font-size:19px;font-weight:800}
+    .ar-where{font-size:19px;font-weight:700;letter-spacing:.04em}
+    .ar-out{font-size:25px;font-weight:720}
+    .ar-tick{font-size:19px;fill:var(--muted)}
+    .ar-kick{font-size:23px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
+    .ar-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#arar)}
+  </style>
+  <defs>
+    <marker id="arar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="1600" height="620" fill="var(--bg)"/>
+
+  <text class="ar-kick" x="40" y="48">FIVE COMPONENTS · THE SAME CHAIN FOR ALL 119 REQUESTS</text>
+
+  <!-- 1 plan -->
+  <rect x="40" y="96" width="282" height="128" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <circle cx="74" cy="130" r="15" fill="var(--gen)"/>
+  <text class="ar-num"   x="74" y="137" text-anchor="middle" fill="var(--gen-soft)">1</text>
+  <text class="ar-step"  x="100" y="139">Plan</text>
+  <text class="ar-model" x="64" y="178">deepseek-v4-flash</text>
+  <text class="ar-tick"  x="64" y="204">one call, never repeated</text>
+
+  <path class="ar-flow" d="M322 160 H368"/>
+
+  <!-- 2 search -->
+  <rect x="372" y="96" width="282" height="128" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <circle cx="406" cy="130" r="15" fill="var(--ret)"/>
+  <text class="ar-num"   x="406" y="137" text-anchor="middle" fill="var(--ret-soft)">2</text>
+  <text class="ar-step"  x="432" y="139">Search</text>
+  <text class="ar-model" x="396" y="178">Pyserini BM25</text>
+  <text class="ar-tick"  x="396" y="204">the ClimbMix collection</text>
+
+  <path class="ar-flow" d="M654 160 H700"/>
+
+  <!-- 3 rerank -->
+  <rect x="704" y="96" width="282" height="128" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <circle cx="738" cy="130" r="15" fill="var(--ret)"/>
+  <text class="ar-num"   x="738" y="137" text-anchor="middle" fill="var(--ret-soft)">3</text>
+  <text class="ar-step"  x="764" y="139">Rerank</text>
+  <text class="ar-model" x="728" y="178">mxbai-rerank-base-v2</text>
+  <text class="ar-tick"  x="728" y="204">chunk, then score</text>
+
+  <path class="ar-flow" d="M986 160 H1032"/>
+
+  <!-- 4 select -->
+  <rect x="1036" y="96" width="282" height="128" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <circle cx="1070" cy="130" r="15" fill="var(--ret)"/>
+  <text class="ar-num"   x="1070" y="137" text-anchor="middle" fill="var(--ret-soft)">4</text>
+  <text class="ar-step"  x="1096" y="139">Select</text>
+  <text class="ar-model" x="1060" y="178">all-MiniLM-L6-v2</text>
+  <text class="ar-tick"  x="1060" y="204">drop duplicates, spread</text>
+
+  <path class="ar-flow" d="M1318 160 H1364"/>
+
+  <!-- 5 write -->
+  <rect x="1368" y="96" width="192" height="128" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <circle cx="1402" cy="130" r="15" fill="var(--gen)"/>
+  <text class="ar-num"   x="1402" y="137" text-anchor="middle" fill="var(--gen-soft)">5</text>
+  <text class="ar-step"  x="1428" y="139">Write</text>
+  <text class="ar-model" x="1392" y="178">gpt-5.6-sol</text>
+  <text class="ar-model" x="1392" y="202">gpt-5.6-luna</text>
+
+  <!-- where each one runs -->
+  <text class="ar-kick" x="40" y="294" fill="var(--muted)">WHERE EACH STEP RUNS</text>
+  <rect x="40"   y="312" width="282" height="46" rx="23" fill="none" stroke="var(--gen)" stroke-width="2.5" stroke-dasharray="7 6"/>
+  <text class="ar-where" x="181" y="342" text-anchor="middle" fill="var(--gen)">hosted model</text>
+  <rect x="372"  y="312" width="282" height="46" rx="23" fill="none" stroke="var(--gen)" stroke-width="2.5" stroke-dasharray="7 6"/>
+  <text class="ar-where" x="513" y="342" text-anchor="middle" fill="var(--gen)">hosted index</text>
+  <rect x="704"  y="312" width="614" height="46" rx="23" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.5"/>
+  <text class="ar-where" x="1011" y="342" text-anchor="middle" fill="var(--ok)">local GPU — no network, no cost per request</text>
+  <rect x="1368" y="312" width="192" height="46" rx="23" fill="none" stroke="var(--gen)" stroke-width="2.5" stroke-dasharray="7 6"/>
+  <text class="ar-where" x="1464" y="342" text-anchor="middle" fill="var(--gen)">hosted</text>
+
+  <!-- what comes out -->
+  <path class="ar-flow" d="M1011 358 V432 H1056"/>
+  <path class="ar-flow" d="M1464 358 V500 H1056"/>
+
+  <rect x="1060" y="398" width="500" height="68" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="ar-out"  x="1084" y="432">Retrieval run · 3 ranked files</text>
+  <text class="ar-tick" x="1084" y="456">ordered three ways from one candidate set</text>
+
+  <rect x="1060" y="486" width="500" height="68" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <text class="ar-out"  x="1084" y="520">Written answers · 2 files</text>
+  <text class="ar-tick" x="1084" y="544">single-pass, and multi-stage</text>
+
+  <text class="ar-tick" x="40" y="432">Steps 2–4 never see the request's wording again —</text>
+  <text class="ar-tick" x="40" y="458">they work from the plan's queries alone.</text>
+  <text class="ar-tick" x="40" y="508">Step 5 never opens the retrieval files, the corpus,</text>
+  <text class="ar-tick" x="40" y="534">or any score. It gets one sealed evidence package.</text>
+</svg>

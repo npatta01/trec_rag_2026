@@ -28,6 +28,12 @@
   </defs>
   <rect width="1500" height="730" fill="var(--bg)"/>
 
+  <!-- one panel per strategy, so the split reads before the detail does -->
+  <rect x="24" y="112" width="500" height="528" rx="18" fill="var(--panel)" opacity=".5"/>
+  <rect x="24" y="112" width="500" height="528" rx="18" fill="none" stroke="var(--line)" stroke-width="2" opacity=".45"/>
+  <rect x="556" y="112" width="920" height="528" rx="18" fill="var(--panel)" opacity=".5"/>
+  <rect x="556" y="112" width="920" height="528" rx="18" fill="none" stroke="var(--line)" stroke-width="2" opacity=".45"/>
+
   <!-- the shared, sealed input -->
   <rect x="300" y="18" width="900" height="74" rx="10" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
   <text class="tw-head" x="750" y="50" text-anchor="middle">One sealed evidence handoff</text>
@@ -35,10 +41,10 @@
 
   <path class="tw-flow" d="M750 92 V112 H270 V150" vector-effect="non-scaling-stroke"/>
   <path class="tw-flow" d="M750 92 V112 H1040 V150" vector-effect="non-scaling-stroke"/>
-  <line class="tw-rule" x1="540" y1="120" x2="540" y2="640"/>
 
   <!-- ================= single-pass: Sol alone ================= -->
-  <text class="tw-head" x="270" y="146" text-anchor="middle" fill="var(--ret)">Single-pass</text>
+  <rect x="140" y="118" width="268" height="44" rx="22" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.5"/>
+  <text class="tw-head" x="274" y="150" text-anchor="middle" fill="var(--ret)">Single-pass</text>
 
   <g transform="translate(110,196)"><circle r="21" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#nib"/></g>
   <text class="tw-who"   x="142" y="192" fill="var(--ret)">Sol</text>
@@ -59,7 +65,8 @@
   <path class="tw-flow" d="M270 436 V646 H430 V656" vector-effect="non-scaling-stroke"/>
 
   <!-- ================= multi-stage: the work changes hands ================= -->
-  <text class="tw-head" x="1040" y="146" text-anchor="middle" fill="var(--gen)">Multi-stage</text>
+  <rect x="906" y="118" width="268" height="44" rx="22" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.5"/>
+  <text class="tw-head" x="1040" y="150" text-anchor="middle" fill="var(--gen)">Multi-stage</text>
 
   <g transform="translate(640,196)"><circle r="21" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/><use href="#lens"/></g>
   <text class="tw-who"   x="672" y="192" fill="var(--gen)">Luna</text>

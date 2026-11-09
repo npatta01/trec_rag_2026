@@ -26,8 +26,12 @@ for (const asset of [
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
+  "2026-trec-rag-talk/00-task.svg",
+  "2026-trec-rag-talk/00-architecture.svg",
   "2026-trec-rag-talk/img-request.png",
   "2026-trec-rag-talk/img-writers.png",
+  "2026-trec-rag-talk/img-request-forest.png",
+  "2026-trec-rag-talk/img-writers-forest.png",
 ]) {
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
@@ -43,7 +47,14 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 8, `expected 8 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 10, `expected 10 fig-alt figures, found ${figAlts.length}`);
+// The palette-variant scenes are decorative duplicates of a described image,
+// so they are hidden from screen readers rather than described twice. (The
+// role glyphs are aria-hidden too, hence matching on the scene class.)
+const variants = (qmd.match(/\{\.scene-forest aria-hidden="true"\}/g) || []).length;
+assert(variants === 2, `expected 2 hidden scene variants, found ${variants}`);
+const primaries = (qmd.match(/\{\.scene-slate fig-alt=/g) || []).length;
+assert(primaries === 2, `expected 2 described scene images, found ${primaries}`);
 assert(!/!\[[^\]]+\]\(/.test(qmd),
   "diagrams must use ![](src){fig-alt=...}, never a bracketed caption");
 
@@ -90,8 +101,8 @@ for (const boundary of requiredBoundaries) {
 
 // Slide count: 1 title + 17 content.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length >= 17,
-  `expected at least 17 content slides, found ${sections.length}`);
+assert(sections.length >= 20,
+  `expected at least 20 content slides, found ${sections.length}`);
 
 // The organizers define wins/ties/losses as battles against the whole field,
 // so the deck must never describe them as a duel between our two runs.
@@ -111,7 +122,7 @@ for (const fig of ["01-approach", "02-one-lane", "04-plan", "05-evidence", "06-r
 
 // The planning example must stay expandable, one entry per subnarrative,
 // and must state the per-request query arithmetic rather than a bare total.
-const details = (html.match(/<details>/g) || []).length;
+const details = (html.match(/<details\b/g) || []).length;
 assert(details === 8, `expected 8 expandable subnarratives, found ${details}`);
 assert(/8 subnarratives . 2 queries = 16 searches/.test(qmd),
   "the planning slide must show the per-request query arithmetic");
@@ -278,5 +289,37 @@ assert(/:root\[data-theme="dark"\]\s*\{\s*color-scheme: dark/.test(scss),
 // panel. These are the clickable questions, so the deck sets its own.
 assert(/\.qgrid summary \{[\s\S]*?color: var\(--ink\)/.test(scss),
   "the expandable questions must set their own colour, not inherit Quarto's");
+
+// ---- the task and architecture figures -------------------------------------
+const task = fs.readFileSync(path.join(root, "2026-trec-rag-talk/00-task.svg"), "utf8");
+for (const fact of ["ClimbMix", "BM25", "119", "1,024", "every statement cited"]) {
+  assert(task.includes(fact), `the task figure should name: ${fact}`);
+}
+const arch = fs.readFileSync(path.join(root, "2026-trec-rag-talk/00-architecture.svg"), "utf8");
+for (const fact of ["deepseek-v4-flash", "Pyserini BM25", "mxbai-rerank-base-v2",
+                    "all-MiniLM-L6-v2", "gpt-5.6-sol", "gpt-5.6-luna", "local GPU"]) {
+  assert(arch.includes(fact), `the architecture figure should name: ${fact}`);
+}
+// Figure classes stay namespaced, including the two new ones.
+for (const [fig, tok] of [["00-task", "tk"], ["00-architecture", "ar"]]) {
+  const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
+  const bare = [...new Set([].concat(...[...svg.matchAll(/class="([^"]*)"/g)]
+    .map((m) => m[1].split(/\s+/).filter(Boolean))))].filter((c) => !c.startsWith(`${tok}-`));
+  assert(bare.length === 0, `${fig}.svg has un-namespaced classes: ${bare.join(", ")}`);
+}
+
+// The planning queries are shown, not hidden behind a click.
+const openDetails = (qmd.match(/<details open>/g) || []).length;
+assert(openDetails === 8, `expected 8 pre-expanded subnarratives, found ${openDetails}`);
+
+// The dedup step is shown concretely, and flagged as illustrative wording
+// because real corpus passages stay private.
+assert(/cosine \*\*0\.94\*\*/.test(qmd), "the evidence slide should show a worked duplicate pair");
+assert(flat.includes("my wording, standing in for real passages"),
+  "the illustrative sentences must be marked as not being corpus text");
+
+// The nuggetizer's attribution limit, straight from the config.
+assert(/each attributed to at most \*\*3\*\*/.test(qmd),
+  "the nugget slide should state maximum_supporting_documents_per_claim");
 
 console.log("reports/2026-trec-rag-talk.test.js OK");
