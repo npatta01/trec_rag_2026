@@ -32,12 +32,14 @@ for (const asset of [
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
 
-// Self-contained: nothing may load from the network at display time.
-const runtimeRefs = (html.match(/(?:src|href)="https?:\/\/[^"]+"/g) || []).filter(
-  (ref) => !ref.includes("npatta01.github.io")
-);
-assert(runtimeRefs.length === 0,
-  `deck must not load external resources, found: ${runtimeRefs.slice(0, 3).join(", ")}`);
+// Self-contained: nothing may be FETCHED from the network at display time.
+// Anchors are fine and expected — the closing slide links out on purpose.
+const fetched = [
+  ...(html.match(/\ssrc="https?:\/\/[^"]+"/g) || []),
+  ...(html.match(/<link\b[^>]*\shref="https?:\/\/[^"]+"/g) || []),
+];
+assert(fetched.length === 0,
+  `deck must not load external resources, found: ${fetched.slice(0, 3).join(", ")}`);
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
@@ -113,6 +115,37 @@ const details = (html.match(/<details>/g) || []).length;
 assert(details === 8, `expected 8 expandable subnarratives, found ${details}`);
 assert(/8 subnarratives . 2 queries = 16 searches/.test(qmd),
   "the planning slide must show the per-request query arithmetic");
+// The trace records 17 planned queries for this request: 16 plus the
+// untouched-narrative lane. The slide must not stop at 16.
+assert(/= 16 searches, plus the untouched request = 17 lanes/.test(qmd),
+  "the planning slide must account for the untouched-narrative lane");
+
+// The 40 budget is a SELECTED PASSAGE cap. In the handoff schema a "group" is
+// a subnarrative (group_id == subnarrative_id), one per subnarrative on all
+// 119 topics, so "40 groups per subnarrative" is wrong in two ways.
+for (const f of ["01-approach", "02-one-lane", "05-evidence"]) {
+  const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
+  assert(!/groups per subnarrative/.test(svg),
+    `${f}.svg must not call the 40-passage budget a group cap`);
+}
+assert(!/evidence groups/.test(qmd),
+  "the deck must not call selected passages 'evidence groups'");
+
+// Near-duplicate detection is a named model at a named threshold.
+const evidence = fs.readFileSync(path.join(root, "2026-trec-rag-talk/05-evidence.svg"), "utf8");
+for (const mech of ["all-MiniLM-L6-v2", "0.92", "MMR"]) {
+  assert(evidence.includes(mech),
+    `the evidence figure should name the dedup mechanism: ${mech}`);
+}
+
+// Per-topic audit counts are published, so the deck must not claim otherwise;
+// only the kept/rejected decisions are private.
+assert(!/no per-topic audit log/.test(qmd),
+  "the per-topic audit counts are published in the release; don't deny them");
+assert(flat.includes("every evidence group — no sampling"),
+  "the Luna slide should state the audit breadth the trace records");
+assert(flat.includes("its one retry on 2 of 119 requests"),
+  "the writers slide should quote the measured single-pass retry count");
 
 // Per-request figures must never read as totals for the whole run.
 const funnel = fs.readFileSync(path.join(root, "2026-trec-rag-talk/01-approach.svg"), "utf8");

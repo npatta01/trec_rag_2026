@@ -524,9 +524,16 @@ body.reveal-viewport,
 .reveal .slides > section > .grid-2,
 .reveal .slides > section > .grid-3,
 .reveal .slides > section > .grid-2-1,
+.reveal .slides > section > .qgrid,
 .reveal .slides > section > .stat-row {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+// The query grid claims the free height and spreads its rows through it, so
+// the slide is not half empty and opening one entry barely moves the others.
+.reveal .slides > section > .qgrid {
+  align-content: space-evenly;
 }
 
 // Grids keep their cards at natural height but sit centred in the free space,

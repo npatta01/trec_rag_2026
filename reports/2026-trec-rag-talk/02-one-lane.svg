@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 620" role="img" aria-labelledby="ln-title ln-desc">
   <title id="ln-title">What one BM25 query lane contributes, stage by stage</title>
-  <desc id="ln-desc">One planned BM25 query, the illegal short term rental lane, retrieves up to 1,000 documents. Those documents are chunked and reranked down to at most 100 kept passages, then reduced to at most 40 evidence groups, which produce at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory hints, not authoritative evidence. Every figure is a per-query ceiling set by configuration, not a measured yield.</desc>
+  <desc id="ln-desc">One planned BM25 query, the illegal short term rental lane, retrieves up to 1,000 documents. Those documents are chunked and reranked down to at most 100 kept passages, then reduced to at most 40 selected passages, which produce at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory hints, not authoritative evidence. Every figure is a per-query ceiling set by configuration, not a measured yield.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616}}
@@ -43,8 +43,8 @@
 
   <rect class="bar" x="755" y="385" width="210" height="115" rx="8"/>
   <text class="num" x="860" y="370" text-anchor="middle">≤40</text>
-  <text class="label" x="860" y="534" text-anchor="middle">evidence groups</text>
-  <text class="small muted" x="860" y="562" text-anchor="middle">dedup + diversify</text>
+  <text class="label" x="860" y="534" text-anchor="middle">selected</text>
+  <text class="small muted" x="860" y="562" text-anchor="middle">MiniLM dedup + MMR</text>
 
   <path class="flow" d="M975 470H1045" vector-effect="non-scaling-stroke"/>
 

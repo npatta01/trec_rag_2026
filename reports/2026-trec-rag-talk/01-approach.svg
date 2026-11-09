@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="ap-title ap-desc">
   <title id="ap-title">One request widens into a search, narrows to evidence, then splits into two submissions</title>
-  <desc id="ap-desc">A funnel read left to right, where band height is proportional to how much material is in play. One narrative becomes at most twenty-five searches, each retrieving up to one thousand documents — the widest point. Reranking narrows each query to at most one hundred passages, and grouping narrows those to at most forty evidence groups per subnarrative. The funnel then forks into two submissions built from that same evidence: a ranked retrieval run and a written answer with citations.</desc>
+  <desc id="ap-desc">A funnel read left to right, where band height is proportional to how much material is in play. One narrative becomes at most twenty-five searches, each retrieving up to one thousand documents — the widest point. Reranking narrows each query to at most one hundred passages, and near-duplicate grouping narrows those to at most forty selected passages per subnarrative. The funnel then forks into two submissions built from that same evidence: a ranked retrieval run and a written answer with citations.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
@@ -31,19 +31,19 @@
 
   <text class="edge" x="60" y="238">The request</text>
   <text class="kick" x="30" y="46">THE SHAPE OF ONE REQUEST — THE SAME CONFIGURATION FOR ALL 119</text>
-  <text class="foot" x="30" y="596">every figure is a configured ceiling, not a measured yield</text>
+  <text class="foot" x="30" y="596">configured ceilings, not measured yields · per query for documents and passages · per subnarrative for selected</text>
 
   <text class="count" x="400"  y="302" text-anchor="middle">≤25</text>
-  <text class="unit"  x="400"  y="340" text-anchor="middle">searches per request</text>
+  <text class="unit"  x="400"  y="340" text-anchor="middle">searches</text>
 
   <text class="count" x="650"  y="302" text-anchor="middle">≤1,000</text>
-  <text class="unit"  x="650"  y="340" text-anchor="middle">documents per query</text>
+  <text class="unit"  x="650"  y="340" text-anchor="middle">documents</text>
 
   <text class="count" x="890"  y="302" text-anchor="middle">≤100</text>
-  <text class="unit"  x="890"  y="340" text-anchor="middle">passages per query</text>
+  <text class="unit"  x="890"  y="340" text-anchor="middle">passages</text>
 
   <text class="count" x="1075" y="302" text-anchor="middle">≤40</text>
-  <text class="unit"  x="1075" y="340" text-anchor="middle">groups per subnarrative</text>
+  <text class="unit"  x="1075" y="340" text-anchor="middle">selected</text>
 
   <path d="M1156 290 H1200 V196 H1240" fill="none" stroke="var(--line)" stroke-width="3" marker-end="url(#apar)"/>
   <path d="M1156 330 H1200 V444 H1240" fill="none" stroke="var(--line)" stroke-width="3" marker-end="url(#apar)"/>
