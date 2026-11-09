@@ -1,0 +1,3 @@
+group	run	narrative-id	bt_score	ci_lower	ci_upper	bt_score_min	bt_score_max	bt_score_median
+NP Labs	rag26-ms1-final	all	1179.8	1128.6	1231.0	514.8	1258.2	1048.7
+NP Labs	rag26-ss1	all	1019.7	970.5	1068.9	514.8	1258.2	1048.7
