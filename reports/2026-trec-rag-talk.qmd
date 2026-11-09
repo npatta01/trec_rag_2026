@@ -79,10 +79,14 @@ Six weeks of housing for a family of three — without booking
 
 ::: {.redact}
 Our family of three may need furnished temporary housing in New York City for
-about six weeks **while our apartment is repaired** … whether to use Airbnb/Vrbo,
-an extended-stay hotel, corporate housing, or a short sublet … how should we
-compare the real costs, safety, cancellation risk, space, location, and
-day-to-day practicality, especially **with a child** and remote work needs?
+about six weeks **while our apartment is repaired**.
+
+… Airbnb/Vrbo, an extended-stay hotel, corporate housing, or a short sublet?
+
+… how should we compare the real costs, safety, cancellation risk, space,
+location, and day-to-day practicality,
+
+… especially **with a child** and remote work needs?
 :::
 :::
 
@@ -105,6 +109,33 @@ Planning only — it never sees a document and is never called again. Deliberate
 not an agentic loop. **At most 25 searches** per topic.
 :::
 
+## The prompt that does the planning
+
+::: {.eyebrow}
+How it works · verbatim
+:::
+
+::: {.promptbox}
+```
+Plan retrieval over a very large passage collection using only the
+supplied official topic narrative. Do not answer the topic. Return
+only the schema-constrained JSON plan.
+
+Rules:
+1. Generate one to eight concise subnarratives that together preserve
+   the narrative's requested subjects, relations, comparisons,
+   constraints, and uncertainty.
+2. Give each subnarrative one to three plain BM25 queries. Queries
+   must be useful lexical alternatives, not answers, and must not
+   contain query operators or field syntax.
+3. Use only the supplied narrative.
+```
+:::
+
+::: {.cap}
+The whole planning instruction, copied from the code. **"Do not answer the
+topic"** does the heavy lifting — the planner proposes searches, never findings.
+:::
 ## Planning: this request
 
 ::: {.trace-step}
@@ -219,6 +250,34 @@ How it works
 Sol writes both. Multi-stage adds Luna as planner, auditor and screener — and
 starts from the evidence, not from the single-pass answer. If revision fails the
 validated draft stands, so the extra stages can only add.
+:::
+## What Luna keeps, and what she throws out
+
+::: {.eyebrow}
+How it works · the screening gate
+:::
+
+::: {.grid-2-1}
+::: {.card .card-gen}
+[Five gates, all must pass]{.card-label}
+Luna returns **only booleans** — support, atomicity, materiality, redundancy,
+replacement safety.
+
+Local code applies an edit only when **all five are true**. The screen never
+rewrites prose itself.
+:::
+
+| Dev topic | Edits kept |
+|:---|---:|
+| `233` | 1 of 4 |
+| `300` | 3 of 3 |
+| `499` | 4 of 5 |
+:::
+
+::: {.boundary}
+On topic `499` the screen **rejected a replacement that would have erased a
+distinct argument**. These are three development topics, not the 119 — the
+competition run kept no per-topic audit log.
 :::
 ## Two writers: this request
 
@@ -347,10 +406,10 @@ Across everything NIST scored
 Multi-stage costs several extra model calls per topic for this. Nothing here is
 **a claim that it is novel** — only that the extra passes did something visible.
 :::
-## Retrieval, briefly
+## A word on the retrieval side
 
 ::: {.eyebrow}
-Results · secondary
+The other submission
 :::
 
 ::: {.diagram}
@@ -362,7 +421,7 @@ All three Retrieval runs differ **only in ordering** and scored identically, per
 topic included. This measures what we *selected*; it says nothing about which
 ordering puts useful documents first.
 :::
-## What this does and does not establish
+## What I would and would not claim from this
 
 ::: {.eyebrow}
 Limits
@@ -391,10 +450,10 @@ against 0.653.
 The organizer gains **should not be read as better grounding**. Coverage and
 citation support are different questions, and here they point different ways.
 :::
-## Look it all up
+## Everything here is public
 
 ::: {.eyebrow}
-Everything behind these slides is published
+If any of this is worth a second look
 :::
 
 ::: {.grid-2}
@@ -428,6 +487,6 @@ Per-citation support judgments.
 :::
 
 ::: {.cap}
-rag2026-18 and rag2026-13 appear in the coverage report and both RAGDoll
-reports, so every step shown here can be checked end to end.
+Happy to walk through any of it — rag2026-18 and rag2026-13 are in the coverage
+report and both RAGDoll reports, so the whole path is checkable.
 :::

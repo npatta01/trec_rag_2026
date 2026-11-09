@@ -116,7 +116,13 @@ assert(/8 subnarratives . 2 queries = 16 searches/.test(qmd),
 
 // Per-request figures must never read as totals for the whole run.
 const funnel = fs.readFileSync(path.join(root, "2026-trec-rag-talk/01-approach.svg"), "utf8");
-assert(/ONE REQUEST/.test(funnel) && /per-request ceiling/.test(funnel),
-  "the funnel must say its figures are per request, not totals for the run");
+assert(/ONE REQUEST/.test(funnel) && /configured ceiling/.test(funnel),
+  "the funnel must frame its figures as configured ceilings for one request");
+// It introduces the approach before the example, so it must carry no
+// example-specific counts.
+for (const leak of [">16<", ">16,000<", ">1,600<", ">320<"]) {
+  assert(!funnel.includes(leak),
+    `the approach funnel must not show one request's own numbers: ${leak}`);
+}
 
 console.log("reports/2026-trec-rag-talk.test.js OK");

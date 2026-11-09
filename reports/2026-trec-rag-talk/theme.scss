@@ -772,3 +772,15 @@ body.reveal-viewport,
     border: 1px solid var(--hairline);
   }
 }
+
+// A verbatim prompt shown as the artefact it is.
+.promptbox pre {
+  margin: 0;
+}
+
+.promptbox pre code {
+  font-size: 0.62em;
+  line-height: 1.5;
+  display: block;
+  border-left: 4px solid var(--gen);
+}
