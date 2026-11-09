@@ -74,7 +74,7 @@ Six weeks of housing for a family of three — without booking
 
 ::: {.grid-2}
 ::: {.scene}
-![](2026-trec-rag-talk/07-scene.svg){fig-alt="Two adults and a small child stand on a pavement with two suitcases in front of a row of apartment buildings at night, the one behind them wrapped in scaffolding — the apartment being repaired while they need somewhere else to stay."}
+![](2026-trec-rag-talk/img-request.png){fig-alt="Two adults and a small child stand on a pavement with two suitcases in front of a row of apartment buildings at night, the one behind them wrapped in scaffolding — the apartment being repaired while they need somewhere else to stay."}
 :::
 
 ::: {.redact}
@@ -228,7 +228,7 @@ The example · same sealed evidence, two strategies
 
 ::: {.grid-2}
 ::: {.scene}
-![](2026-trec-rag-talk/08-writers.svg){fig-alt="Two desks. At the left a single figure writes alone over one page. At the right three figures stand over a larger page together, one pointing, with marks where it has been revised. Both desks hold the same stack of source documents."}
+![](2026-trec-rag-talk/img-writers.png){fig-alt="Two desks. At the left a single figure writes alone over one page. At the right three figures stand over a larger page together, one pointing, with marks where it has been revised. Both desks hold the same stack of source documents."}
 :::
 
 ::: {}

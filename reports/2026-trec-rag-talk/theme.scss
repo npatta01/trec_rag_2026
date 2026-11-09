@@ -753,6 +753,9 @@ body.reveal-viewport,
 }
 
 // An illustration rather than a diagram: fills its grid cell, no border.
+// An illustration rather than a diagram. The art carries its own dark ground,
+// so it is framed as a panel: that reads as deliberate in light mode too,
+// where a raster cannot repaint itself the way the SVG figures do.
 .scene {
   display: flex;
   align-items: center;
@@ -765,5 +768,7 @@ body.reveal-viewport,
     height: auto;
     max-height: 46vh;
     object-fit: contain;
+    border-radius: 12px;
+    border: 1px solid var(--hairline);
   }
 }

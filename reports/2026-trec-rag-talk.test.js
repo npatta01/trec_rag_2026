@@ -26,8 +26,8 @@ for (const asset of [
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
-  "2026-trec-rag-talk/07-scene.svg",
-  "2026-trec-rag-talk/08-writers.svg",
+  "2026-trec-rag-talk/img-request.png",
+  "2026-trec-rag-talk/img-writers.png",
 ]) {
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
@@ -100,7 +100,7 @@ assert(!/head-to-head/i.test(qmd),
 for (const stale of ["rag2026-17", "out-of-home", "maltreatment", "preterm", "NICU"]) {
   assert(!qmd.includes(stale), `deck still references the retired example: ${stale}`);
 }
-for (const fig of ["01-approach", "02-one-lane", "04-plan", "05-evidence", "06-retrieval", "07-scene", "08-writers"]) {
+for (const fig of ["01-approach", "02-one-lane", "04-plan", "05-evidence", "06-retrieval"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   for (const stale of ["maltreatment", "preterm", "NICU"]) {
     assert(!svg.includes(stale), `${fig}.svg still references the retired example: ${stale}`);
