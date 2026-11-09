@@ -64,12 +64,17 @@ talk walks the left-to-right path with one real request.
 ## The request we will follow
 
 ::: {.trace-step}
-The example · rag2026-18
+The example · rag2026-18 · one of the 119
 :::
 
 ::: {.pull}
 Six weeks of housing for a family of three — without booking
 [something illegal or unreliable]{.hl}.
+:::
+
+::: {.grid-2}
+::: {.scene}
+![](2026-trec-rag-talk/07-scene.svg){fig-alt="Two adults and a small child stand on a pavement with two suitcases in front of a row of apartment buildings at night, the one behind them wrapped in scaffolding — the apartment being repaired while they need somewhere else to stay."}
 :::
 
 ::: {.redact}
@@ -78,6 +83,7 @@ about six weeks **while our apartment is repaired** … whether to use Airbnb/Vr
 an extended-stay hotel, corporate housing, or a short sublet … how should we
 compare the real costs, safety, cancellation risk, space, location, and
 day-to-day practicality, especially **with a child** and remote work needs?
+:::
 :::
 
 ::: {.cap}
@@ -102,34 +108,47 @@ not an agentic loop. **At most 25 searches** per topic.
 ## Planning: this request
 
 ::: {.trace-step}
-The example · 8 subnarratives · 16 queries
+The example · 8 subnarratives × 2 queries = 16 searches for this one request
 :::
 
-::: {.grid-2}
-::: {}
-::: {.facets}
-- What options exist?
-- How do they compare?
-- Which ones are illegal?
-- What do they really cost?
-- Is it safe for a child?
-- What if we cancel?
-- Is there room to work?
-- Is the location practical?
-:::
-:::
-
-::: {.card .card-ret .chips}
-[Subnarrative 3, expanded]{.card-label}
-`illegal short term rental NYC avoid scams`
-
-`unreliable temporary housing New York City red flags`
-:::
+::: {.qgrid}
+<details><summary>What options exist?</summary>
+<code>furnished temporary housing New York City family three six weeks</code>
+<code>short term furnished rental NYC family child</code>
+</details>
+<details><summary>How do the four types compare?</summary>
+<code>Airbnb vs extended stay hotel vs corporate housing vs sublet comparison</code>
+<code>short term rental types NYC family advantages disadvantages</code>
+</details>
+<details><summary>Which listings are illegal?</summary>
+<code>illegal short term rental NYC avoid scams</code>
+<code>unreliable temporary housing New York City red flags</code>
+</details>
+<details><summary>What does it really cost?</summary>
+<code>real cost comparison short term rental NYC fees taxes</code>
+<code>hidden costs temporary housing New York City</code>
+</details>
+<details><summary>Is it safe for a child?</summary>
+<code>safety family short term rental New York City neighborhood</code>
+<code>child safe temporary housing NYC</code>
+</details>
+<details><summary>What if we cancel?</summary>
+<code>cancellation policy short term rental NYC</code>
+<code>flexible cancellation temporary housing New York City</code>
+</details>
+<details><summary>Is there room to work?</summary>
+<code>space family short term rental NYC one bedroom</code>
+<code>temporary housing space child remote work New York City</code>
+</details>
+<details><summary>Is the location practical?</summary>
+<code>location convenience short term rental NYC public transit</code>
+<code>temporary housing near work school New York City</code>
+</details>
 :::
 
 ::: {.cap}
-One subnarrative per thing the family asked, two plain keyword queries each.
-This request pushed the planner to its ceiling of eight.
+**Click any subnarrative to see the actual queries sent for it.** Plain keywords,
+no operators. This request pushed the planner to its ceiling of eight.
 :::
 ## Searching: how it works
 

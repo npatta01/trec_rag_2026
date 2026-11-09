@@ -8,6 +8,7 @@
     .big{font-size:34px;font-weight:740}
     .mid{font-size:28px;font-weight:700}
     .sm{font-size:24px;fill:var(--muted)}
+    .hdr{font-size:26px;font-weight:780;fill:var(--ret)}
     .flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#plar)}
   </style>
   <defs>
@@ -62,5 +63,7 @@
 
   <text class="sm" x="1252" y="466">its own lane</text>
 
-  <text class="sm" x="1370" y="126" >queries</text>
+  <text class="hdr" x="1252" y="62">BM25 queries</text>
+  <text class="sm"  x="1252" y="92">1–3 per subnarrative</text>
+  <text class="sm"  x="1252" y="520">one dot = one search</text>
 </svg>

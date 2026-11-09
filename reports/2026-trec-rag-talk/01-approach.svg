@@ -10,6 +10,8 @@
     .edge{font-size:27px;font-weight:700;fill:var(--muted)}
     .out{font-size:31px;font-weight:740}
     .tick{font-size:24px;fill:var(--muted)}
+    .kick{font-size:25px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
+    .foot{font-size:23px;fill:var(--muted)}
   </style>
   <defs>
     <marker id="apar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
@@ -28,6 +30,8 @@
   </g>
 
   <text class="edge" x="60" y="238">The request</text>
+  <text class="kick" x="30" y="46">ONE REQUEST, START TO FINISH — AND THERE ARE 119 OF THEM</text>
+  <text class="foot" x="30" y="596">every figure below is a per-request ceiling, not a total for the run</text>
 
   <text class="count" x="400"  y="302" text-anchor="middle">16</text>
   <text class="unit"  x="400"  y="340" text-anchor="middle">queries</text>

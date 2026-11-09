@@ -26,6 +26,7 @@ for (const asset of [
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
+  "2026-trec-rag-talk/07-scene.svg",
 ]) {
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
@@ -39,7 +40,7 @@ assert(runtimeRefs.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 6, `expected 6 fig-alt diagrams, found ${figAlts.length}`);
+assert(figAlts.length === 7, `expected 7 fig-alt figures, found ${figAlts.length}`);
 assert(!/!\[[^\]]+\]\(/.test(qmd),
   "diagrams must use ![](src){fig-alt=...}, never a bracketed caption");
 
@@ -98,11 +99,23 @@ assert(!/head-to-head/i.test(qmd),
 for (const stale of ["rag2026-17", "out-of-home", "maltreatment", "preterm", "NICU"]) {
   assert(!qmd.includes(stale), `deck still references the retired example: ${stale}`);
 }
-for (const fig of ["01-approach", "02-one-lane", "04-plan", "05-evidence", "06-retrieval"]) {
+for (const fig of ["01-approach", "02-one-lane", "04-plan", "05-evidence", "06-retrieval", "07-scene"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   for (const stale of ["maltreatment", "preterm", "NICU"]) {
     assert(!svg.includes(stale), `${fig}.svg still references the retired example: ${stale}`);
   }
 }
+
+// The planning example must stay expandable, one entry per subnarrative,
+// and must state the per-request query arithmetic rather than a bare total.
+const details = (html.match(/<details>/g) || []).length;
+assert(details === 8, `expected 8 expandable subnarratives, found ${details}`);
+assert(/8 subnarratives . 2 queries = 16 searches/.test(qmd),
+  "the planning slide must show the per-request query arithmetic");
+
+// Per-request figures must never read as totals for the whole run.
+const funnel = fs.readFileSync(path.join(root, "2026-trec-rag-talk/01-approach.svg"), "utf8");
+assert(/ONE REQUEST/.test(funnel) && /per-request ceiling/.test(funnel),
+  "the funnel must say its figures are per request, not totals for the run");
 
 console.log("reports/2026-trec-rag-talk.test.js OK");

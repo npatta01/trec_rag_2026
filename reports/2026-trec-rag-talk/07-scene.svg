@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" role="img" aria-labelledby="sc-title sc-desc">
+  <title id="sc-title">A family of three with luggage outside city apartment buildings, one under repair</title>
+  <desc id="sc-desc">A simple flat illustration. Two adults and a small child stand on a pavement with two suitcases, in front of a row of apartment buildings at night with a scattering of lit windows. The building directly behind them is wrapped in scaffolding, standing for the apartment being repaired while the family needs somewhere else to stay for six weeks.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616}}
+    .bld{fill:var(--ret-soft);stroke:var(--ret);stroke-width:2.5}
+    .win{fill:var(--ret);opacity:.30}
+    .lit{fill:var(--adv);opacity:.85}
+    .scaf{stroke:var(--adv);stroke-width:2.5;fill:none;opacity:.9}
+    .fig{fill:var(--ink)}
+    .bag{fill:var(--gen-soft);stroke:var(--gen);stroke-width:2.5}
+    .grd{stroke:var(--line);stroke-width:2.5}
+  </style>
+  <rect width="900" height="520" fill="var(--bg)"/>
+
+  <!-- skyline -->
+  <rect class="bld" x="40"  y="210" width="115" height="225" rx="4"/>
+  <rect class="bld" x="170" y="160" width="95"  height="275" rx="4"/>
+  <rect class="bld" x="600" y="195" width="110" height="240" rx="4"/>
+  <rect class="bld" x="725" y="240" width="135" height="195" rx="4"/>
+
+  <!-- the building under repair, centre-right, wrapped in scaffolding -->
+  <rect class="bld" x="420" y="130" width="160" height="305" rx="4"/>
+  <g class="scaf">
+    <line x1="420" y1="190" x2="580" y2="190"/>
+    <line x1="420" y1="255" x2="580" y2="255"/>
+    <line x1="420" y1="320" x2="580" y2="320"/>
+    <line x1="420" y1="385" x2="580" y2="385"/>
+    <line x1="460" y1="130" x2="460" y2="435"/>
+    <line x1="500" y1="130" x2="500" y2="435"/>
+    <line x1="540" y1="130" x2="540" y2="435"/>
+  </g>
+
+  <!-- windows -->
+  <g class="win">
+    <rect x="62"  y="238" width="24" height="30" rx="3"/><rect x="108" y="238" width="24" height="30" rx="3"/>
+    <rect x="62"  y="296" width="24" height="30" rx="3"/><rect x="108" y="296" width="24" height="30" rx="3"/>
+    <rect x="62"  y="354" width="24" height="30" rx="3"/>
+    <rect x="192" y="192" width="22" height="28" rx="3"/><rect x="226" y="192" width="22" height="28" rx="3"/>
+    <rect x="192" y="248" width="22" height="28" rx="3"/>
+    <rect x="226" y="304" width="22" height="28" rx="3"/><rect x="192" y="360" width="22" height="28" rx="3"/>
+    <rect x="622" y="228" width="24" height="30" rx="3"/><rect x="664" y="228" width="24" height="30" rx="3"/>
+    <rect x="622" y="288" width="24" height="30" rx="3"/>
+    <rect x="664" y="348" width="24" height="30" rx="3"/>
+    <rect x="748" y="272" width="26" height="30" rx="3"/><rect x="796" y="272" width="26" height="30" rx="3"/>
+    <rect x="748" y="330" width="26" height="30" rx="3"/><rect x="796" y="330" width="26" height="30" rx="3"/>
+  </g>
+  <g class="lit">
+    <rect x="108" y="354" width="24" height="30" rx="3"/>
+    <rect x="226" y="248" width="22" height="28" rx="3"/>
+    <rect x="622" y="348" width="24" height="30" rx="3"/>
+    <rect x="796" y="214" width="26" height="30" rx="3"/>
+  </g>
+
+  <!-- pavement -->
+  <line class="grd" x1="20" y1="435" x2="880" y2="435"/>
+
+  <!-- family: two adults and a child -->
+  <g class="fig">
+    <circle cx="262" cy="330" r="19"/>
+    <path d="M243 435V378a19 19 0 0 1 38 0v57Z"/>
+    <circle cx="318" cy="336" r="18"/>
+    <path d="M300 435V384a18 18 0 0 1 36 0v51Z"/>
+    <circle cx="360" cy="372" r="13"/>
+    <path d="M347 435V404a13 13 0 0 1 26 0v31Z"/>
+    <!-- the adult and child hold hands -->
+    <path d="M336 404 L349 410" stroke="var(--ink)" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <!-- luggage -->
+  <g class="bag">
+    <rect x="196" y="386" width="40" height="49" rx="5"/>
+    <path d="M207 386v-13h18v13" fill="none"/>
+    <rect x="386" y="400" width="32" height="35" rx="5"/>
+    <path d="M395 400v-10h14v10" fill="none"/>
+  </g>
+</svg>
