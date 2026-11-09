@@ -1,74 +1,122 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 700" role="img" aria-labelledby="tw-title tw-desc">
-  <title id="tw-title">Single-pass and multi-stage generation from one sealed evidence set</title>
-  <desc id="tw-desc">Both writers start from the same sealed evidence handoff and neither searches again. Single-pass: Sol drafts once, local code validates schema, citations and word limit, and one bounded retry is allowed before the answer is published. Multi-stage: Luna plans, Sol drafts, Luna audits the draft for omissions, Sol proposes edits, Luna screens each proposed edit for support, usefulness, repetition and lost qualifications, and local code applies only the accepted ones. A dashed fallback path keeps the already validated draft if revision fails. Solid arrows carry evidence or text; dashed arrows carry validation, retry and fallback control.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 730" role="img" aria-labelledby="tw-title tw-desc">
+  <title id="tw-title">Single-pass is Sol alone; multi-stage passes the work between Luna and Sol</title>
+  <desc id="tw-desc">Both strategies start from the same sealed evidence handoff and neither searches again. Three actors are colour coded: Sol the writer in teal, Luna the reviewer in indigo, and local code in plain grey with a dashed outline. Single-pass is Sol alone — Sol writes the answer, local code checks schema, citations and word limit, and one retry is allowed, which was used on two of the one hundred and nineteen requests. Multi-stage alternates between two columns so the work visibly changes hands five times: Luna plans, Sol writes the draft, Luna audits every evidence group separately and returns at most six missing-detail cards for each, local code merges those cards, Sol proposes edits, Luna screens each proposed edit against five booleans, and local code applies only the edits that passed. This is one pass through the stages, not a repeating loop. A dashed fallback keeps the already validated draft if revision fails.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .title{font-size:36px;font-weight:720}
-    .head{font-size:30px;font-weight:720}
-    .label{font-size:25px;font-weight:650}
-    .small{font-size:21px}
-    .muted{fill:var(--muted)}
-    .source{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}
-    .ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}
-    .gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}
-    .ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:3}
-    .flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#ar3)}
-    .ctrl{fill:none;stroke:var(--adv);stroke-width:3;stroke-dasharray:8 6;marker-end:url(#ar3a)}
-    .rule{stroke:var(--line);stroke-width:1.5;stroke-dasharray:4 6;opacity:.6}
+    .head{font-size:29px;font-weight:760}
+    .who{font-size:25px;font-weight:780}
+    .model{font-size:18px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .label{font-size:24px;font-weight:650}
+    .sub{font-size:20px;fill:var(--muted)}
+    .chip{font-size:19px;font-weight:700;fill:var(--muted)}
+    .num{font-size:21px;font-weight:800}
+    .flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#twa)}
+    .ctrl{fill:none;stroke:var(--adv);stroke-width:3;stroke-dasharray:8 6;marker-end:url(#twb)}
+    .sol{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}
+    .luna{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}
+    .loc{fill:none;stroke:var(--line);stroke-width:2.5;stroke-dasharray:5 5}
+    .rule{stroke:var(--line);stroke-width:1.5;stroke-dasharray:4 6;opacity:.55}
   </style>
   <defs>
-    <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
-    <marker id="ar3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+    <marker id="twa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+    <marker id="twb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+    <!-- Sol writes: a pen nib. Luna reviews: a magnifier. -->
+    <g id="nib"><path d="M0 -13 L8 3 L0 12 L-8 3 Z" fill="none" stroke="var(--ret)" stroke-width="2.6" stroke-linejoin="round"/><circle cx="0" cy="1" r="2.6" fill="var(--ret)"/></g>
+    <g id="lens"><circle cx="-2" cy="-3" r="8.5" fill="none" stroke="var(--gen)" stroke-width="2.6"/><path d="M4 4 L11 11" stroke="var(--gen)" stroke-width="3" stroke-linecap="round"/></g>
   </defs>
-  <rect width="1400" height="700" fill="var(--bg)"/>
+  <rect width="1500" height="730" fill="var(--bg)"/>
 
-  <rect class="source" x="230" y="46" width="940" height="86" rx="10"/>
-  <text class="head" x="700" y="86" text-anchor="middle">One sealed evidence handoff</text>
-  <text class="small muted" x="700" y="117" text-anchor="middle">exact passages · advisory nuggets · allowed citation IDs — neither writer searches again</text>
+  <!-- the shared, sealed input -->
+  <rect x="300" y="18" width="900" height="74" rx="10" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
+  <text class="head" x="750" y="50" text-anchor="middle">One sealed evidence handoff</text>
+  <text class="sub"  x="750" y="78" text-anchor="middle">exact passages · advisory nuggets · allowed citation IDs — neither writer searches again</text>
 
-  <path class="flow" d="M700 132V156H350V180" vector-effect="non-scaling-stroke"/>
-  <path class="flow" d="M700 132V156H1050V180" vector-effect="non-scaling-stroke"/>
-  <line class="rule" x1="700" y1="175" x2="700" y2="660"/>
+  <path class="flow" d="M750 92 V112 H270 V150" vector-effect="non-scaling-stroke"/>
+  <path class="flow" d="M750 92 V112 H1040 V150" vector-effect="non-scaling-stroke"/>
+  <line class="rule" x1="540" y1="120" x2="540" y2="640"/>
 
-  <!-- Single-pass -->
-  <text class="head" x="350" y="212" text-anchor="middle" fill="var(--ret)">Single-pass</text>
-  <rect class="ret" x="110" y="238" width="480" height="78" rx="10"/>
-  <text class="label" x="350" y="286" text-anchor="middle">Sol drafts the answer</text>
-  <path class="flow" d="M350 316V356" vector-effect="non-scaling-stroke"/>
-  <rect class="ret" x="110" y="360" width="480" height="98" rx="10"/>
-  <text class="label" x="350" y="398" text-anchor="middle">Local validation</text>
-  <text class="small muted" x="350" y="432" text-anchor="middle">schema · citations · word limit</text>
-  <path class="ctrl" d="M610 409H650V287H610" vector-effect="non-scaling-stroke"/>
-  <text class="small" x="664" y="352" fill="var(--adv)">one</text>
-  <text class="small" x="664" y="378" fill="var(--adv)">retry</text>
-  <path class="flow" d="M350 458V588" vector-effect="non-scaling-stroke"/>
+  <!-- ================= single-pass: Sol alone ================= -->
+  <text class="head" x="270" y="146" text-anchor="middle" fill="var(--ret)">Single-pass</text>
 
-  <!-- Multi-stage -->
-  <text class="head" x="1050" y="212" text-anchor="middle" fill="var(--gen)">Multi-stage</text>
-  <rect class="gen" x="790" y="238" width="520" height="58" rx="9"/>
-  <text class="label" x="1050" y="275" text-anchor="middle">Luna plans the answer</text>
-  <path class="flow" d="M1050 296V316" vector-effect="non-scaling-stroke"/>
-  <rect class="gen" x="790" y="320" width="520" height="58" rx="9"/>
-  <text class="label" x="1050" y="357" text-anchor="middle">Sol drafts</text>
-  <path class="flow" d="M1050 378V398" vector-effect="non-scaling-stroke"/>
-  <rect class="gen" x="790" y="402" width="520" height="58" rx="9"/>
-  <text class="label" x="1050" y="439" text-anchor="middle">Luna audits for omissions</text>
-  <path class="flow" d="M1050 460V480" vector-effect="non-scaling-stroke"/>
-  <rect class="gen" x="790" y="484" width="520" height="58" rx="9"/>
-  <text class="label" x="1050" y="521" text-anchor="middle">Sol proposes edits</text>
-  <path class="flow" d="M1050 542V562" vector-effect="non-scaling-stroke"/>
-  <rect class="gen" x="790" y="566" width="520" height="58" rx="9"/>
-  <text class="label" x="1050" y="596" text-anchor="middle">Luna screens each edit</text>
-  <text class="small muted" x="1050" y="618" text-anchor="middle">support · use · repetition · lost qualifications</text>
+  <g transform="translate(110,196)"><circle r="21" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#nib"/></g>
+  <text class="who"   x="142" y="192" fill="var(--ret)">Sol</text>
+  <text class="model" x="142" y="214">openai/gpt-5.6-sol</text>
 
-  <!-- fallback -->
-  <path class="ctrl" d="M1330 595V349H1330" vector-effect="non-scaling-stroke"/>
-  <text class="small" x="1352" y="472" fill="var(--adv)" transform="rotate(90 1352 472)">fallback</text>
+  <rect class="sol" x="86" y="246" width="368" height="66" rx="10"/>
+  <text class="label" x="270" y="287" text-anchor="middle">Writes the answer</text>
 
-  <path class="flow" d="M1050 624V652H700" vector-effect="non-scaling-stroke"/>
-  <path class="flow" d="M350 588V652H700" vector-effect="non-scaling-stroke"/>
-  <rect class="ok" x="520" y="656" width="360" height="42" rx="21"/>
-  <text class="label" x="700" y="685" text-anchor="middle">119 validated answers each</text>
+  <path class="flow" d="M270 312 V352" vector-effect="non-scaling-stroke"/>
+
+  <rect class="loc" x="86" y="356" width="368" height="80" rx="10"/>
+  <text class="label" x="270" y="390" text-anchor="middle">Local code checks it</text>
+  <text class="sub"   x="270" y="418" text-anchor="middle">schema · citations · word limit</text>
+
+  <path class="ctrl" d="M466 396 H496 V279 H466" vector-effect="non-scaling-stroke"/>
+  <text class="chip" x="488" y="300" fill="var(--adv)" transform="rotate(90 488 300)">one retry · 2 of 119</text>
+
+  <path class="flow" d="M270 436 V646 H430 V656" vector-effect="non-scaling-stroke"/>
+
+  <!-- ================= multi-stage: the work changes hands ================= -->
+  <text class="head" x="1040" y="146" text-anchor="middle" fill="var(--gen)">Multi-stage</text>
+
+  <g transform="translate(640,196)"><circle r="21" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/><use href="#lens"/></g>
+  <text class="who"   x="672" y="192" fill="var(--gen)">Luna</text>
+  <text class="model" x="672" y="214">openai/gpt-5.6-luna</text>
+
+  <g transform="translate(1136,196)"><circle r="21" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#nib"/></g>
+  <text class="who"   x="1168" y="192" fill="var(--ret)">Sol</text>
+  <text class="model" x="1168" y="214">openai/gpt-5.6-sol</text>
+
+  <!-- 1. Luna plans -->
+  <rect class="luna" x="616" y="240" width="330" height="56" rx="10"/>
+  <circle cx="646" cy="268" r="14" fill="var(--gen)"/>
+  <text class="num"   x="646" y="275" text-anchor="middle" fill="var(--gen-soft)">1</text>
+  <text class="label" x="670" y="277">Plans the answer</text>
+
+  <!-- 2. Sol drafts -->
+  <rect class="sol" x="1112" y="312" width="330" height="56" rx="10"/>
+  <circle cx="1142" cy="340" r="14" fill="var(--ret)"/>
+  <text class="num"   x="1142" y="347" text-anchor="middle" fill="var(--ret-soft)">2</text>
+  <text class="label" x="1166" y="349">Writes the draft</text>
+
+  <!-- 3. Luna audits every group, separately -->
+  <rect class="luna" x="616" y="384" width="330" height="72" rx="10"/>
+  <circle cx="646" cy="412" r="14" fill="var(--gen)"/>
+  <text class="num"   x="646" y="419" text-anchor="middle" fill="var(--gen-soft)">3</text>
+  <text class="label" x="670" y="421">Audits every group</text>
+  <text class="sub"   x="640" y="447">≤6 missing-detail cards each</text>
+
+  <!-- 4. Sol proposes -->
+  <rect class="sol" x="1112" y="472" width="330" height="56" rx="10"/>
+  <circle cx="1142" cy="500" r="14" fill="var(--ret)"/>
+  <text class="num"   x="1142" y="507" text-anchor="middle" fill="var(--ret-soft)">4</text>
+  <text class="label" x="1166" y="509">Proposes edits</text>
+
+  <!-- 5. Luna screens -->
+  <rect class="luna" x="616" y="544" width="330" height="72" rx="10"/>
+  <circle cx="646" cy="572" r="14" fill="var(--gen)"/>
+  <text class="num"   x="646" y="579" text-anchor="middle" fill="var(--gen-soft)">5</text>
+  <text class="label" x="670" y="581">Screens each edit</text>
+  <text class="sub"   x="640" y="607">five booleans, all must pass</text>
+
+  <!-- the baton, passing back and forth -->
+  <path class="flow" d="M950 268 H1030 V340 H1108" vector-effect="non-scaling-stroke"/>
+  <path class="flow" d="M1112 355 H1030 V420 H950" vector-effect="non-scaling-stroke"/>
+  <path class="flow" d="M950 440 H1030 V500 H1108" vector-effect="non-scaling-stroke"/>
+  <path class="flow" d="M1112 515 H1030 V580 H950" vector-effect="non-scaling-stroke"/>
+  <text class="chip" x="1040" y="400">local merges</text>
+  <text class="chip" x="1040" y="422">the cards</text>
+
+  <!-- local code has the last word -->
+  <path class="flow" d="M781 616 V656" vector-effect="non-scaling-stroke"/>
+  <text class="chip" x="800" y="644">local applies only what passed</text>
+
+  <!-- fallback: the already validated draft stands -->
+  <path class="ctrl" d="M1446 340 H1476 V682 H1204" vector-effect="non-scaling-stroke"/>
+  <text class="chip" x="1468" y="380" fill="var(--adv)" transform="rotate(90 1468 380)">fallback: validated draft</text>
+
+  <rect x="300" y="660" width="900" height="44" rx="22" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
+  <text class="label" x="750" y="690" text-anchor="middle">119 validated answers each · one pass, not a repeating loop</text>
 </svg>

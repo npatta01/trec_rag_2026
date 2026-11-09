@@ -244,14 +244,15 @@ How it works
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/03-two-writers.svg){fig-alt="Both writers start from the same sealed evidence and neither searches again. Single-pass: Sol drafts, local code validates schema, citations and word limit, with one bounded retry. Multi-stage: Luna plans, Sol drafts, Luna audits for omissions, Sol proposes edits, Luna screens each edit, and local code applies only accepted ones, keeping the validated draft if revision fails."}
+![](2026-trec-rag-talk/03-two-writers.svg){fig-alt="Three actors are colour coded: Sol the writer in teal, Luna the reviewer in indigo, and local code in plain grey. Single-pass is Sol alone — Sol writes the answer, local code checks schema, citations and word limit, and one retry is allowed. Multi-stage alternates between two columns so the work visibly changes hands five times: Luna plans, Sol writes the draft, Luna audits every evidence group separately returning at most six missing-detail cards each, local code merges them, Sol proposes edits, Luna screens each edit against five booleans, and local code applies only what passed. One pass through the stages, not a repeating loop, with a dashed fallback keeping the validated draft if revision fails."}
 :::
 
 ::: {.cap}
-Sol writes both. Multi-stage adds Luna as planner, auditor and screener — and
-starts from the evidence, not from the single-pass answer. If revision fails the
-validated draft stands, so the extra stages can only add. **Single-pass spent
-its one retry on 2 of 119 requests**; the other 117 passed validation first try.
+**Sol writes; Luna only judges; local code decides.** Follow the arrows and you
+can see the work change hands five times — and that multi-stage starts from the
+evidence, not from the single-pass answer. If revision fails the validated draft
+stands, so the extra stages can only add. **Single-pass spent its one retry on 2
+of 119 requests**; the other 117 passed validation first try.
 :::
 ## What Luna keeps, and what she throws out
 
@@ -261,7 +262,7 @@ How it works · the screening gate
 
 ::: {.grid-2-1}
 ::: {.card .card-gen}
-[Five gates, all must pass]{.card-label}
+[<svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="-2" cy="-3" r="8.5" fill="none" stroke="currentColor" stroke-width="2.6"/><path d="M4 4 L11 11" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>Luna's five gates, all must pass]{.card-label}
 Luna returns **only booleans** — support, atomicity, materiality, redundancy,
 replacement safety.
 
@@ -296,12 +297,12 @@ The example · same sealed evidence, two strategies
 
 ::: {}
 ::: {.card .card-ret}
-[Single-pass]{.card-label}
+[<svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -13 L8 3 L0 12 L-8 3 Z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/><circle cx="0" cy="1" r="2.6" fill="currentColor"/></svg>Single-pass · Sol alone]{.card-label}
 **22 statements · 504 words**
 :::
 
 ::: {.card .card-gen}
-[Multi-stage]{.card-label}
+[<svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="-2" cy="-3" r="8.5" fill="none" stroke="currentColor" stroke-width="2.6"/><path d="M4 4 L11 11" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -13 L8 3 L0 12 L-8 3 Z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/><circle cx="0" cy="1" r="2.6" fill="currentColor"/></svg>Multi-stage · Luna and Sol]{.card-label}
 **38 statements · 800 words**
 :::
 :::

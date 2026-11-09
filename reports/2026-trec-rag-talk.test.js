@@ -158,4 +158,41 @@ for (const leak of [">16<", ">16,000<", ">1,600<", ">320<"]) {
     `the approach funnel must not show one request's own numbers: ${leak}`);
 }
 
+// ---- the two-writers figure ----------------------------------------------
+// It names three actors and both models, and draws the five handoffs that the
+// bounded-revision state machine actually records
+// (planner, draft, audit_groups, revision, operation_screen).
+const writers = fs.readFileSync(path.join(root, "2026-trec-rag-talk/03-two-writers.svg"), "utf8");
+for (const fact of [
+  "openai/gpt-5.6-luna",        // Luna, the reviewer
+  "openai/gpt-5.6-sol",         // Sol, the writer
+  "Plans the answer",
+  "Writes the draft",
+  "Audits every group",
+  "Proposes edits",
+  "Screens each edit",
+  "≤6 missing-detail cards each", // MAX_AUDIT_CARDS_PER_GROUP
+  "local applies only what passed",
+]) {
+  assert(writers.includes(fact), `the two-writers figure should show: ${fact}`);
+}
+// The state machine has one boolean per stage and no round counter, so the
+// figure must not imply the revision repeats.
+assert(/one pass, not a repeating loop/.test(writers),
+  "the two-writers figure must say the relay is a single pass");
+for (const n of ["1", "2", "3", "4", "5"]) {
+  assert(writers.includes(`>${n}</text>`), `the relay should number step ${n}`);
+}
+
+// Role glyphs must beat Reveal's own `.reveal section svg { display: block }`,
+// or they drop onto a line of their own, centred.
+const theme = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
+assert(/\.reveal section svg\.glyph/.test(theme),
+  "the glyph rule must match Reveal's specificity for section svg");
+assert(/svg\.glyph\{[^}]*display:inline-block/.test(html.replace(/\s+/g, "")) ||
+       /display%3Ainline%2Dblock/.test(html),
+  "the compiled deck should render glyphs inline");
+const glyphs = (qmd.match(/class="glyph"/g) || []).length;
+assert(glyphs === 4, `expected 4 role glyphs in the deck, found ${glyphs}`);
+
 console.log("reports/2026-trec-rag-talk.test.js OK");

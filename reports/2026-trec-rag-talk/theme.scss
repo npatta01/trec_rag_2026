@@ -791,3 +791,17 @@ body.reveal-viewport,
   display: block;
   border-left: 4px solid var(--gen);
 }
+
+// Role glyphs: the same pen nib (Sol writes) and magnifier (Luna judges) used
+// in the two-writers figure, so the two stay recognisable away from it.
+// Reveal's own `.reveal section svg { display: block; margin: 0 auto }` is more
+// specific than a bare .glyph, so match its weight or the glyph lands centred
+// on a line of its own.
+.reveal section svg.glyph {
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  margin: 0 0.16em 0 0;
+  vertical-align: -0.17em;
+  overflow: visible;
+}
