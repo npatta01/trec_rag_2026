@@ -8,6 +8,7 @@ filters:
 format:
   revealjs:
     theme: [default, 2026-trec-rag-talk/theme.scss]
+    include-in-header: 2026-trec-rag-talk/allow-zoom.html
     include-after-body: 2026-trec-rag-talk/palette-toggle.html
     embed-resources: true
     slide-number: c/t

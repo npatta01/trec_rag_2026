@@ -1,0 +1,7 @@
+<!-- Reveal's own viewport meta ships `maximum-scale=1.0, user-scalable=no`, which
+     blocks pinch-zoom. On a projector that is invisible; on a phone it is the
+     difference between reading a figure and not, because the scroll view shrinks
+     a 1600-unit viewBox into ~350 px and the labels land under 8 px.
+     This meta is emitted after Reveal's, so it wins at parse time — no re-parse,
+     no JS. Desktop browsers ignore it entirely. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
