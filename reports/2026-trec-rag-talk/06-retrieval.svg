@@ -20,16 +20,16 @@
   <!-- Precision -->
   <text class="rt-lab" x="30" y="130">Precision</text>
   <rect x="340" y="98"  width="760" height="42" rx="6" fill="var(--ret)"/>
-  <text class="rt-val" x="1116" y="128" fill="var(--ret)">0.4116</text>
-  <text class="rt-who" x="346" y="126" fill="var(--bg)">ours</text>
+  <text class="rt-val" x="1116" y="128" style="fill:var(--ret)">0.4116</text>
+  <text class="rt-who" x="346" y="126" style="fill:var(--bg)">ours</text>
   <rect x="340" y="150" width="646" height="42" rx="6" fill="var(--line)" opacity=".45"/>
   <text class="rt-val" x="1002" y="180">0.3499</text>
 
   <!-- Recall -->
   <text class="rt-lab" x="30" y="268">Recall</text>
   <rect x="340" y="236" width="680" height="42" rx="6" fill="var(--ret)"/>
-  <text class="rt-val" x="1036" y="266" fill="var(--ret)">0.0897</text>
-  <text class="rt-who" x="346" y="264" fill="var(--bg)">ours</text>
+  <text class="rt-val" x="1036" y="266" style="fill:var(--ret)">0.0897</text>
+  <text class="rt-who" x="346" y="264" style="fill:var(--bg)">ours</text>
   <rect x="340" y="288" width="760" height="42" rx="6" fill="var(--line)" opacity=".45"/>
   <text class="rt-val" x="1116" y="318">0.1002</text>
 
@@ -37,8 +37,8 @@
   <text class="rt-lab" x="30" y="406">Documents</text>
   <text class="rt-key" x="30" y="436">returned per topic</text>
   <rect x="340" y="374" width="293" height="42" rx="6" fill="var(--ret)"/>
-  <text class="rt-val" x="649" y="404" fill="var(--ret)">38.6</text>
-  <text class="rt-who" x="346" y="402" fill="var(--bg)">ours</text>
+  <text class="rt-val" x="649" y="404" style="fill:var(--ret)">38.6</text>
+  <text class="rt-who" x="346" y="402" style="fill:var(--bg)">ours</text>
   <rect x="340" y="426" width="760" height="42" rx="6" fill="var(--line)" opacity=".45"/>
   <text class="rt-val" x="1116" y="456">100.0</text>
 </svg>

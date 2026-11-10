@@ -18,7 +18,7 @@
 
   <!-- the collection -->
   <rect x="34" y="34" width="560" height="200" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
-  <text class="tk-role" x="60" y="72" fill="var(--ret)">THE COLLECTION</text>
+  <text class="tk-role" x="60" y="72" style="fill:var(--ret)">THE COLLECTION</text>
   <g fill="var(--panel)" stroke="var(--ret)" stroke-width="2.5">
     <rect x="60" y="96" width="104" height="80" rx="8"/>
     <rect x="80" y="108" width="104" height="80" rx="8"/>
@@ -35,7 +35,7 @@
 
   <!-- the requests -->
   <rect x="34" y="266" width="560" height="200" rx="14" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
-  <text class="tk-role" x="60" y="304" fill="var(--adv)">THE REQUESTS</text>
+  <text class="tk-role" x="60" y="304" style="fill:var(--adv)">THE REQUESTS</text>
   <g fill="var(--adv)" opacity=".5">
     <rect x="60" y="330" width="150" height="6" rx="3"/>
     <rect x="60" y="348" width="128" height="6" rx="3"/>
@@ -52,7 +52,7 @@
 
   <!-- the answer -->
   <rect x="784" y="34" width="682" height="432" rx="14" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3.5"/>
-  <text class="tk-role" x="812" y="72" fill="var(--ok)">WHAT YOU HAND BACK</text>
+  <text class="tk-role" x="812" y="72" style="fill:var(--ok)">WHAT YOU HAND BACK</text>
   <text class="tk-hd"   x="812" y="112">One written answer</text>
 
   <!-- prose, every line ending in a citation marker -->
@@ -70,7 +70,7 @@
 
   <line x1="812" y1="312" x2="1438" y2="312" stroke="var(--ok)" stroke-width="1.5" opacity=".5"/>
 
-  <text class="tk-role" x="812" y="348" fill="var(--ok)">TWO HARD RULES</text>
+  <text class="tk-role" x="812" y="348" style="fill:var(--ok)">TWO HARD RULES</text>
   <text class="tk-req" x="812" y="392">≤ 1,024 words</text>
   <text class="tk-sm"  x="1010" y="392">— length is the budget you spend</text>
   <text class="tk-req" x="812" y="436">every statement cited</text>

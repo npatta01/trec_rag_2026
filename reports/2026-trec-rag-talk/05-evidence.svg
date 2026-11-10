@@ -64,7 +64,7 @@
 
   <!-- C. selected evidence: one survivor per set, patterns preserved -->
   <rect x="500" y="76" width="450" height="464" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3.5"/>
-  <text class="ev-role" x="524" y="116" fill="var(--ret)">THE AUTHORITY</text>
+  <text class="ev-role" x="524" y="116" style="fill:var(--ret)">THE AUTHORITY</text>
   <text class="ev-hd"   x="524" y="158">Selected evidence</text>
   <g fill="var(--panel)" stroke="var(--ret)" stroke-width="2.5">
     <rect x="524" y="190" width="402" height="44" rx="7"/>
@@ -88,7 +88,7 @@
 
   <!-- D. advisory nuggets -->
   <rect x="1010" y="76" width="460" height="464" rx="14" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3.5" stroke-dasharray="9 7"/>
-  <text class="ev-role" x="1034" y="116" fill="var(--adv)">ADVISORY ONLY</text>
+  <text class="ev-role" x="1034" y="116" style="fill:var(--adv)">ADVISORY ONLY</text>
   <text class="ev-hd"   x="1034" y="158">Generated nuggets</text>
   <g fill="none" stroke="var(--adv)" stroke-width="2.5" stroke-dasharray="6 5">
     <rect x="1034" y="190" width="412" height="44" rx="7"/>

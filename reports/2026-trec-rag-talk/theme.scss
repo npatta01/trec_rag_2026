@@ -76,9 +76,9 @@ $code-block-font-size: 0.6em !default;
   --muted: #4b5d54;
   --line: #5e6d66;
   --hairline: rgb(94 109 102 / 0.28);
-  --ret: #087c72;
+  --ret: #08766c;
   --ret-soft: #d9f1ed;
-  --gen: #5664c7;
+  --gen: #525fbd;
   --gen-soft: #e6e9ff;
   --ok: #277a45;
   --ok-soft: #ddf2e3;
@@ -494,7 +494,6 @@ body.reveal-viewport,
 
 // ---------------------------------------------------------------- notes
 
-.note,
 .boundary {
   font-size: 0.62em;
   line-height: 1.4;
@@ -612,7 +611,6 @@ body.reveal-viewport,
 .reveal .slides > section > .grid-3,
 .reveal .slides > section > .grid-2-1,
 .reveal .slides > section > .qgrid,
-.reveal .slides > section > .promptbox,
 .reveal .slides > section > .stat-row {
   flex: 1 1 auto;
   min-height: 0;
@@ -634,7 +632,6 @@ body.reveal-viewport,
 
 // Footer: the caption sits on the bottom edge, which is what makes the body
 // above it actually use the height.
-.reveal .slides > section > .note,
 .reveal .slides > section > .cap,
 .reveal .slides > section > .boundary {
   flex: 0 0 auto;
@@ -873,16 +870,73 @@ body.reveal-viewport,
   }
 }
 
-// A verbatim prompt shown as the artefact it is.
-.promptbox pre {
-  margin: 0;
+// The planner's instruction, quoted. It is the artefact, so it keeps the
+// typewriter face and the rule down its left edge, but it is one sentence set
+// large rather than a screenful of code: the three numbered rules that follow
+// it are broken out into cards of their own.
+.promptlead {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.66em;
+  line-height: 1.5;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-left: 5px solid var(--gen);
+  border-radius: 0 10px 10px 0;
+  padding: 0.6em 0.8em;
+  margin: 0 0 0.6em;
 }
 
-.promptbox pre code {
-  font-size: 0.8em;
-  line-height: 1.5;
-  display: block;
-  border-left: 4px solid var(--gen);
+// The five handoffs as a strip: moon, sun, moon, sun, moon. The alternation is
+// the whole point, so it has to survive being read from the back of a room.
+.relay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2em;
+  margin-top: 0.55em;
+  font-size: 0.7em;
+  font-weight: 700;
+
+  > span {
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink);
+    gap: 0.22em;
+    padding: 0.1em 0.45em;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  i {
+    color: var(--muted);
+    font-style: normal;
+    font-weight: 600;
+  }
+}
+
+// The tint and the symbol carry which writer it is; the words take the deck's
+// ink, because an accent on its own soft tint only just clears 4.5:1 in one of
+// the four palette-and-theme combinations.
+.relay-l {
+  background: var(--gen-soft);
+
+  .glyph { color: var(--gen); }
+}
+
+.relay-s {
+  background: var(--ret-soft);
+
+  .glyph { color: var(--ret); }
+}
+
+// Sol is the sun and Luna the moon wherever they are named, including inside a
+// label whose own colour would otherwise paint both of them the same.
+.g-sun {
+  color: var(--ret);
+}
+
+.g-moon {
+  color: var(--gen);
 }
 
 // Role glyphs: the same pen nib (Sol writes) and magnifier (Luna judges) used
@@ -1045,13 +1099,43 @@ body.reveal-viewport,
   border-left: 2px solid var(--ret);
 }
 
-// The prompt is the point of its slide, so it takes the free height and sits
-// centred in it rather than floating at the top of an empty box.
-.reveal .slides > section > .promptbox {
-  display: flex;
-  align-items: center;
+// Each subnarrative gets a colour and a symbol of its own, cycling through
+// three accents, so eight open cards read as eight different questions rather
+// than one wall. The cycle drives the rule, the chip and the symbol together.
+.qgrid details:nth-child(3n + 1) {
+  --q: var(--ret);
+  --q-soft: var(--ret-soft);
 }
 
-.reveal .slides > section > .promptbox pre {
-  width: 100%;
+.qgrid details:nth-child(3n + 2) {
+  --q: var(--gen);
+  --q-soft: var(--gen-soft);
+}
+
+.qgrid details:nth-child(3n + 3) {
+  --q: var(--adv);
+  --q-soft: var(--adv-soft);
+}
+
+.qgrid details,
+.qgrid details[open] {
+  border-left-color: var(--q);
+}
+
+.qgrid details[open] {
+  background: var(--q-soft);
+}
+
+.qgrid summary::before,
+.qgrid details[open] summary::before {
+  background: var(--q);
+}
+
+.qgrid summary .glyph {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1.2em;
+  height: 1.2em;
+  margin: 0;
+  color: var(--q);
 }

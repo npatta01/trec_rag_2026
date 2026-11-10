@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 620" role="img" aria-labelledby="ln-title ln-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 590" role="img" aria-labelledby="ln-title ln-desc">
   <title id="ln-title">What one BM25 query lane contributes, stage by stage</title>
-  <desc id="ln-desc">One planned BM25 query, the illegal short term rental lane, retrieves up to 1,000 documents. Those documents are chunked and reranked down to at most 100 kept passages, then reduced to at most 40 selected passages, which produce at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory hints, not authoritative evidence. Every figure is a per-query ceiling set by configuration, not a measured yield.</desc>
+  <desc id="ln-desc">One planned BM25 query, the illegal short term rental lane, runs through four stages, each marked with its own symbol and drawn as a bar whose height falls from left to right. A magnifier marks the search: at most 1,000 documents from Pyserini BM25. A sorting symbol marks reranking: those documents are chunked and scored down to at most 100 kept passages. A filter funnel marks selection: at most 40 selected passages after MiniLM near-duplicate grouping and maximal marginal relevance. A lightbulb marks the nuggets: at most 20, drawn in amber with a dashed edge because they are advisory hints rather than authoritative evidence. Each figure is a per-query ceiling, which is what the less-than-or-equal sign on it means.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .ln-title{font-size:38px;font-weight:720}
+    .ln-title{font-size:36px;font-weight:720}
     .ln-num{font-size:40px;font-weight:780}
     .ln-label{font-size:27px;font-weight:700}
     .ln-small{font-size:22px}
@@ -15,45 +15,54 @@
     .ln-query{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}
     .ln-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#ar2)}
     .ln-base{stroke:var(--line);stroke-width:2}
+    .ln-ico{fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
   </style>
-  <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
-  <rect width="1400" height="620" fill="var(--bg)"/>
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+    <g id="ln-g-search" class="ln-ico"><circle cx="-2" cy="-2" r="8"/><path d="M4 4L11.5 11.5"/></g>
+    <g id="ln-g-rank" class="ln-ico"><path d="M-12 -7.5H0M-12 0H-3M-12 7.5H-6M7.5 -10V9.5M3.5 6L7.5 10L11.5 6"/></g>
+    <g id="ln-g-filter" class="ln-ico"><path d="M-11 -8.5H11L3 1V10.5L-3 7.2V1Z"/></g>
+    <g id="ln-g-hint" class="ln-ico"><path d="M-5 8H5M-3.5 12H3.5"/><path d="M0 -12A8 8 0 0 0-5 2.2V4.6H5V2.2A8 8 0 0 0 0 -12Z"/></g>
+  </defs>
+  <rect width="1400" height="590" fill="var(--bg)"/>
 
-  <text class="ln-title" x="700" y="38" text-anchor="middle">One lane of 17 · subnarrative 3, query 1</text>
+  <text class="ln-title" x="700" y="36" text-anchor="middle">One lane of 17 · subnarrative 3, query 1</text>
 
-  <rect class="ln-query" x="250" y="62" width="900" height="70" rx="10"/>
-  <text class="ln-label" x="700" y="106" text-anchor="middle">“illegal short term rental NYC avoid scams”</text>
+  <rect class="ln-query" x="250" y="58" width="900" height="66" rx="10"/>
+  <text class="ln-label" x="700" y="100" text-anchor="middle">“illegal short term rental NYC avoid scams”</text>
 
-  <path class="ln-flow" d="M700 132V162" vector-effect="non-scaling-stroke"/>
+  <path class="ln-flow" d="M700 124V156" vector-effect="non-scaling-stroke"/>
 
-  <!-- stage bars, left to right, each a configured ceiling -->
-  <rect class="ln-bar" x="155" y="200" width="210" height="300" rx="8"/>
-  <text class="ln-num" x="260" y="185" text-anchor="middle">≤1,000</text>
+  <!-- stage bars, left to right; the ≤ on each number is the configured cap -->
+  <g transform="translate(260,150)" style="color:var(--ret)"><circle r="21" fill="var(--panel)" stroke="var(--ret)" stroke-width="2.4"/><use href="#ln-g-search"/></g>
+  <rect class="ln-bar" x="155" y="212" width="210" height="288" rx="8"/>
+  <text class="ln-num" x="260" y="198" text-anchor="middle">≤1,000</text>
   <text class="ln-label" x="260" y="534" text-anchor="middle">documents</text>
   <text class="ln-small ln-muted" x="260" y="562" text-anchor="middle">BM25 · Pyserini</text>
 
   <path class="ln-flow" d="M375 470H445" vector-effect="non-scaling-stroke"/>
 
-  <rect class="ln-bar" x="455" y="320" width="210" height="180" rx="8"/>
-  <text class="ln-num" x="560" y="305" text-anchor="middle">≤100</text>
+  <g transform="translate(560,270)" style="color:var(--ret)"><circle r="21" fill="var(--panel)" stroke="var(--ret)" stroke-width="2.4"/><use href="#ln-g-rank"/></g>
+  <rect class="ln-bar" x="455" y="332" width="210" height="168" rx="8"/>
+  <text class="ln-num" x="560" y="318" text-anchor="middle">≤100</text>
   <text class="ln-label" x="560" y="534" text-anchor="middle">passages kept</text>
   <text class="ln-small ln-muted" x="560" y="562" text-anchor="middle">chunk + Mixedbread</text>
 
   <path class="ln-flow" d="M675 470H745" vector-effect="non-scaling-stroke"/>
 
-  <rect class="ln-bar" x="755" y="385" width="210" height="115" rx="8"/>
-  <text class="ln-num" x="860" y="370" text-anchor="middle">≤40</text>
+  <g transform="translate(860,335)" style="color:var(--ret)"><circle r="21" fill="var(--panel)" stroke="var(--ret)" stroke-width="2.4"/><use href="#ln-g-filter"/></g>
+  <rect class="ln-bar" x="755" y="397" width="210" height="103" rx="8"/>
+  <text class="ln-num" x="860" y="383" text-anchor="middle">≤40</text>
   <text class="ln-label" x="860" y="534" text-anchor="middle">selected</text>
   <text class="ln-small ln-muted" x="860" y="562" text-anchor="middle">MiniLM dedup + MMR</text>
 
   <path class="ln-flow" d="M975 470H1045" vector-effect="non-scaling-stroke"/>
 
-  <rect class="ln-bar-adv" x="1055" y="430" width="210" height="70" rx="8"/>
-  <text class="ln-num" x="1160" y="415" text-anchor="middle">≤20</text>
+  <g transform="translate(1160,380)" style="color:var(--adv)"><circle r="21" fill="var(--panel)" stroke="var(--adv)" stroke-width="2.4"/><use href="#ln-g-hint"/></g>
+  <rect class="ln-bar-adv" x="1055" y="442" width="210" height="58" rx="8"/>
+  <text class="ln-num" x="1160" y="428" text-anchor="middle">≤20</text>
   <text class="ln-label" x="1160" y="534" text-anchor="middle">nuggets</text>
   <text class="ln-small ln-muted" x="1160" y="562" text-anchor="middle">advisory hints only</text>
 
   <line class="ln-base" x1="120" y1="500" x2="1300" y2="500"/>
-
-  <text class="ln-small ln-muted" x="700" y="604" text-anchor="middle">Bar heights are conceptual. Every number is a configured per-query ceiling, not a measured yield.</text>
 </svg>

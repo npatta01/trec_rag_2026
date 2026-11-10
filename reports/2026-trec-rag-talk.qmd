@@ -43,24 +43,10 @@ How it works · the five pieces
 :::
 
 ::: {.cap}
+Plan once, search wide, narrow to evidence, then write twice.
 **The one variable in this talk is the last box** — given identical evidence,
 does writing once differ from writing, auditing and revising?
 :::
-## How much goes through it
-
-::: {.eyebrow}
-How it works · the scale
-:::
-
-::: {.diagram}
-![](2026-trec-rag-talk/01-approach.svg){fig-alt="One planned source retrieval feeds a Retrieval branch and a RAG branch. A narrative is planned once into subnarratives and BM25 queries, searched, chunked and reranked into passages, then reduced to selected evidence with advisory nuggets. That frozen source splits: a cache-first branch emits three Retrieval TSVs, and a sealed evidence handoff feeds single-pass and multi-stage generation."}
-:::
-
-::: {.note}
-Plan once, search wide, narrow to evidence, then write twice. The rest of this
-talk walks the left-to-right path with one real request.
-:::
-
 ## The request we will follow
 
 ::: {.trace-step}
@@ -113,29 +99,42 @@ not an agentic loop. **At most 25 searches** per topic.
 ## The prompt that does the planning
 
 ::: {.eyebrow}
-How it works · verbatim
+How it works · the planner's whole instruction, word for word
 :::
 
-::: {.promptbox}
-```
-Plan retrieval over a very large passage collection using only the
-supplied official topic narrative. Do not answer the topic. Return
-only the schema-constrained JSON plan.
+::: {.promptlead}
+Plan retrieval over a very large passage collection using only the supplied
+official topic narrative. [Do not answer the topic.]{.hl} Return only the
+schema-constrained JSON plan.
+:::
 
-Rules:
-1. Generate one to eight concise subnarratives that together preserve
-   the narrative's requested subjects, relations, comparisons,
-   constraints, and uncertainty.
-2. Give each subnarrative one to three plain BM25 queries. Queries
-   must be useful lexical alternatives, not answers, and must not
-   contain query operators or field syntax.
-3. Use only the supplied narrative.
-```
+::: {.grid-3}
+::: {.card .card-gen}
+[Rule 1 · how many]{.card-label}
+Generate **one to eight** concise subnarratives that together preserve the
+narrative's requested subjects, relations, comparisons, constraints, and
+uncertainty.
+:::
+
+::: {.card .card-gen}
+[Rule 2 · what kind]{.card-label}
+Give each subnarrative **one to three plain BM25 queries**. Queries must be
+useful lexical alternatives, **not answers**, and must not contain query
+operators or field syntax.
+:::
+
+::: {.card .card-gen}
+[Rule 3 · nothing else]{.card-label}
+Use **only the supplied narrative**.
+
+The planner never sees a document, so it cannot smuggle in an answer it has
+already read.
+:::
 :::
 
 ::: {.cap}
-The whole planning instruction, copied from the code. **"Do not answer the
-topic"** does the heavy lifting — the planner proposes searches, never findings.
+Four sentences and three rules — the whole thing. The highlighted sentence does
+the heavy lifting: the planner proposes searches, never findings.
 :::
 ## Planning: this request
 
@@ -144,45 +143,40 @@ The example · 8 subnarratives × 2 queries = 16 searches, plus the untouched re
 :::
 
 ::: {.qgrid}
-<details open><summary>What options exist?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -8H-7M-3 -8H11M-11 0H-7M-3 0H11M-11 8H-7M-3 8H6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What options exist?</summary>
 <code>furnished temporary housing New York City family three six weeks</code>
 <code>short term furnished rental NYC family child</code>
 </details>
-<details open><summary>How do the four types compare?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-7 10V-6M7 10V-11M-13 10H13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>How do the four types compare?</summary>
 <code>Airbnb vs extended stay hotel vs corporate housing vs sublet comparison</code>
 <code>short term rental types NYC family advantages disadvantages</code>
 </details>
-<details open><summary>Which listings are illegal?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-7 7L7 -7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Which listings are illegal?</summary>
 <code>illegal short term rental NYC avoid scams</code>
 <code>unreliable temporary housing New York City red flags</code>
 </details>
-<details open><summary>What does it really cost?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-12" y="-7.5" width="24" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="0" r="3.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What does it really cost?</summary>
 <code>real cost comparison short term rental NYC fees taxes</code>
 <code>hidden costs temporary housing New York City</code>
 </details>
-<details open><summary>Is it safe for a child?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -11L9 -7.5V1C9 7 4.8 10.6 0 12C-4.8 10.6 -9 7 -9 1V-7.5Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-4 0.5L-1 3.5L4.5 -2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is it safe for a child?</summary>
 <code>safety family short term rental New York City neighborhood</code>
 <code>child safe temporary housing NYC</code>
 </details>
-<details open><summary>What if we cancel?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-10" y="-8" width="20" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-10 -2.5H10M-5 -12V-5M5 -12V-5M-3 2.5L3 7M3 2.5L-3 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What if we cancel?</summary>
 <code>cancellation policy short term rental NYC</code>
 <code>flexible cancellation temporary housing New York City</code>
 </details>
-<details open><summary>Is there room to work?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -4V-11H-4M4 -11H11V-4M11 4V11H4M-4 11H-11V4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is there room to work?</summary>
 <code>space family short term rental NYC one bedroom</code>
 <code>temporary housing space child remote work New York City</code>
 </details>
-<details open><summary>Is the location practical?</summary>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 12C0 12 9 -1 9 -7A9 9 0 1 0 -9 -7C-9 -1 0 12 0 12Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="-7" r="3.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is the location practical?</summary>
 <code>location convenience short term rental NYC public transit</code>
 <code>temporary housing near work school New York City</code>
 </details>
 :::
 
-::: {.cap}
-**These are the real queries, two per subnarrative.** Plain keywords, no
-operators. Click a card to fold it away. Eight subnarratives is the most common
-shape in the run — 30 of the 119 requests were split this way.
-:::
 ## Searching: how it works
 
 ::: {.eyebrow}
@@ -193,9 +187,9 @@ How it works
 ![](2026-trec-rag-talk/02-one-lane.svg){fig-alt="One BM25 query lane, stage by stage: up to 1,000 documents retrieved, chunked and reranked down to at most 100 kept passages, reduced to at most 40 selected passages, producing at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory, not authoritative."}
 :::
 
-::: {.boundary}
-**These are ceilings, not yields.** Every number is a configured per-query cap,
-not a count of what actually came back.
+::: {.cap}
+One lane of seventeen, and the **≤** on each number is a cap I configured.
+Three orders of magnitude of text, cut down to about a page.
 :::
 ## Evidence and nuggets: how it works
 
@@ -216,10 +210,10 @@ How it works
 survives in its original wording; the other is dropped.]{.dupe-verdict}
 :::
 
-::: {.boundary}
-The two sentences above are my wording, standing in for real passages — the
-corpus text stays private. Both writers then get one frozen package: the
-request, the exact evidence, the nuggets and the citation IDs. **Nothing else.**
+::: {.cap}
+Both writers then get one frozen package: the request, the exact evidence, the
+nuggets and the citation IDs. **Nothing else.** (The pair above is my wording,
+standing in for the real passages, which stay private.)
 :::
 ## Evidence and nuggets: this request
 
@@ -252,10 +246,10 @@ passages.
 :::
 :::
 
-::: {.boundary}
-**These are our own hints, not the organizers' gold nuggets** — and `n092` is a
-trap. The family needs six weeks, which is *longer* than 30 days, so the
-definition settles nothing on its own.
+::: {.cap}
+**`n092` is a trap.** The family needs six weeks, which is *longer* than 30
+days, so the definition settles nothing on its own. These are our own hints —
+the organizers' gold nuggets are a separate thing, written by assessors.
 :::
 ## Two writers: how it works
 
@@ -264,15 +258,14 @@ How it works
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/03-two-writers.svg){fig-alt="Three actors are colour coded: Sol the writer in teal, Luna the reviewer in indigo, and local code in plain grey. Single-pass is Sol alone — Sol writes the answer, local code checks schema, citations and word limit, and one retry is allowed. Multi-stage alternates between two columns so the work visibly changes hands five times: Luna plans, Sol writes the draft, Luna audits every evidence group separately returning at most six missing-detail cards each, local code merges them, Sol proposes edits, Luna screens each edit against five booleans, and local code applies only what passed. One pass through the stages, not a repeating loop, with a dashed fallback keeping the validated draft if revision fails."}
+![](2026-trec-rag-talk/03-two-writers.svg){fig-alt="Two swimlane strips fed by the same sealed evidence. Time runs left to right and the lane says who did it: Sol the writer is a sun, Luna the reviewer a crescent moon, local code a pair of angle brackets. Single-pass is two steps wide — Sol writes, local code checks schema, citations and word limit, with one retry back to Sol, used on two of 119. Multi-stage is seven steps wide and zigzags between the lanes: Luna plans, Sol drafts, Luna audits each evidence group returning at most six cards per group, local code merges them, Sol proposes edits, Luna screens each against five booleans that must all pass, and local code applies only what passed. One pass through the stages, not a repeating loop; if revision fails the already validated draft stands."}
 :::
 
 ::: {.cap}
-**Sol writes; Luna only judges; local code decides.** Follow the arrows and you
-can see the work change hands five times — and that multi-stage starts from the
-evidence, not from the single-pass answer. If revision fails the validated draft
-stands, so the extra stages can only add. **Single-pass spent its one retry on 2
-of 119 requests**; the other 117 passed validation first try.
+**Sol writes; Luna only judges; local code decides.** The lane a box sits in
+says who did it, so the zigzag *is* the handoff — five of them for multi-stage,
+none for single-pass. Multi-stage starts from the evidence, not from the
+single-pass answer.
 :::
 ## What Luna keeps, and what she throws out
 
@@ -282,7 +275,7 @@ How it works · the screening gate
 
 ::: {.grid-2-1}
 ::: {.card .card-gen}
-[<svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="-2" cy="-3" r="8.5" fill="none" stroke="currentColor" stroke-width="2.6"/><path d="M4 4 L11 11" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>Luna's five gates, all must pass]{.card-label}
+[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Luna's five gates, all must pass]{.card-label}
 Luna returns **only booleans** — support, atomicity, materiality, redundancy,
 replacement safety.
 
@@ -297,12 +290,11 @@ rewrites prose itself.
 | `499` | 4 of 5 |
 :::
 
-::: {.boundary}
+::: {.cap}
 On topic `499` the screen **rejected a replacement that would have erased a
-distinct argument**. The kept-and-thrown counts above are three development
-topics. For the 119 the saved run records **how much** Luna audited, not which
-edits she kept: on every topic whose checkpoint recorded fully, she audited
-**every evidence group — no sampling**.
+distinct argument** — which is what the gate is for. Those three are
+development topics; across the 119, on every topic whose checkpoint recorded
+fully, Luna audited **every evidence group, no sampling**.
 :::
 ## Two writers: this request
 
@@ -318,22 +310,24 @@ The example · same sealed evidence, two strategies
 
 ::: {}
 ::: {.card .card-ret}
-[<svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -13 L8 3 L0 12 L-8 3 Z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/><circle cx="0" cy="1" r="2.6" fill="currentColor"/></svg>Single-pass · Sol alone]{.card-label}
+[<svg class="glyph g-sun" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Single-pass · Sol alone]{.card-label}
 **22 statements · 504 words**
 :::
 
 ::: {.card .card-gen}
-[<svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="-2" cy="-3" r="8.5" fill="none" stroke="currentColor" stroke-width="2.6"/><path d="M4 4 L11 11" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -13 L8 3 L0 12 L-8 3 Z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/><circle cx="0" cy="1" r="2.6" fill="currentColor"/></svg>Multi-stage · Luna and Sol]{.card-label}
+[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="glyph g-sun" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Multi-stage · Luna and Sol]{.card-label}
 **38 statements · 800 words**
+
+<span class="relay"><span class="relay-l"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>plans</span><i>→</i><span class="relay-s"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>drafts</span><i>→</i><span class="relay-l"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>audits</span><i>→</i><span class="relay-s"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>revises</span><i>→</i><span class="relay-l"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>screens</span></span>
 :::
 :::
 :::
 
 ::: {.cap}
-**Left desk: Sol alone. Right desk: Luna going over what Sol drafted.** Both
-spotted the 30-day trap — single-pass noted six weeks exceeds it; multi-stage
-added that the definition alone *does not establish* whether a particular
-six-week sublet is lawful.
+**Left desk is Sol writing alone. Right desk is Luna going over Sol's draft.**
+Both spotted the 30-day trap — single-pass noted six weeks exceeds it;
+multi-stage added that the definition alone *does not establish* whether a
+particular six-week sublet is lawful.
 :::
 ## The difference you can see
 
@@ -356,10 +350,9 @@ unit is appropriate for a child and has been [made lead-safe]{.hl}."
 :::
 :::
 
-::: {.boundary}
+::: {.cap}
 **The request never says "lead."** It says the apartment is being repaired, and
-separately that there is a child. One writer joined those two facts. That is a
-difference you can read — not a claim about which nugget the scoring counted.
+separately that there is a child. One writer joined those two facts.
 :::
 ## What the organizers said about it
 
@@ -377,8 +370,8 @@ The example · NIST Batch 2, human-written nuggets
 
 ::: {.boundary}
 **Each run is judged against other teams' answers, not against the other one of
-ours.** The battle counts are separate samples, so they do not say a human ever
-chose between these two. This is also **one of 42 scored topics**.
+ours** — so the battle counts never say a human chose between these two. One of
+**42 scored topics**.
 :::
 ## When the two measures disagree
 
@@ -395,12 +388,8 @@ A different topic · rag2026-13, a founder scaling a startup
 ::: {.cap}
 The automated rubric scored single-pass **higher**. The human assessors
 preferred multi-stage in 8 of its 12 battles, against 5 of single-pass's 10.
-The two measures rank our runs the opposite way round.
-:::
-
-::: {.boundary}
-**The rubric items were not released**, so we cannot name what was credited or
-missed — only that the two measures disagree here.
+**The two measures rank our runs the opposite way round** — and the rubric
+items were not released, so I cannot say what was credited.
 :::
 ## Overall: 42 scored topics
 
@@ -444,10 +433,9 @@ The other submission
 ![](2026-trec-rag-talk/06-retrieval.svg){fig-alt="Three paired bars comparing our retrieval run with the field median. Precision: ours 0.4116 against 0.3499. Recall: ours 0.0897 against 0.1002. Documents returned per topic: ours 38.6 against 100.0, roughly a third as many. Each pair is scaled to its own larger value."}
 :::
 
-::: {.boundary}
-All three Retrieval runs differ **only in ordering** and scored identically, per
-topic included. This measures what we *selected*; it says nothing about which
-ordering puts useful documents first.
+::: {.cap}
+All three Retrieval runs differ **only in ordering**, and scored identically
+per topic included — so this measures what we *selected*, not how we ordered it.
 :::
 ## What I would and would not claim from this
 
