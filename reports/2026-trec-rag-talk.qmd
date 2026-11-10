@@ -182,36 +182,16 @@ standing in for the real passages, which stay private.)
 The example · facet f001, legality and reliability
 :::
 
-::: {.grid-3}
-::: {.card .card-ret}
-[1 · Selected passages]{.card-label}
-The surviving text, word for word, each carrying the document ID this answer is
-allowed to cite.
-
-**This is the authority.**
-:::
-
-::: {.card .card-gen}
-[2 · The nuggetizer reads them]{.card-label}
-One hosted call per subnarrative, writing short claims **only** from those
-passages.
-
-≤20 claims, each attributed to at most **3** of the documents behind it.
-:::
-
-::: {.card .card-source .chips}
-[3 · What came back]{.card-label}
-`n092` NYC defines a short-term rental as fewer than 30 consecutive days
-
-`n094` NYC has cracked down on illegal rentals, including raids and fines
-:::
+::: {.diagram}
+![](2026-trec-rag-talk/10-nugget-trace.svg){fig-alt="A left-to-right chain. Two selected passages on the left, drawn solid and headed the authority: one saying a short-term rental in New York City is one of fewer than 30 consecutive days, the other saying the city has run enforcement sweeps with fines. Both are marked as stand-in wording, because the corpus text stays private. In the middle the nuggetizer: one hosted call per subnarrative, writing only from those passages, at most 20 claims, each citing at most 3 documents. On the right the two claims that came back, drawn dashed and headed advisory only: n092 and n094. A note marks n092 as a trap."}
 :::
 
 ::: {.cap}
-**`n092` is a trap.** The family needs six weeks, which is *longer* than 30
-days, so the definition settles nothing on its own. These are our own hints —
-the organizers' gold nuggets are a separate thing, written by assessors.
+Solid edges are authority, dashed edges are advice — the same rule holds all
+the way to the answer. These are our own hints; the organizers' gold nuggets
+are a separate thing, written by assessors.
 :::
+
 ## Single-pass: Sol alone
 
 ::: {.eyebrow}

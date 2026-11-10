@@ -1583,22 +1583,82 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 <div class="trace-step">
 <p>The example · facet f001, legality and reliability</p>
 </div>
-<div class="grid-3">
-<div class="card card-ret">
-<p><span class="card-label">1 · Selected passages</span> The surviving text, word for word, each carrying the document ID this answer is allowed to cite.</p>
-<p><strong>This is the authority.</strong></p>
-</div>
-<div class="card card-gen">
-<p><span class="card-label">2 · The nuggetizer reads them</span> One hosted call per subnarrative, writing short claims <strong>only</strong> from those passages.</p>
-<p>≤20 claims, each attributed to at most <strong>3</strong> of the documents behind it.</p>
-</div>
-<div class="card card-source chips">
-<p><span class="card-label">3 · What came back</span> <code>n092</code> NYC defines a short-term rental as fewer than 30 consecutive days</p>
-<p><code>n094</code> NYC has cracked down on illegal rentals, including raids and fines</p>
-</div>
+<div class="diagram">
+<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1600 600" role="img" aria-labelledby="ng-title ng-desc">
+  <title id="ng-title">From selected passage to advisory claim, for one subnarrative of this request</title>
+  <desc id="ng-desc">A left-to-right chain in three parts. On the left, two selected passages drawn as solid cards headed &quot;the authority&quot;: one saying a short-term rental in New York City is one of fewer than 30 consecutive days, the other saying the city has run enforcement sweeps against illegal listings, with fines. Both are marked as the speaker&#39;s own wording standing in for the real passages, because the corpus text stays private. In the middle, the nuggetizer: one hosted call per subnarrative, writing only from those passages, at most twenty claims, each attributed to at most three of the documents behind it. On the right, the two claims that came back, drawn with dashed edges and headed &quot;advisory only&quot;: n092, that New York City defines a short-term rental as fewer than 30 consecutive days, and n094, that the city has cracked down on illegal rentals including raids and fines. A note marks n092 as a trap: the family needs six weeks, which is longer than thirty days, so the definition settles nothing on its own.</desc>
+  <style>
+text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.ng-role{font-size:20px;font-weight:800;letter-spacing:.07em}
+.ng-body{font-size:23px;line-height:1.3}
+.ng-id{font-size:19px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.ng-sub{font-size:18px;fill:var(--muted)}
+.ng-mid{font-size:22px;font-weight:720}
+.ng-trap{font-size:21px;font-weight:700}
+.ng-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#nga)}
+</style>
+  <defs>
+    <marker id="nga" viewbox="0 0 10 10" refx="9" refy="5" markerwidth="7" markerheight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke" /></marker>
+  </defs>
+  <rect width="1600" height="600" fill="var(--bg)" />
+
+  <!-- the authority: solid edges -->
+  <text class="ng-role" x="40" y="36" style="fill:var(--ret)">SELECTED PASSAGES — THE AUTHORITY</text>
+
+  <rect x="40" y="58" width="470" height="148" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3" />
+  <text class="ng-body" x="64" y="98">“A short-term rental in New</text>
+  <text class="ng-body" x="64" y="128">York City is one of fewer than</text>
+  <text class="ng-body" x="64" y="158">30 consecutive days.”</text>
+  <text class="ng-sub" x="64" y="190">carries the document ID this answer may cite</text>
+
+  <rect x="40" y="226" width="470" height="148" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3" />
+  <text class="ng-body" x="64" y="266">“The city has run enforcement</text>
+  <text class="ng-body" x="64" y="296">sweeps against illegal listings,</text>
+  <text class="ng-body" x="64" y="326">with fines.”</text>
+  <text class="ng-sub" x="64" y="358">carries the document ID this answer may cite</text>
+
+  <text class="ng-sub" x="40" y="404">My wording, standing in for the real passages — the corpus text stays private.</text>
+
+  <path class="ng-flow" d="M510 132 H556 V196" />
+  <path class="ng-flow" d="M510 300 H556 V236" />
+  <path class="ng-flow" d="M556 216 H612" />
+
+  <!-- the nuggetizer -->
+  <rect x="616" y="128" width="330" height="176" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3" />
+  <text class="ng-role" x="640" y="166" style="fill:var(--gen)">THE NUGGETIZER</text>
+  <text class="ng-mid" x="640" y="202">one hosted call</text>
+  <text class="ng-mid" x="640" y="228">per subnarrative</text>
+  <text class="ng-sub" x="640" y="258">writes only from those passages</text>
+  <text class="ng-sub" x="640" y="282">≤20 claims · each cites ≤3 documents</text>
+
+  <path class="ng-flow" d="M946 216 H1002 V117 H1042" />
+  <path class="ng-flow" d="M1002 216 V285 H1042" />
+
+  <!-- advisory only: dashed edges -->
+  <text class="ng-role" x="1046" y="36" style="fill:var(--adv)">WHAT CAME BACK — ADVISORY ONLY</text>
+
+  <rect x="1046" y="58" width="514" height="118" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3" stroke-dasharray="9 6" />
+  <text class="ng-id" x="1070" y="94" style="fill:var(--adv)">n092</text>
+  <text class="ng-body" x="1070" y="128">NYC defines a short-term rental</text>
+  <text class="ng-body" x="1070" y="158">as fewer than 30 consecutive days</text>
+
+  <rect x="1046" y="226" width="514" height="118" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3" stroke-dasharray="9 6" />
+  <text class="ng-id" x="1070" y="262" style="fill:var(--adv)">n094</text>
+  <text class="ng-body" x="1070" y="296">NYC has cracked down on illegal</text>
+  <text class="ng-body" x="1070" y="326">rentals, including raids and fines</text>
+
+  <!-- the trap -->
+  <rect x="40" y="452" width="1520" height="112" rx="12" fill="var(--panel)" stroke="var(--adv)" stroke-width="3" />
+  <text class="ng-trap" x="68" y="492" style="fill:var(--adv)">n092 is a trap.</text>
+  <text class="ng-body" x="68" y="526">The family needs six weeks, which is longer than 30 days —</text>
+  <text class="ng-body" x="68" y="556">so the definition settles nothing on its own.</text>
+
+  <path class="ng-flow" d="M1560 117 H1582 V508 H1564" />
+</svg>
+</p>
 </div>
 <div class="cap">
-<p><strong><code>n092</code> is a trap.</strong> The family needs six weeks, which is <em>longer</em> than 30 days, so the definition settles nothing on its own. These are our own hints — the organizers’ gold nuggets are a separate thing, written by assessors.</p>
+<p>Solid edges are authority, dashed edges are advice — the same rule holds all the way to the answer. These are our own hints; the organizers’ gold nuggets are a separate thing, written by assessors.</p>
 </div>
 </section>
 <section class="slide level2 center">

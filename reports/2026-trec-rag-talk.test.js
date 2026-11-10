@@ -26,6 +26,7 @@ for (const asset of [
   "2026-trec-rag-talk/07-topic18.svg",
   "2026-trec-rag-talk/08-disagree.svg",
   "2026-trec-rag-talk/09-overall.svg",
+  "2026-trec-rag-talk/10-nugget-trace.svg",
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
@@ -48,7 +49,7 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 12, `expected 12 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 13, `expected 12 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -155,7 +156,7 @@ for (const stale of ["rag2026-17", "out-of-home", "maltreatment", "preterm", "NI
 }
 for (const fig of ["02-one-lane", "04-plan", "05-evidence", "06-retrieval",
                    "03a-single-pass", "03b-multi-stage", "07-topic18",
-                   "08-disagree", "09-overall"]) {
+                   "08-disagree", "09-overall", "10-nugget-trace"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   for (const stale of ["maltreatment", "preterm", "NICU"]) {
     assert(!svg.includes(stale), `${fig}.svg still references the retired example: ${stale}`);
@@ -303,7 +304,7 @@ assert(/nth-child\(3n \+ 1\)/.test(theme),
 // not, so no figure may colour text with an attribute again.
 const figures = ["00-task", "00-architecture", "02-one-lane", "03a-single-pass",
                  "03b-multi-stage", "04-plan", "05-evidence", "06-retrieval",
-                 "07-topic18", "08-disagree", "09-overall"];
+                 "07-topic18", "08-disagree", "09-overall", "10-nugget-trace"];
 for (const f of figures) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
   assert(!/<text\b[^>]*\sfill="var\(/.test(svg),
@@ -336,6 +337,19 @@ for (const name of ["slate-light", "slate-dark", "forest-light", "forest-dark"])
   assert(contrast(tok.ink, tok.bg) >= 7 && contrast(tok.muted, tok.bg) >= 4.5,
     `${name}: body text must clear AA on the page ground`);
 }
+
+// ---- the nugget trace is a worked example, not three boxes ----------------
+// Authority and advice are told apart by edge, not only by colour: the
+// selected passages are solid, the generated claims are dashed.
+const trace = fs.readFileSync(path.join(root, "2026-trec-rag-talk/10-nugget-trace.svg"), "utf8");
+for (const fact of ["n092", "n094", "THE AUTHORITY", "ADVISORY ONLY",
+                    "≤20 claims", "is a trap", "standing in for the real passages"]) {
+  assert(trace.includes(fact), `the nugget trace should show: ${fact}`);
+}
+assert((trace.match(/stroke-dasharray="9 6"/g) || []).length === 2,
+  "the two generated claims must be drawn dashed, the passages solid");
+assert(!/\{\.grid-3\}[\s\S]{0,120}Selected passages/.test(qmd),
+  "the nugget slide should be a traced example, not three parallel cards");
 
 // ---- the hedging budget ----------------------------------------------------
 // The deck ends on a slide headed "What I would and would not claim". A warning
@@ -372,7 +386,7 @@ const inlined = (html.match(/<svg\b/gi) || []).length;
 assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> elements`);
 
 // Each figure keeps its own accessible name once inlined.
-for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "ov"]) {
+for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "ov", "ng"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
 }
@@ -381,6 +395,7 @@ for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "
 for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
                           ["03b-multi-stage", "ms"], ["07-topic18", "t18"],
                           ["08-disagree", "dg"], ["09-overall", "ov"],
+                          ["10-nugget-trace", "ng"],
                           ["04-plan", "pl"],
                           ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
@@ -488,8 +503,11 @@ assert(/cosine \*\*0\.94\*\*/.test(qmd), "the evidence slide should show a worke
 assert(flat.includes("standing in for the real passages"),
   "the illustrative sentences must be marked as not being corpus text");
 
-// The nuggetizer's attribution limit, straight from the config.
-assert(/each attributed to at most \*\*3\*\*/.test(qmd),
-  "the nugget slide should state maximum_supporting_documents_per_claim");
+// The nuggetizer's two config limits now live on the figure, where the room
+// can see them next to the claims they bound.
+assert(/≤20 claims/.test(trace),
+  "the nugget trace should state maximum_claims_per_subnarrative");
+assert(/each cites ≤3 documents/.test(trace),
+  "the nugget trace should state maximum_supporting_documents_per_claim");
 
 console.log("reports/2026-trec-rag-talk.test.js OK");
