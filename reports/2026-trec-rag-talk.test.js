@@ -21,16 +21,18 @@ const html = fs.readFileSync(htmlPath, "utf8");
 for (const asset of [
   "2026-trec-rag-talk/theme.scss",
   "2026-trec-rag-talk/02-one-lane.svg",
-  "2026-trec-rag-talk/03-two-writers.svg",
+  "2026-trec-rag-talk/03a-single-pass.svg",
+  "2026-trec-rag-talk/03b-multi-stage.svg",
+  "2026-trec-rag-talk/07-topic18.svg",
+  "2026-trec-rag-talk/08-disagree.svg",
+  "2026-trec-rag-talk/09-overall.svg",
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
   "2026-trec-rag-talk/00-task.svg",
   "2026-trec-rag-talk/00-architecture.svg",
   "2026-trec-rag-talk/img-request.png",
-  "2026-trec-rag-talk/img-writers.png",
   "2026-trec-rag-talk/img-request-forest.png",
-  "2026-trec-rag-talk/img-writers-forest.png",
 ]) {
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
@@ -46,21 +48,30 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 9, `expected 9 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 12, `expected 12 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
+// Only the request scene is left: the two writers at desks were cut, because
+// Sol and Luna are models and drawing them as people at desks obscured the
+// stage machine the slide is actually about.
 const variants = (qmd.match(/\{\.scene-forest aria-hidden="true"\}/g) || []).length;
-assert(variants === 2, `expected 2 hidden scene variants, found ${variants}`);
+assert(variants === 1, `expected 1 hidden scene variant, found ${variants}`);
 const primaries = (qmd.match(/\{\.scene-slate fig-alt=/g) || []).length;
-assert(primaries === 2, `expected 2 described scene images, found ${primaries}`);
+assert(primaries === 1, `expected 1 described scene image, found ${primaries}`);
+assert(!/img-writers/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/img-writers.png")),
+  "the desk illustration was cut; nothing should still point at it");
 assert(!/!\[[^\]]+\]\(/.test(qmd),
   "diagrams must use ![](src){fig-alt=...}, never a bracketed caption");
 
-// The paired structure: every stage has a 'how it works' and an example slide.
-for (const stage of ["Planning", "Searching", "Evidence and nuggets", "Two writers"]) {
-  assert(qmd.includes(`## ${stage}: how it works`) || qmd.includes(`## ${stage}: how it works`),
-    `missing mechanism slide for ${stage}`);
+// The paired structure: every stage has a mechanism slide and an example slide.
+// The two writers are now a slide each, so that pair is named differently.
+for (const stage of ["Planning", "Searching", "Evidence and nuggets"]) {
+  assert(qmd.includes(`## ${stage}: how it works`), `missing mechanism slide for ${stage}`);
+}
+for (const head of ["## Single-pass: Sol alone", "## Multi-stage: the work changes hands",
+                    "## What a plan actually contains", "## Two writers: this request"]) {
+  assert(qmd.includes(head), `missing slide: ${head}`);
 }
 for (const stage of ["Planning", "Two writers", "Evidence and nuggets"]) {
   assert(qmd.includes(`## ${stage}: this request`),
@@ -68,15 +79,35 @@ for (const stage of ["Planning", "Two writers", "Evidence and nuggets"]) {
 }
 
 // Both worked examples, and the numbers quoted for them.
+// The scored numbers moved out of tables and into charts, so each is checked
+// where it now lives. A number that is only in prose is no longer a number the
+// room can see.
 const requiredFacts = [
   "rag2026-18",
   "rag2026-13",
   "lead hazards", "made lead-safe",
-  "0.857", "1.000", "0.929", "0.786",   // rag2026-18 nuggets vs field median
-  "62.9%", "45.0%",                      // assessor battle win rates
-  "0.4116", "0.3499",                    // retrieval precision vs median
-  "0.757", "0.653",                      // RAGDoll citation support, favours single-pass
+  "22 statements · 504 words", "38 statements · 800 words",
 ];
+const chartedFacts = [
+  ["07-topic18", ["0.857", "1.000", "0.929", "0.786", "7 preferred", "3 lost", "6 preferred"]],
+  ["08-disagree", ["1.000", "0.857", "5 of 10", "8 of 12"]],
+  ["09-overall", ["62.9%", "45.0%", "399", "422", "26", "15"]],
+  ["06-retrieval", ["0.4116", "0.3499"]],
+];
+for (const [fig, facts] of chartedFacts) {
+  const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
+  for (const fact of facts) {
+    assert(svg.includes(fact), `${fig}.svg should plot: ${fact}`);
+  }
+}
+// 26 + 15 + 1 = 42, drawn as one square per topic rather than asserted.
+const grid = fs.readFileSync(path.join(root, "2026-trec-rag-talk/09-overall.svg"), "utf8");
+const cells = (grid.match(/<rect x="\d+" y="\d+" width="30" height="30"/g) || []).length;
+assert(cells === 42, `the overall figure should draw 42 topic squares, found ${cells}`);
+// RAGDoll favoured single-pass; that stays in the limits slide's own words.
+for (const fact of ["0.757", "0.653"]) {
+  assert(qmd.includes(fact), `the limits slide should keep: ${fact}`);
+}
 for (const fact of requiredFacts) {
   assert(qmd.includes(fact), `deck should quote: ${fact}`);
 }
@@ -108,8 +139,8 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 19,
-  `expected 19 content slides, found ${sections.length}`);
+assert(sections.length === 20,
+  `expected 20 content slides, found ${sections.length}`);
 assert(!/01-approach/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/01-approach.svg")),
   "the funnel figure was cut; nothing should still point at it");
 
@@ -122,7 +153,9 @@ assert(!/head-to-head/i.test(qmd),
 for (const stale of ["rag2026-17", "out-of-home", "maltreatment", "preterm", "NICU"]) {
   assert(!qmd.includes(stale), `deck still references the retired example: ${stale}`);
 }
-for (const fig of ["02-one-lane", "04-plan", "05-evidence", "06-retrieval"]) {
+for (const fig of ["02-one-lane", "04-plan", "05-evidence", "06-retrieval",
+                   "03a-single-pass", "03b-multi-stage", "07-topic18",
+                   "08-disagree", "09-overall"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   for (const stale of ["maltreatment", "preterm", "NICU"]) {
     assert(!svg.includes(stale), `${fig}.svg still references the retired example: ${stale}`);
@@ -162,6 +195,8 @@ for (const mech of ["all-MiniLM-L6-v2", "0.92", "MMR"]) {
 // only the kept/rejected decisions are private.
 assert(!/no per-topic audit log/.test(qmd),
   "the per-topic audit counts are published in the release; don't deny them");
+assert(!/\b(she|her|hers)\b/i.test(qmd.replace(/\bwhether\b/gi, "")),
+  "Luna is a model; the deck should not give it a gender");
 assert(flat.includes("every evidence group, no sampling"),
   "the Luna slide should state the audit breadth the trace records");
 
@@ -175,11 +210,24 @@ for (const cap of ["≤1,000", "≤100", "≤40", "≤20"]) {
 assert(!/measured yield|conceptual/.test(lane),
   "the lane figure should not re-explain the ≤ in a footnote");
 
-// ---- the two-writers figure ----------------------------------------------
-// It names three actors and both models, and draws the five handoffs that the
-// bounded-revision state machine actually records
-// (planner, draft, audit_groups, revision, operation_screen).
-const writers = fs.readFileSync(path.join(root, "2026-trec-rag-talk/03-two-writers.svg"), "utf8");
+// ---- the two writers, now a slide each ------------------------------------
+// The relay draws the five handoffs the bounded-revision state machine records
+// (planner, draft, audit_groups, revision, operation_screen) — one pass, no
+// round counter — and single-pass draws the two steps it actually has.
+const single = fs.readFileSync(path.join(root, "2026-trec-rag-talk/03a-single-pass.svg"), "utf8");
+const writers = fs.readFileSync(path.join(root, "2026-trec-rag-talk/03b-multi-stage.svg"), "utf8");
+assert(!fs.existsSync(path.join(root, "2026-trec-rag-talk/03-two-writers.svg")),
+  "the combined two-writers figure was split; it should not still be on disk");
+
+for (const fact of [
+  "openai/gpt-5.6-sol",         // Sol, the writer
+  "at most 1,024 words",        // the organizer word limit, checked locally
+  "used on 2 of 119",           // the measured single-pass retry count
+  "119 answers",
+]) {
+  assert(single.includes(fact), `the single-pass figure should show: ${fact}`);
+}
+
 for (const fact of [
   "openai/gpt-5.6-luna",        // Luna, the reviewer
   "openai/gpt-5.6-sol",         // Sol, the writer
@@ -189,18 +237,22 @@ for (const fact of [
   "Proposes edits",
   "Screens each edit",
   "≤6 cards per group",         // MAX_AUDIT_CARDS_PER_GROUP
+  "at most 3",                  // MAX_SOL_RESERVATIONS
   "applies only",               // local code applies the passed edits, nothing else
 ]) {
-  assert(writers.includes(fact), `the two-writers figure should show: ${fact}`);
+  assert(writers.includes(fact), `the multi-stage figure should show: ${fact}`);
 }
-// The state machine has one boolean per stage and no round counter, so the
-// figure must not imply the revision repeats.
 assert(/not a repeating loop/.test(writers),
-  "the two-writers figure must say the relay is a single pass");
-assert(/used on 2 of 119/.test(writers),
-  "the two-writers figure should carry the measured single-pass retry count");
+  "the multi-stage figure must say the relay is a single pass");
 for (const n of ["1", "2", "3", "4", "5"]) {
   assert(writers.includes(`>${n}</text>`), `the relay should number step ${n}`);
+}
+// Each one keeps the lane labels that say who did what.
+for (const [svg, who] of [[single, ["Sol", "local code"]],
+                          [writers, ["Luna", "Sol", "local code"]]]) {
+  for (const name of who) {
+    assert(svg.includes(`>${name}</text>`), `the figure should label the lane: ${name}`);
+  }
 }
 
 // Role glyphs must beat Reveal's own `.reveal section svg { display: block }`,
@@ -218,12 +270,14 @@ assert(glyphs >= 15, `expected the deck's symbol set, found ${glyphs} glyphs`);
 // Sol means sun and Luna means moon, so the marks are the names. They have to
 // agree between the figure and the prose, and the old nib/magnifier pair that
 // carried no such meaning must be gone from both.
-assert(/id="tw-g-sun"/.test(writers) && /id="tw-g-moon"/.test(writers),
-  "the two-writers figure must mark Sol as a sun and Luna as a moon");
+assert(/id="sp-g-sun"/.test(single),
+  "the single-pass figure must mark Sol as a sun");
+assert(/id="ms-g-sun"/.test(writers) && /id="ms-g-moon"/.test(writers),
+  "the multi-stage figure must mark Sol as a sun and Luna as a moon");
 assert((qmd.match(/class="glyph g-sun"/g) || []).length === 2 &&
        (qmd.match(/class="glyph g-moon"/g) || []).length === 2,
   "Sol and Luna keep their marks on the slides that name them");
-for (const src of [qmd, writers]) {
+for (const src of [qmd, single, writers]) {
   assert(!/M0 -13 L8 3 L0 12/.test(src) && !/cx="-2" cy="-3" r="8\.5"/.test(src),
     "the old pen-nib and magnifier glyphs should be gone");
 }
@@ -247,8 +301,9 @@ assert(/nth-child\(3n \+ 1\)/.test(theme),
 // label, numbered chip and knockout label renders as plain ink. One of them
 // was ink on its own accent bar at 1.05:1. Inline styles win; attributes do
 // not, so no figure may colour text with an attribute again.
-const figures = ["00-task", "00-architecture", "02-one-lane", "03-two-writers",
-                 "04-plan", "05-evidence", "06-retrieval"];
+const figures = ["00-task", "00-architecture", "02-one-lane", "03a-single-pass",
+                 "03b-multi-stage", "04-plan", "05-evidence", "06-retrieval",
+                 "07-topic18", "08-disagree", "09-overall"];
 for (const f of figures) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
   assert(!/<text\b[^>]*\sfill="var\(/.test(svg),
@@ -291,16 +346,20 @@ assert(boxes <= 3, `at most 3 boundary boxes, found ${boxes}`);
 assert(/What I would and would not claim/.test(qmd),
   "the limits must still have a slide of their own");
 
-// ---- the planner's prompt, quoted ------------------------------------------
-for (const line of [
-  "Plan retrieval over a very large passage collection using only the supplied",
-  "Do not answer the topic.",
-  "schema-constrained JSON plan",
-  "one to eight",
-  "one to three plain BM25 queries",
-  "only the supplied narrative",
-]) {
-  assert(flat.includes(line), `the prompt slide should quote: ${line}`);
+// The prompt slide was cut — it was a screenful of monospace. The one line
+// that carried the point stays, on the planning figure's own slide.
+assert(flat.includes('**"Do not answer the topic."**'),
+  "the planner's governing instruction must survive the prompt slide being cut");
+assert(!/promptbox|promptlead/.test(qmd), "nothing should still reference the prompt slide");
+
+// ---- what a plan contains, from narrative_blueprint.py ---------------------
+for (const field of ["label", "narrative_spans", "priority", "answer_mode",
+                     "target_words", "selected_claim_aliases"]) {
+  assert(qmd.includes(`>${field}</span>`), `the plan slide should name the field: ${field}`);
+}
+for (const fact of ["3 to 8 obligations", "850–950 words", "character-for-character",
+                    "resolved locally"]) {
+  assert(flat.includes(fact), `the plan slide should state: ${fact}`);
 }
 
 // ---- palettes and inlined figures -----------------------------------------
@@ -313,14 +372,16 @@ const inlined = (html.match(/<svg\b/gi) || []).length;
 assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> elements`);
 
 // Each figure keeps its own accessible name once inlined.
-for (const id of ["tk", "ar", "ln", "tw", "pl", "ev", "rt"]) {
+for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "ov"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
 }
 
 // Six style blocks now share one document, so every figure class is namespaced.
-for (const [fig, tok] of [["02-one-lane", "ln"],
-                          ["03-two-writers", "tw"], ["04-plan", "pl"],
+for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
+                          ["03b-multi-stage", "ms"], ["07-topic18", "t18"],
+                          ["08-disagree", "dg"], ["09-overall", "ov"],
+                          ["04-plan", "pl"],
                           ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   const classes = new Set();
@@ -336,7 +397,7 @@ for (const [fig, tok] of [["02-one-lane", "ln"],
 assert(!/:root\s*\{\s*color-scheme/.test(html),
   "inlined figures must not carry their own :root palette into the page");
 // ...but they keep it on disk, so each file still renders when opened alone.
-for (const fig of ["02-one-lane", "03-two-writers", "05-evidence"]) {
+for (const fig of ["02-one-lane", "03a-single-pass", "03b-multi-stage", "05-evidence"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   assert(/:root\s*\{[^}]*--bg:/.test(svg),
     `${fig}.svg should keep its own :root so it renders standalone`);

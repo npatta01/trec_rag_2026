@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 480" role="img" aria-labelledby="dg-title dg-desc">
+  <title id="dg-title">On rag2026-13 the two measures rank the runs opposite ways</title>
+  <desc id="dg-desc">Two panels. On the left, the automated rubric: all nuggets supported, single-pass 1.000 against multi-stage 0.857, so the rubric puts single-pass ahead. On the right, the human assessors: single-pass was preferred in five of its ten battles, a 50 per cent win rate, while multi-stage was preferred in eight of its twelve, a 66.7 per cent win rate, so the assessors put multi-stage ahead. An arrow in each panel points at that panel's winner, and the two arrows point at different runs. The rubric items were not released, so which items were credited cannot be named.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .dg-head{font-size:27px;font-weight:780}
+    .dg-who{font-size:21px;fill:var(--muted)}
+    .dg-val{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
+    .dg-win{font-size:21px;font-weight:800;letter-spacing:.05em}
+    .dg-sub{font-size:19px;fill:var(--muted)}
+  </style>
+  <rect width="1600" height="480" fill="var(--bg)"/>
+
+  <rect x="40" y="24" width="720" height="380" rx="14" fill="var(--panel)" opacity=".5"/>
+  <rect x="40" y="24" width="720" height="380" rx="14" fill="none" stroke="var(--line)" stroke-width="2" opacity=".5"/>
+  <text class="dg-head" x="72" y="70">The automated rubric</text>
+  <text class="dg-sub"  x="72" y="98">all nuggets supported</text>
+
+  <text class="dg-who" x="72" y="156">single-pass</text>
+  <rect x="260" y="134" width="400" height="34" rx="6" fill="var(--ret)"/>
+  <text class="dg-val" x="676" y="160" style="fill:var(--ret)">1.000</text>
+  <text class="dg-who" x="72" y="222">multi-stage</text>
+  <rect x="260" y="200" width="343" height="34" rx="6" fill="var(--gen)"/>
+  <text class="dg-val" x="619" y="226" style="fill:var(--gen)">0.857</text>
+
+  <path d="M120 290 V326 H260" fill="none" stroke="var(--ret)" stroke-width="3" marker-end="url(#dga)"/>
+  <text class="dg-win" x="276" y="334" style="fill:var(--ret)">PUTS SINGLE-PASS AHEAD</text>
+  <text class="dg-sub" x="72" y="378">The rubric items were not released, so I cannot say what was credited.</text>
+
+  <rect x="840" y="24" width="720" height="380" rx="14" fill="var(--panel)" opacity=".5"/>
+  <rect x="840" y="24" width="720" height="380" rx="14" fill="none" stroke="var(--line)" stroke-width="2" opacity=".5"/>
+  <text class="dg-head" x="872" y="70">The human assessors</text>
+  <text class="dg-sub"  x="872" y="98">share of its own battles preferred</text>
+
+  <text class="dg-who" x="872" y="156">single-pass</text>
+  <rect x="1060" y="134" width="400" height="34" rx="6" fill="var(--ret-soft)"/>
+  <rect x="1060" y="134" width="200" height="34" rx="6" fill="var(--ret)"/>
+  <text class="dg-val" x="1476" y="160" style="fill:var(--ret)">5 of 10</text>
+  <text class="dg-who" x="872" y="222">multi-stage</text>
+  <rect x="1060" y="200" width="400" height="34" rx="6" fill="var(--gen-soft)"/>
+  <rect x="1060" y="200" width="267" height="34" rx="6" fill="var(--gen)"/>
+  <text class="dg-val" x="1476" y="226" style="fill:var(--gen)">8 of 12</text>
+
+  <path d="M920 290 V326 H1060" fill="none" stroke="var(--gen)" stroke-width="3" marker-end="url(#dgb)"/>
+  <text class="dg-win" x="1076" y="334" style="fill:var(--gen)">PUTS MULTI-STAGE AHEAD</text>
+  <text class="dg-sub" x="872" y="378">Different battle counts, so the bars are shares, not totals.</text>
+
+  <text class="dg-head" x="800" y="452" text-anchor="middle">Same two answers. Opposite ranking.</text>
+  <defs>
+    <marker id="dga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+    <marker id="dgb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+</svg>

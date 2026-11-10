@@ -92,50 +92,11 @@ How it works
 :::
 
 ::: {.cap}
-Planning only — it never sees a document and is never called again. Deliberately
-not an agentic loop. **At most 25 searches** per topic.
+The instruction's own words: **"Do not answer the topic."** The planner
+proposes searches, never findings — it never sees a document and is never
+called again. **At most 25 searches** per topic.
 :::
 
-## The prompt that does the planning
-
-::: {.eyebrow}
-How it works · the planner's whole instruction, word for word
-:::
-
-::: {.promptlead}
-Plan retrieval over a very large passage collection using only the supplied
-official topic narrative. [Do not answer the topic.]{.hl} Return only the
-schema-constrained JSON plan.
-:::
-
-::: {.grid-3}
-::: {.card .card-gen}
-[Rule 1 · how many]{.card-label}
-Generate **one to eight** concise subnarratives that together preserve the
-narrative's requested subjects, relations, comparisons, constraints, and
-uncertainty.
-:::
-
-::: {.card .card-gen}
-[Rule 2 · what kind]{.card-label}
-Give each subnarrative **one to three plain BM25 queries**. Queries must be
-useful lexical alternatives, **not answers**, and must not contain query
-operators or field syntax.
-:::
-
-::: {.card .card-gen}
-[Rule 3 · nothing else]{.card-label}
-Use **only the supplied narrative**.
-
-The planner never sees a document, so it cannot smuggle in an answer it has
-already read.
-:::
-:::
-
-::: {.cap}
-Four sentences and three rules — the whole thing. The highlighted sentence does
-the heavy lifting: the planner proposes searches, never findings.
-:::
 ## Planning: this request
 
 ::: {.trace-step}
@@ -251,23 +212,84 @@ passages.
 days, so the definition settles nothing on its own. These are our own hints —
 the organizers' gold nuggets are a separate thing, written by assessors.
 :::
-## Two writers: how it works
+## Single-pass: Sol alone
 
 ::: {.eyebrow}
-How it works
+How it works · two steps
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/03-two-writers.svg){fig-alt="Two swimlane strips fed by the same sealed evidence. Time runs left to right and the lane says who did it: Sol the writer is a sun, Luna the reviewer a crescent moon, local code a pair of angle brackets. Single-pass is two steps wide — Sol writes, local code checks schema, citations and word limit, with one retry back to Sol, used on two of 119. Multi-stage is seven steps wide and zigzags between the lanes: Luna plans, Sol drafts, Luna audits each evidence group returning at most six cards per group, local code merges them, Sol proposes edits, Luna screens each against five booleans that must all pass, and local code applies only what passed. One pass through the stages, not a repeating loop; if revision fails the already validated draft stands."}
+![](2026-trec-rag-talk/03a-single-pass.svg){fig-alt="A two-lane strip. Sol, marked with a sun, writes the answer in one call. Local code, marked with angle brackets, then validates it against three things: the output schema, that every citation names a document the topic may cite, and a limit of 1,024 words. A dashed arrow runs back to Sol for one retry, used on two of the 119 requests. The result is 119 validated answers, one model call each."}
+:::
+
+::: {.cap}
+Two steps and one model call. **117 of the 119 passed validation first try** —
+this is the baseline the extra stages have to beat.
+:::
+
+## Multi-stage: the work changes hands
+
+::: {.eyebrow}
+How it works · five handoffs
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/03b-multi-stage.svg){fig-alt="A three-lane strip fed by the same sealed evidence. Luna is a crescent moon, Sol a sun, local code a pair of angle brackets. The path zigzags between lanes seven times: Luna plans, Sol writes the draft, Luna audits each evidence group returning at most six cards per group, local code merges them, Sol proposes at most three edits, Luna screens each against five booleans that must all pass, and local code applies only what passed. One pass through the stages, not a repeating loop; if revision fails the already validated draft stands."}
 :::
 
 ::: {.cap}
 **Sol writes; Luna only judges; local code decides.** The lane a box sits in
-says who did it, so the zigzag *is* the handoff — five of them for multi-stage,
-none for single-pass. Multi-stage starts from the evidence, not from the
-single-pass answer.
+says who did it, so the zigzag *is* the handoff. Multi-stage starts from the
+evidence, not from the single-pass answer.
 :::
-## What Luna keeps, and what she throws out
+
+## What a plan actually contains
+
+::: {.eyebrow}
+How it works · multi-stage, step 1
+:::
+
+::: {.pull}
+A plan is **3 to 8 obligations**. That is the whole object.
+:::
+
+::: {.grid-2}
+<div class="record">
+<span class="f-key">label</span><span class="f-val">a short name for this obligation</span>
+<span class="f-key">narrative_spans</span><span class="f-val">1–4 spans <b>copied character-for-character</b> out of the request</span>
+<span class="f-key">priority</span><span class="f-val">must · should · could</span>
+<span class="f-key">answer_mode</span><span class="f-val">describe · explain · compare · evaluate · recommend · enumerate</span>
+<span class="f-key">target_words</span><span class="f-val">a budget for this obligation alone</span>
+<span class="f-key">selected_claim_aliases</span><span class="f-val">c001, c014 … picked from the hints it was handed</span>
+</div>
+
+::: {}
+::: {.card .card-gen}
+[The spans are an authentication boundary]{.card-label}
+Local code checks every span really occurs in the request, and **replaces any
+that does not**.
+:::
+
+::: {.card .card-ret}
+[It cannot invent an identifier]{.card-label}
+Real claim and document IDs are **resolved locally**, never taken from model
+output.
+:::
+
+::: {.card .card-source}
+[The budget is arithmetic]{.card-label}
+Targets must total **850–950 words**, checked before a word is written.
+:::
+:::
+:::
+
+::: {.cap}
+Field names are the schema's, from `narrative_blueprint.py`. A plan says what
+the answer owes the reader and what each part may cite — it holds **no prose**,
+so Luna never writes a sentence of the answer.
+:::
+
+## What Luna's screen keeps, and what it throws out
 
 ::: {.eyebrow}
 How it works · the screening gate
@@ -303,31 +325,28 @@ The example · same sealed evidence, two strategies
 :::
 
 ::: {.grid-2}
-::: {.scene}
-![](2026-trec-rag-talk/img-writers.png){.scene-slate fig-alt="Two desks at night. At the left one figure writes alone on a single page by a desk lamp. At the right three figures stand over a larger page together, one of them pointing at it, the page covered in marks and corrections. Both desks carry the same stack of source documents."}
-![](2026-trec-rag-talk/img-writers-forest.png){.scene-forest aria-hidden="true"}
-:::
-
-::: {}
 ::: {.card .card-ret}
 [<svg class="glyph g-sun" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Single-pass · Sol alone]{.card-label}
 **22 statements · 504 words**
+
+<span class="meter"><span class="meter-bar"><span class="meter-fill fill-ret" style="width:49%"></span></span><span class="meter-cap">504 words of the 1,024-word ceiling</span></span>
 :::
 
 ::: {.card .card-gen}
 [<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="glyph g-sun" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Multi-stage · Luna and Sol]{.card-label}
 **38 statements · 800 words**
 
+<span class="meter"><span class="meter-bar"><span class="meter-fill fill-gen" style="width:78%"></span></span><span class="meter-cap">800 words of the 1,024-word ceiling</span></span>
+
 <span class="relay"><span class="relay-l"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>plans</span><i>→</i><span class="relay-s"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>drafts</span><i>→</i><span class="relay-l"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>audits</span><i>→</i><span class="relay-s"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>revises</span><i>→</i><span class="relay-l"><svg class="glyph" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>screens</span></span>
-:::
 :::
 :::
 
 ::: {.cap}
-**Left desk is Sol writing alone. Right desk is Luna going over Sol's draft.**
-Both spotted the 30-day trap — single-pass noted six weeks exceeds it;
-multi-stage added that the definition alone *does not establish* whether a
-particular six-week sublet is lawful.
+Same sealed evidence, same ceiling. Multi-stage spent **more of the budget and
+made 16 more statements**. Both spotted the 30-day trap — single-pass noted six
+weeks exceeds it; multi-stage added that the definition alone *does not
+establish* whether a particular six-week sublet is lawful.
 :::
 ## The difference you can see
 
@@ -360,13 +379,9 @@ separately that there is a child. One writer joined those two facts.
 The example · NIST Batch 2, human-written nuggets
 :::
 
-| rag2026-18 | Single-pass | Multi-stage | Field median |
-|:---|---:|---:|---:|
-| Vital nuggets supported | 0.857 | [**1.000**]{.win} | 0.857 |
-| All nuggets supported | 0.929 | [**1.000**]{.win} | 0.786 |
-| Assessor battles fought | 10 | 6 | — |
-| … answer preferred | 7 | 6 | — |
-| … answer rejected | 3 | [**0**]{.win} | — |
+::: {.diagram}
+![](2026-trec-rag-talk/07-topic18.svg){fig-alt="Two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Beside them, the assessor battles for this topic as two stacked bars: single-pass fought ten, seven preferred and three lost; multi-stage fought six, six preferred and none lost."}
+:::
 
 ::: {.boundary}
 **Each run is judged against other teams' answers, not against the other one of
@@ -379,43 +394,23 @@ ours** — so the battle counts never say a human chose between these two. One o
 A different topic · rag2026-13, a founder scaling a startup
 :::
 
-| rag2026-13 | Single-pass | Multi-stage |
-|:---|---:|---:|
-| All nuggets supported | [**1.000**]{.win} | 0.857 |
-| Assessor battles fought | 10 | 12 |
-| … answer preferred | 5 | [**8**]{.win} |
+::: {.diagram}
+![](2026-trec-rag-talk/08-disagree.svg){fig-alt="Two panels. The automated rubric: all nuggets supported, single-pass 1.000 against multi-stage 0.857, with an arrow marking single-pass ahead. The human assessors: single-pass preferred in 5 of its 10 battles, multi-stage in 8 of its 12, with an arrow marking multi-stage ahead. The two arrows point at different runs."}
+:::
 
 ::: {.cap}
-The automated rubric scored single-pass **higher**. The human assessors
-preferred multi-stage in 8 of its 12 battles, against 5 of single-pass's 10.
-**The two measures rank our runs the opposite way round** — and the rubric
-items were not released, so I cannot say what was credited.
+Same two answers, opposite ranking. The rubric items were not released, so I
+cannot say what was credited — only that **the two measures disagree here**.
 :::
+
 ## Overall: 42 scored topics
 
 ::: {.eyebrow}
 Across everything NIST scored
 :::
 
-::: {.stat-row}
-::: {.stat}
-[26]{.n} [topics where multi-stage supported more nuggets]{.k}
-:::
-::: {.stat .stat-adv}
-[15]{.n} [topics where the two tied exactly]{.k}
-:::
-::: {.stat .stat-gen}
-[1]{.n} [topic where single-pass did better]{.k}
-:::
-:::
-
-::: {.stat-row}
-::: {.stat .stat-ok}
-[62.9%]{.n} [of multi-stage's 399 assessor battles were won]{.k}
-:::
-::: {.stat}
-[45.0%]{.n} [of single-pass's 422 battles were won]{.k}
-:::
+::: {.diagram}
+![](2026-trec-rag-talk/09-overall.svg){fig-alt="A grid of 42 squares, one per scored topic: 26 filled in the multi-stage colour where multi-stage supported more nuggets, 15 outlined where the two tied exactly, and 1 filled in the single-pass colour where single-pass did better. Below, each run's assessor record as a share of its own battles: multi-stage won 62.9 per cent of 399, single-pass 45.0 per cent of 422."}
 :::
 
 ::: {.boundary}

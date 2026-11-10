@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 560" role="img" aria-labelledby="ov-title ov-desc">
+  <title id="ov-title">All 42 scored topics, and both runs' assessor records</title>
+  <desc id="ov-desc">Above, a grid of 42 squares, one per scored topic, grouped by outcome. Twenty-six squares are filled in the multi-stage colour: topics where multi-stage supported more nuggets. Fifteen are outlined in grey: topics where the two tied exactly. One is filled in the single-pass colour: the single topic where single-pass did better. Below, two bars showing each run's assessor record as a share of its own battles. Multi-stage won 62.9 per cent of its 399 battles; single-pass won 45.0 per cent of its 422. Each run is judged against other teams' answers, so the two bars are separate samples rather than a head-to-head.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .ov-kick{font-size:21px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+    .ov-n{font-size:46px;font-weight:800;font-variant-numeric:tabular-nums}
+    .ov-lab{font-size:21px;font-weight:700}
+    .ov-sub{font-size:19px;fill:var(--muted)}
+    .ov-pct{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums}
+  </style>
+  <rect width="1600" height="560" fill="var(--bg)"/>
+
+  <text class="ov-kick" x="40" y="36">ONE SQUARE PER SCORED TOPIC · 42 IN ALL</text>
+
+  <g id="ov-cells">
+    <rect x="40" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="78" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="116" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="154" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="192" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="230" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="268" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="306" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="344" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="382" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="420" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="458" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="496" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="534" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="572" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="610" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="648" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="686" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="724" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="762" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="800" y="62" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="40" y="100" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="78" y="100" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="116" y="100" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="154" y="100" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="192" y="100" width="30" height="30" rx="5" fill="var(--gen)" stroke="var(--gen)" stroke-width="2.6"/>
+    <rect x="230" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="268" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="306" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="344" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="382" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="420" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="458" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="496" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="534" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="572" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="610" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="648" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="686" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="724" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="762" y="100" width="30" height="30" rx="5" fill="none" stroke="var(--line)" stroke-width="2.6"/>
+    <rect x="800" y="100" width="30" height="30" rx="5" fill="var(--ret)" stroke="var(--ret)" stroke-width="2.6"/>
+  </g>
+
+  <text class="ov-n"   x="40"  y="212" style="fill:var(--gen)">26</text>
+  <text class="ov-lab" x="40"  y="242">multi-stage supported more</text>
+  <text class="ov-n"   x="600" y="212" style="fill:var(--muted)">15</text>
+  <text class="ov-lab" x="600" y="242">tied exactly</text>
+  <text class="ov-n"   x="1000" y="212" style="fill:var(--ret)">1</text>
+  <text class="ov-lab" x="1000" y="242">single-pass did better</text>
+
+  <text class="ov-kick" x="40" y="314">ASSESSOR BATTLES WON — EACH RUN AGAINST THE FIELD, NOT AGAINST EACH OTHER</text>
+
+  <rect x="40" y="340" width="1120" height="52" rx="26" fill="var(--gen-soft)"/>
+  <rect x="40" y="340" width="705"  height="52" rx="26" fill="var(--gen)"/>
+  <text class="ov-pct" x="1180" y="379" style="fill:var(--gen)">62.9%</text>
+  <text class="ov-lab" x="64"  y="374" style="fill:var(--bg)">Multi-stage</text>
+  <text class="ov-sub" x="1320" y="377">of 399 battles</text>
+
+  <rect x="40" y="416" width="1120" height="52" rx="26" fill="var(--ret-soft)"/>
+  <rect x="40" y="416" width="504"  height="52" rx="26" fill="var(--ret)"/>
+  <text class="ov-pct" x="1180" y="455" style="fill:var(--ret)">45.0%</text>
+  <text class="ov-lab" x="64"  y="450" style="fill:var(--bg)">Single-pass</text>
+  <text class="ov-sub" x="1320" y="453">of 422 battles</text>
+
+  <text class="ov-sub" x="40" y="520">The bar length is each run's own win rate. A longer bar is not a win over the other run — they never met.</text>
+</svg>

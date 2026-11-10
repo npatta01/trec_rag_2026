@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 540" role="img" aria-labelledby="t18-title t18-desc">
+  <title id="t18-title">rag2026-18 scored by the organizers, both runs and the field median</title>
+  <desc id="t18-desc">On the left, two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Multi-stage reaches the full bar in both. On the right, the assessor battles for this topic, drawn as two stacked bars. Single-pass fought ten battles: seven where its answer was preferred and three where it was rejected. Multi-stage fought six: six preferred and none rejected. Each run is judged against other teams' answers, so the two stacks are separate samples and never say a human chose between these two.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .t18-kick{font-size:21px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+    .t18-grp{font-size:25px;font-weight:760}
+    .t18-who{font-size:19px;fill:var(--muted)}
+    .t18-val{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+    .t18-n{font-size:21px;font-weight:800}
+    .t18-sub{font-size:19px;fill:var(--muted)}
+    .t18-ax{stroke:var(--line);stroke-width:1.5;opacity:.5}
+  </style>
+  <rect width="1600" height="540" fill="var(--bg)"/>
+
+  <text class="t18-kick" x="40" y="36">NUGGETS SUPPORTED · 0 TO 1</text>
+
+  <line class="t18-ax" x1="300" y1="56" x2="300" y2="430"/>
+  <line class="t18-ax" x1="860" y1="56" x2="860" y2="430"/>
+  <text class="t18-sub" x="300" y="452">0</text>
+  <text class="t18-sub" x="846" y="452">1.0</text>
+
+  <text class="t18-grp" x="40" y="96">Vital nuggets</text>
+  <text class="t18-who" x="40" y="130">single-pass</text>
+  <rect x="300" y="110" width="480" height="28" rx="6" fill="var(--ret)"/>
+  <text class="t18-val" x="800" y="133" style="fill:var(--ret)">0.857</text>
+  <text class="t18-who" x="40" y="172">multi-stage</text>
+  <rect x="300" y="152" width="560" height="28" rx="6" fill="var(--gen)"/>
+  <text class="t18-val" x="880" y="175" style="fill:var(--gen)">1.000</text>
+  <text class="t18-who" x="40" y="214">field median</text>
+  <rect x="300" y="194" width="480" height="28" rx="6" fill="var(--line)" opacity=".45"/>
+  <text class="t18-val" x="800" y="217" style="fill:var(--muted)">0.857</text>
+
+  <text class="t18-grp" x="40" y="286">All nuggets</text>
+  <text class="t18-who" x="40" y="320">single-pass</text>
+  <rect x="300" y="300" width="520" height="28" rx="6" fill="var(--ret)"/>
+  <text class="t18-val" x="840" y="323" style="fill:var(--ret)">0.929</text>
+  <text class="t18-who" x="40" y="362">multi-stage</text>
+  <rect x="300" y="342" width="560" height="28" rx="6" fill="var(--gen)"/>
+  <text class="t18-val" x="880" y="365" style="fill:var(--gen)">1.000</text>
+  <text class="t18-who" x="40" y="404">field median</text>
+  <rect x="300" y="384" width="440" height="28" rx="6" fill="var(--line)" opacity=".45"/>
+  <text class="t18-val" x="760" y="407" style="fill:var(--muted)">0.786</text>
+
+  <!-- the battles, as their own panel: a different sample, not a duel -->
+  <line class="t18-ax" x1="1000" y1="30" x2="1000" y2="470"/>
+  <text class="t18-kick" x="1040" y="36">ASSESSOR BATTLES ON THIS TOPIC</text>
+
+  <text class="t18-who" x="1040" y="118">single-pass · 10 fought</text>
+  <rect x="1040" y="132" width="294" height="44" rx="6" fill="var(--ret)"/>
+  <rect x="1334" y="132" width="126" height="44" rx="6" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.4"/>
+  <text class="t18-n" x="1187" y="161" text-anchor="middle" style="fill:var(--bg)">7 preferred</text>
+  <text class="t18-n" x="1397" y="161" text-anchor="middle" style="fill:var(--adv)">3 lost</text>
+
+  <text class="t18-who" x="1040" y="236">multi-stage · 6 fought</text>
+  <rect x="1040" y="250" width="252" height="44" rx="6" fill="var(--gen)"/>
+  <text class="t18-n" x="1166" y="279" text-anchor="middle" style="fill:var(--bg)">6 preferred</text>
+  <text class="t18-n" x="1310" y="279" style="fill:var(--muted)">none lost</text>
+
+  <text class="t18-sub" x="1040" y="356">Bar width is one battle each, so the</text>
+  <text class="t18-sub" x="1040" y="380">two rows are not the same length.</text>
+  <text class="t18-sub" x="1040" y="420">Every battle is against another team's</text>
+  <text class="t18-sub" x="1040" y="444">answer — never against the other run.</text>
+</svg>

@@ -29,58 +29,58 @@
   <text class="ar-kick" x="40" y="48">FIVE COMPONENTS · THE SAME CHAIN FOR ALL 119 REQUESTS</text>
 
   <!-- 1 plan -->
-  <rect x="40" y="96" width="266" height="128" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
-  <circle cx="76" cy="130" r="19" fill="var(--panel)" stroke="var(--gen)" stroke-width="2.2"/>
-  <g transform="translate(76,130)" style="color:var(--gen)"><use href="#ar-g-plan"/></g>
+  <rect x="40" y="96" width="266" height="128" rx="12" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="3"/>
+  <circle cx="76" cy="130" r="19" fill="var(--panel)" stroke="var(--s1)" stroke-width="2.2"/>
+  <g transform="translate(76,130)" style="color:var(--s1)"><use href="#ar-g-plan"/></g>
   <text class="ar-step"  x="106" y="140">Plan</text>
-  <circle cx="280" cy="118" r="13" fill="var(--gen)"/>
-  <text class="ar-num"   x="280" y="124" text-anchor="middle" style="fill:var(--gen-soft)">1</text>
+  <circle cx="280" cy="118" r="13" fill="var(--s1)"/>
+  <text class="ar-num"   x="280" y="124" text-anchor="middle" style="fill:var(--s1-soft)">1</text>
   <text class="ar-model" x="64" y="180">deepseek-v4-flash</text>
   <text class="ar-tick"  x="64" y="206">one call, never repeated</text>
 
   <path class="ar-flow" d="M306 160 H344"/>
 
   <!-- 2 search -->
-  <rect x="348" y="96" width="266" height="128" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
-  <circle cx="384" cy="130" r="19" fill="var(--panel)" stroke="var(--ret)" stroke-width="2.2"/>
-  <g transform="translate(384,130)" style="color:var(--ret)"><use href="#ar-g-search"/></g>
+  <rect x="348" y="96" width="266" height="128" rx="12" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="3"/>
+  <circle cx="384" cy="130" r="19" fill="var(--panel)" stroke="var(--s2)" stroke-width="2.2"/>
+  <g transform="translate(384,130)" style="color:var(--s2)"><use href="#ar-g-search"/></g>
   <text class="ar-step"  x="414" y="140">Search</text>
-  <circle cx="588" cy="118" r="13" fill="var(--ret)"/>
-  <text class="ar-num"   x="588" y="124" text-anchor="middle" style="fill:var(--ret-soft)">2</text>
+  <circle cx="588" cy="118" r="13" fill="var(--s2)"/>
+  <text class="ar-num"   x="588" y="124" text-anchor="middle" style="fill:var(--s2-soft)">2</text>
   <text class="ar-model" x="372" y="180">Pyserini BM25</text>
   <text class="ar-tick"  x="372" y="206">the ClimbMix collection</text>
 
   <path class="ar-flow" d="M614 160 H652"/>
 
   <!-- 3 rerank -->
-  <rect x="656" y="96" width="266" height="128" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
-  <circle cx="692" cy="130" r="19" fill="var(--panel)" stroke="var(--ret)" stroke-width="2.2"/>
-  <g transform="translate(692,130)" style="color:var(--ret)"><use href="#ar-g-rank"/></g>
+  <rect x="656" y="96" width="266" height="128" rx="12" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="3"/>
+  <circle cx="692" cy="130" r="19" fill="var(--panel)" stroke="var(--s3)" stroke-width="2.2"/>
+  <g transform="translate(692,130)" style="color:var(--s3)"><use href="#ar-g-rank"/></g>
   <text class="ar-step"  x="722" y="140">Rerank</text>
-  <circle cx="896" cy="118" r="13" fill="var(--ret)"/>
-  <text class="ar-num"   x="896" y="124" text-anchor="middle" style="fill:var(--ret-soft)">3</text>
+  <circle cx="896" cy="118" r="13" fill="var(--s3)"/>
+  <text class="ar-num"   x="896" y="124" text-anchor="middle" style="fill:var(--s3-soft)">3</text>
   <text class="ar-model" x="680" y="180">mxbai-rerank-base-v2</text>
   <text class="ar-tick"  x="680" y="206">chunk, then score</text>
 
   <path class="ar-flow" d="M922 160 H960"/>
 
   <!-- 4 select -->
-  <rect x="964" y="96" width="266" height="128" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
-  <circle cx="1000" cy="130" r="19" fill="var(--panel)" stroke="var(--ret)" stroke-width="2.2"/>
-  <g transform="translate(1000,130)" style="color:var(--ret)"><use href="#ar-g-filter"/></g>
+  <rect x="964" y="96" width="266" height="128" rx="12" fill="var(--s4-soft)" stroke="var(--s4)" stroke-width="3"/>
+  <circle cx="1000" cy="130" r="19" fill="var(--panel)" stroke="var(--s4)" stroke-width="2.2"/>
+  <g transform="translate(1000,130)" style="color:var(--s4)"><use href="#ar-g-filter"/></g>
   <text class="ar-step"  x="1030" y="140">Select</text>
-  <circle cx="1204" cy="118" r="13" fill="var(--ret)"/>
-  <text class="ar-num"   x="1204" y="124" text-anchor="middle" style="fill:var(--ret-soft)">4</text>
+  <circle cx="1204" cy="118" r="13" fill="var(--s4)"/>
+  <text class="ar-num"   x="1204" y="124" text-anchor="middle" style="fill:var(--s4-soft)">4</text>
   <text class="ar-model" x="988" y="180">all-MiniLM-L6-v2</text>
   <text class="ar-tick"  x="988" y="206">drop duplicates, spread</text>
 
   <path class="ar-flow" d="M1230 160 H1268"/>
 
   <!-- 5 write — the two writers get their marks here, and keep them all talk -->
-  <rect x="1272" y="96" width="288" height="128" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <rect x="1272" y="96" width="288" height="128" rx="12" fill="var(--s5-soft)" stroke="var(--s5)" stroke-width="3"/>
   <text class="ar-step"  x="1296" y="140">Write</text>
-  <circle cx="1512" cy="118" r="13" fill="var(--gen)"/>
-  <text class="ar-num"   x="1512" y="124" text-anchor="middle" style="fill:var(--gen-soft)">5</text>
+  <circle cx="1512" cy="118" r="13" fill="var(--s5)"/>
+  <text class="ar-num"   x="1512" y="124" text-anchor="middle" style="fill:var(--s5-soft)">5</text>
   <g transform="translate(1300,174)" style="color:var(--ret)"><use href="#ar-g-sun"/></g>
   <text class="ar-model" x="1318" y="180">gpt-5.6-sol</text>
   <g transform="translate(1300,200)" style="color:var(--gen)"><use href="#ar-g-moon"/></g>
@@ -90,12 +90,12 @@
   <path class="ar-flow" d="M1097 224 V292"/>
   <path class="ar-flow" d="M1416 224 V292"/>
 
-  <rect x="964" y="300" width="266" height="110" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <rect x="964" y="300" width="266" height="110" rx="12" fill="var(--s4-soft)" stroke="var(--s4)" stroke-width="3"/>
   <text class="ar-out"  x="988" y="338">Retrieval run</text>
   <text class="ar-tick" x="988" y="370">3 ranked TSVs</text>
   <text class="ar-tick" x="988" y="394">ordered three ways</text>
 
-  <rect x="1272" y="300" width="288" height="110" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <rect x="1272" y="300" width="288" height="110" rx="12" fill="var(--s5-soft)" stroke="var(--s5)" stroke-width="3"/>
   <text class="ar-out"  x="1296" y="338">Written answers</text>
   <text class="ar-tick" x="1296" y="370">2 JSONL files</text>
   <text class="ar-tick" x="1296" y="394">one per strategy</text>
