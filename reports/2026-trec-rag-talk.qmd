@@ -32,10 +32,6 @@ The task
 ![](2026-trec-rag-talk/00-task.svg){fig-alt="Two inputs on the left: the ClimbMix collection, drawn as a stack of documents reachable only through one hosted BM25 search endpoint, and the 119 requests, each a paragraph of context followed by several questions. One output on the right: a single written answer, drawn as lines of prose where every line ends in a citation marker, under two hard rules — at most 1,024 words, and every statement cited."}
 :::
 
-::: {.boundary}
-**This is about how the approach works**, not a claim that it is novel. Every
-number shown is the organizers' own, from the score files they released.
-:::
 ## The architecture
 
 ::: {.eyebrow}
@@ -43,11 +39,10 @@ How it works · the five pieces
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/00-architecture.svg){fig-alt="Five components left to right. Plan, with deepseek-v4-flash, one call never repeated. Search, Pyserini BM25 over the ClimbMix collection. Rerank, mxbai-rerank-base-v2, chunk then score. Select, all-MiniLM-L6-v2, dropping duplicates and spreading what is left. Write, gpt-5.6-sol and gpt-5.6-luna. A band underneath marks which steps are hosted calls and which are local GPU work: only reranking and selection are local. The chain forks into three ranked retrieval files and two answer files."}
+![](2026-trec-rag-talk/00-architecture.svg){fig-alt="Five components left to right. Plan, with deepseek-v4-flash, one call never repeated. Search, Pyserini BM25 over the ClimbMix collection. Rerank, mxbai-rerank-base-v2, chunk then score. Select, all-MiniLM-L6-v2, dropping duplicates and spreading what is left. Write, gpt-5.6-sol and gpt-5.6-luna. The chain forks at the end: the selection step emits three ranked retrieval files, and the writing step emits two answer files."}
 :::
 
 ::: {.cap}
-Only the middle runs on my own GPU; everything else is a hosted call.
 **The one variable in this talk is the last box** — given identical evidence,
 does writing once differ from writing, auditing and revising?
 :::
@@ -435,6 +430,7 @@ Across everything NIST scored
 :::
 
 ::: {.boundary}
+Every number here is the organizers' own, from the score files they released.
 Multi-stage costs several extra model calls per topic for this. Nothing here is
 **a claim that it is novel** — only that the extra passes did something visible.
 :::

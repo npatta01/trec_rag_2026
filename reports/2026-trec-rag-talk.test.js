@@ -87,7 +87,9 @@ const flat = qmd.replace(/\s+/g, " ");
 
 // Evidence boundaries that must survive editing.
 const requiredBoundaries = [
-  "not a claim that it is novel",
+  // The framing lives with the aggregate numbers now, not on the task slide.
+  "a claim that it is novel",
+  "the organizers' own, from the score files",
   "ceilings, not yields",
   "one of 42 scored topics",
   "rubric items were not released",
@@ -98,6 +100,11 @@ const requiredBoundaries = [
 for (const boundary of requiredBoundaries) {
   assert(flat.includes(boundary), `deck should keep the boundary note: ${boundary}`);
 }
+
+// The task slide states the task. The framing of what this talk does and does
+// not claim belongs with the numbers, not in front of them.
+assert(!flat.includes("This is about how the approach works"),
+  "the task slide should not open with a disclaimer");
 
 // Slide count: 1 title + 17 content.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
@@ -297,9 +304,21 @@ for (const fact of ["ClimbMix", "BM25", "119", "1,024", "every statement cited"]
 }
 const arch = fs.readFileSync(path.join(root, "2026-trec-rag-talk/00-architecture.svg"), "utf8");
 for (const fact of ["deepseek-v4-flash", "Pyserini BM25", "mxbai-rerank-base-v2",
-                    "all-MiniLM-L6-v2", "gpt-5.6-sol", "gpt-5.6-luna", "local GPU"]) {
+                    "all-MiniLM-L6-v2", "gpt-5.6-sol", "gpt-5.6-luna",
+                    "Retrieval run", "Written answers"]) {
   assert(arch.includes(fact), `the architecture figure should name: ${fact}`);
 }
+// Which steps are hosted and which are local is a detail about my hardware, not
+// part of the architecture. It was cut; the figure stays about the five pieces.
+for (const cut of ["WHERE EACH STEP RUNS", "local GPU", "no cost per request",
+                   "hosted index"]) {
+  assert(!arch.includes(cut),
+    `the architecture figure should not carry the where-it-runs detail: ${cut}`);
+}
+// (A single "hosted call" elsewhere is the nuggetizer, which is a step, not a
+// statement about my hardware.)
+assert(!/own GPU|everything else is a hosted call/.test(qmd),
+  "the architecture slide should not restate where each step runs");
 // Figure classes stay namespaced, including the two new ones.
 for (const [fig, tok] of [["00-task", "tk"], ["00-architecture", "ar"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");

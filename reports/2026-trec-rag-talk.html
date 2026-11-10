@@ -1086,9 +1086,6 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 </svg>
 </p>
 </div>
-<div class="boundary">
-<p><strong>This is about how the approach works</strong>, not a claim that it is novel. Every number shown is the organizers’ own, from the score files they released.</p>
-</div>
 </section>
 <section class="slide level2 center">
 <h2>The architecture</h2>
@@ -1096,16 +1093,15 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 <p>How it works · the five pieces</p>
 </div>
 <div class="diagram">
-<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1600 620" role="img" aria-labelledby="ar-title ar-desc">
-  <title id="ar-title">The five components, the model behind each, and where each one runs</title>
-  <desc id="ar-desc">A left to right chain of five components. Plan the search, using the hosted deepseek v4 flash model. Search, using a hosted Pyserini BM25 endpoint over the ClimbMix collection. Rerank, using mxbai rerank base v2 on a local GPU. Select the evidence, using all MiniLM L6 v2 on a local GPU. Write, using gpt 5.6 sol alone or gpt 5.6 luna together with sol, hosted. A band underneath marks which steps are hosted model calls and which are local GPU work: only the two middle steps are local. The chain forks at the end into the two submitted artefacts: three ranked retrieval files, taken from the scored candidates, and two answer files, taken from the writing step.</desc>
+<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1600 460" role="img" aria-labelledby="ar-title ar-desc">
+  <title id="ar-title">The five components, and the model behind each</title>
+  <desc id="ar-desc">A left to right chain of five components. One, plan the search, with deepseek v4 flash, one call that is never repeated. Two, search, with a Pyserini BM25 endpoint over the ClimbMix collection. Three, rerank, with mxbai rerank base v2, chunking then scoring. Four, select the evidence, with all MiniLM L6 v2, dropping duplicates and spreading what is left. Five, write, with gpt 5.6 sol and gpt 5.6 luna. The chain then forks: the selection step emits the retrieval submission, three ranked files holding one candidate set ordered three ways, and the writing step emits the two answer files, one per strategy. Two notes sit alongside: steps two to four never see the request&#39;s wording again, working only from the plan&#39;s queries, and step five never opens the retrieval files, the corpus or any score, receiving one sealed evidence package.</desc>
   <style>
 text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 .ar-step{font-size:27px;font-weight:740}
 .ar-model{font-size:18px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .ar-num{font-size:19px;font-weight:800}
-.ar-where{font-size:19px;font-weight:700;letter-spacing:.04em}
-.ar-out{font-size:25px;font-weight:720}
+.ar-out{font-size:23px;font-weight:720}
 .ar-tick{font-size:19px;fill:var(--muted)}
 .ar-kick{font-size:23px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
 .ar-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#arar)}
@@ -1113,7 +1109,7 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
   <defs>
     <marker id="arar" viewbox="0 0 10 10" refx="9" refy="5" markerwidth="7" markerheight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke" /></marker>
   </defs>
-  <rect width="1600" height="620" fill="var(--bg)" />
+  <rect width="1600" height="460" fill="var(--bg)" />
 
   <text class="ar-kick" x="40" y="48">FIVE COMPONENTS · THE SAME CHAIN FOR ALL 119 REQUESTS</text>
 
@@ -1165,38 +1161,29 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
   <text class="ar-model" x="1392" y="178">gpt-5.6-sol</text>
   <text class="ar-model" x="1392" y="202">gpt-5.6-luna</text>
 
-  <!-- where each one runs -->
-  <text class="ar-kick" x="40" y="294" fill="var(--muted)">WHERE EACH STEP RUNS</text>
-  <rect x="40" y="312" width="282" height="46" rx="23" fill="none" stroke="var(--gen)" stroke-width="2.5" stroke-dasharray="7 6" />
-  <text class="ar-where" x="181" y="342" text-anchor="middle" fill="var(--gen)">hosted model</text>
-  <rect x="372" y="312" width="282" height="46" rx="23" fill="none" stroke="var(--gen)" stroke-width="2.5" stroke-dasharray="7 6" />
-  <text class="ar-where" x="513" y="342" text-anchor="middle" fill="var(--gen)">hosted index</text>
-  <rect x="704" y="312" width="614" height="46" rx="23" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.5" />
-  <text class="ar-where" x="1011" y="342" text-anchor="middle" fill="var(--ok)">local GPU — no network, no cost per request</text>
-  <rect x="1368" y="312" width="192" height="46" rx="23" fill="none" stroke="var(--gen)" stroke-width="2.5" stroke-dasharray="7 6" />
-  <text class="ar-where" x="1464" y="342" text-anchor="middle" fill="var(--gen)">hosted</text>
+  <!-- what comes out: step 4 emits the retrieval files, step 5 the answers -->
+  <path class="ar-flow" d="M1159 224 V292" />
+  <path class="ar-flow" d="M1437 224 V292" />
 
-  <!-- what comes out -->
-  <path class="ar-flow" d="M1011 358 V432 H1056" />
-  <path class="ar-flow" d="M1464 358 V500 H1056" />
+  <rect x="1036" y="300" width="246" height="110" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3" />
+  <text class="ar-out" x="1060" y="338">Retrieval run</text>
+  <text class="ar-tick" x="1060" y="370">3 ranked TSVs</text>
+  <text class="ar-tick" x="1060" y="394">ordered three ways</text>
 
-  <rect x="1060" y="398" width="500" height="68" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3" />
-  <text class="ar-out" x="1084" y="432">Retrieval run · 3 ranked files</text>
-  <text class="ar-tick" x="1084" y="456">ordered three ways from one candidate set</text>
+  <rect x="1314" y="300" width="246" height="110" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3" />
+  <text class="ar-out" x="1338" y="338">Written answers</text>
+  <text class="ar-tick" x="1338" y="370">2 JSONL files</text>
+  <text class="ar-tick" x="1338" y="394">one per strategy</text>
 
-  <rect x="1060" y="486" width="500" height="68" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3" />
-  <text class="ar-out" x="1084" y="520">Written answers · 2 files</text>
-  <text class="ar-tick" x="1084" y="544">single-pass, and multi-stage</text>
-
-  <text class="ar-tick" x="40" y="432">Steps 2–4 never see the request&#39;s wording again —</text>
-  <text class="ar-tick" x="40" y="458">they work from the plan&#39;s queries alone.</text>
-  <text class="ar-tick" x="40" y="508">Step 5 never opens the retrieval files, the corpus,</text>
-  <text class="ar-tick" x="40" y="534">or any score. It gets one sealed evidence package.</text>
+  <text class="ar-tick" x="40" y="320">Steps 2–4 never see the request&#39;s wording again —</text>
+  <text class="ar-tick" x="40" y="346">they work from the plan&#39;s queries alone.</text>
+  <text class="ar-tick" x="40" y="398">Step 5 never opens the retrieval files, the corpus, or any</text>
+  <text class="ar-tick" x="40" y="424">score. It gets one sealed evidence package.</text>
 </svg>
 </p>
 </div>
 <div class="cap">
-<p>Only the middle runs on my own GPU; everything else is a hosted call. <strong>The one variable in this talk is the last box</strong> — given identical evidence, does writing once differ from writing, auditing and revising?</p>
+<p><strong>The one variable in this talk is the last box</strong> — given identical evidence, does writing once differ from writing, auditing and revising?</p>
 </div>
 </section>
 <section class="slide level2 center">
@@ -1993,7 +1980,7 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 </div>
 </div>
 <div class="boundary">
-<p>Multi-stage costs several extra model calls per topic for this. Nothing here is <strong>a claim that it is novel</strong> — only that the extra passes did something visible.</p>
+<p>Every number here is the organizers’ own, from the score files they released. Multi-stage costs several extra model calls per topic for this. Nothing here is <strong>a claim that it is novel</strong> — only that the extra passes did something visible.</p>
 </div>
 </section>
 <section class="slide level2 center">
