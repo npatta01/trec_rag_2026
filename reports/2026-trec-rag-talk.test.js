@@ -26,7 +26,9 @@ for (const asset of [
   "2026-trec-rag-talk/07-topic18.svg",
   "2026-trec-rag-talk/08-disagree.svg",
   "2026-trec-rag-talk/09-overall.svg",
-  "2026-trec-rag-talk/10-nugget-trace.svg",
+  "2026-trec-rag-talk/02b-rerank.svg",
+  "2026-trec-rag-talk/11a-retrieval-cutoff.svg",
+  "2026-trec-rag-talk/11b-retrieval-orderings.svg",
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
@@ -49,7 +51,7 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 15, `expected 15 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 20, `expected 20 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -65,16 +67,19 @@ assert(!/img-writers/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag
 assert(!/!\[[^\]]+\]\(/.test(qmd),
   "diagrams must use ![](src){fig-alt=...}, never a bracketed caption");
 
-// The paired structure: every stage has a mechanism slide and an example slide.
-// The two writers are now a slide each, so that pair is named differently.
-for (const stage of ["Planning", "Searching", "Evidence and nuggets"]) {
+// The paired structure: the mechanism, then the same stage on the real
+// request. Not every stage earns both - reranking has no interesting example
+// and the nugget hints lost theirs - but the pairs that exist must stay paired.
+for (const stage of ["Planning", "Searching"]) {
   assert(qmd.includes(`## ${stage}: how it works`), `missing mechanism slide for ${stage}`);
 }
 for (const head of ["## Single-pass: Sol alone", "## Multi-stage: the work changes hands",
-                    "## What a plan actually contains", "## Two writers: this request"]) {
+                    "## The two places Luna is used", "## Two writers: this request",
+                    "## Reranking: a document becomes passages",
+                    "## Selecting the evidence"]) {
   assert(qmd.includes(head), `missing slide: ${head}`);
 }
-for (const stage of ["Planning", "Two writers", "Evidence and nuggets"]) {
+for (const stage of ["Planning", "Two writers"]) {
   assert(qmd.includes(`## ${stage}: this request`),
     `missing worked-example slide for ${stage}`);
 }
@@ -123,11 +128,16 @@ const requiredBoundaries = [
   "the organizers' own, from the score files",
   "42 scored topics",
   "rubric items were not released",
-  "should not be read as better grounding",
-  // The battle counts are per-run against the field, never head to head.
-  // The old phrasing read as slop; the claim it carried has to survive the
-  // rewrite, so the guard tracks the claim's new sentence.
-  "never compared our two answers with each other",
+  // The standalone limits slide was cut for reading as slop. The one limit
+  // that actually changes a reader's conclusion - that citation support went
+  // the other way - has to stay somewhere, and now closes the talk.
+  "favoured **single-pass**",
+  "Coverage and grounding are not the same question",
+  // The battle counts are per-run against the field, never head to head. The
+  // phrasing has been cut twice for reading as slop; the claim it carries has
+  // to survive each rewrite, so the guard tracks the claim's current sentence.
+  "not our two answers against each other",
+  "other teams' answers",
 ];
 for (const boundary of requiredBoundaries) {
   assert(flat.includes(boundary), `deck should keep the boundary note: ${boundary}`);
@@ -142,17 +152,25 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 28,
-  `expected 28 content slides, found ${sections.length}`);
+assert(sections.length === 27,
+  `expected 27 content slides, found ${sections.length}`);
 
-// Five section breaks, each showing the same roadmap with its own leg lit, so
-// the talk's shape is visible from any one of them.
+// Four sections, named the way the work is actually divided. The contents are
+// shown once, at the top; the three breaks after it carry a picture instead,
+// because the same list four times taught the room nothing new.
 const dividers = (html.match(/class="[^"]*\bdivider\b/g) || []).length;
-assert(dividers === 5, `expected 5 section dividers, found ${dividers}`);
-const lit = (qmd.match(/class="leg leg-now"/g) || []).length;
-assert(lit === 5, `each divider lights exactly one leg, found ${lit}`);
-assert((qmd.match(/class="roadmap"/g) || []).length === 5,
-  "every divider carries the whole roadmap, not just its own name");
+assert(dividers === 4, `expected 4 section dividers, found ${dividers}`);
+assert((qmd.match(/class="roadmap"/g) || []).length === 1,
+  "the roadmap belongs on the opening contents slide only");
+const legs = (qmd.match(/<span class="leg[ "]/g) || []).length;
+assert(legs === 4, `the contents slide should list the four sections, found ${legs}`);
+assert((qmd.match(/class="leg leg-now"/g) || []).length === 1,
+  "the contents slide lights the section it opens");
+for (const sec of ["Architecture", "Retrieval", "Answer Generation", "Overall score"]) {
+  assert(qmd.includes(`</span>${sec}</span>`), `the contents should name: ${sec}`);
+}
+const shots = (qmd.match(/class="secshot"|\{\.secshot\}/g) || []).length;
+assert(shots === 3, `each of the three later breaks carries one image, found ${shots}`);
 assert(!/01-approach/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/01-approach.svg")),
   "the funnel figure was cut; nothing should still point at it");
 
@@ -165,9 +183,9 @@ assert(!/head-to-head/i.test(qmd),
 for (const stale of ["rag2026-17", "out-of-home", "maltreatment", "preterm", "NICU"]) {
   assert(!qmd.includes(stale), `deck still references the retired example: ${stale}`);
 }
-for (const fig of ["02-one-lane", "04-plan", "05-evidence", "06-retrieval",
+for (const fig of ["02-one-lane", "02b-rerank", "04-plan", "05-evidence", "06-retrieval",
                    "03a-single-pass", "03b-multi-stage", "07-topic18",
-                   "08-disagree", "09-overall", "10-nugget-trace"]) {
+                   "08-disagree", "09-overall"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   for (const stale of ["maltreatment", "preterm", "NICU"]) {
     assert(!svg.includes(stale), `${fig}.svg still references the retired example: ${stale}`);
@@ -256,13 +274,17 @@ for (const fact of [
 for (const fact of [
   "openai/gpt-5.6-luna",        // Luna, the reviewer
   "openai/gpt-5.6-sol",         // Sol, the writer
-  "Plans the answer",
-  "Writes the draft",
-  "Audits each group",
-  "Proposes edits",
-  "Screens each edit",
+  "Plans",
+  // The labels were a sentence each and overran their boxes, so each step is
+  // a verb with its bound underneath. The bounds are the point; keep them.
+  "Drafts",
+  "Audits",
+  "Proposes",
+  "Screens",
+  "3–8 obligations",
   "≤6 cards per group",         // MAX_AUDIT_CARDS_PER_GROUP
   "at most 3",                  // MAX_SOL_RESERVATIONS
+  "all five must pass",
   "applies only",               // local code applies the passed edits, nothing else
 ]) {
   assert(writers.includes(fact), `the multi-stage figure should show: ${fact}`);
@@ -299,8 +321,11 @@ assert(/id="sp-g-sun"/.test(single),
   "the single-pass figure must mark Sol as a sun");
 assert(/id="ms-g-sun"/.test(writers) && /id="ms-g-moon"/.test(writers),
   "the multi-stage figure must mark Sol as a sun and Luna as a moon");
+// Two suns: the single-pass card and the multi-stage card. Three moons: the
+// same multi-stage card, plus one on each half of the slide about Luna's two
+// jobs - the mark is how the room tracks which model is being talked about.
 assert((qmd.match(/class="glyph g-sun"/g) || []).length === 2 &&
-       (qmd.match(/class="glyph g-moon"/g) || []).length === 2,
+       (qmd.match(/class="glyph g-moon"/g) || []).length === 3,
   "Sol and Luna keep their marks on the slides that name them");
 for (const src of [qmd, single, writers]) {
   assert(!/M0 -13 L8 3 L0 12/.test(src) && !/cx="-2" cy="-3" r="8\.5"/.test(src),
@@ -329,9 +354,10 @@ assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
 // label, numbered chip and knockout label renders as plain ink. One of them
 // was ink on its own accent bar at 1.05:1. Inline styles win; attributes do
 // not, so no figure may colour text with an attribute again.
-const figures = ["00-task", "00-architecture", "02-one-lane", "03a-single-pass",
-                 "03b-multi-stage", "04-plan", "05-evidence", "06-retrieval",
-                 "07-topic18", "08-disagree", "09-overall", "10-nugget-trace"];
+const figures = ["00-task", "00-architecture", "02-one-lane", "02b-rerank",
+                 "03a-single-pass", "03b-multi-stage", "04-plan", "05-evidence",
+                 "06-retrieval", "07-topic18", "08-disagree", "09-overall",
+                 "11a-retrieval-cutoff", "11b-retrieval-orderings"];
 for (const f of figures) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
   assert(!/<text\b[^>]*\sfill="var\(/.test(svg),
@@ -365,20 +391,24 @@ for (const name of ["slate-light", "slate-dark", "forest-light", "forest-dark"])
     `${name}: body text must clear AA on the page ground`);
 }
 
-// ---- the nugget trace is a worked example, not three boxes ----------------
-// Authority and advice are told apart by edge, not only by colour: the
-// selected passages are solid, the generated claims are dashed.
-const trace = fs.readFileSync(path.join(root, "2026-trec-rag-talk/10-nugget-trace.svg"), "utf8");
-// "advisory" and "trap" were jargon a reader bounced off; the rule they stood
-// for is concrete, so the guard now tracks the rule rather than the word.
-for (const fact of ["n092", "n094", "THE AUTHORITY", "HINTS, NEVER CITED",
-                    "≤20 claims", "useless here", "standing in for the real passages"]) {
-  assert(trace.includes(fact), `the nugget trace should show: ${fact}`);
+// ---- the hint claims are not a slide ---------------------------------------
+// "advisory", then "hint", then the n092 trap: three separate readers bounced
+// off the same idea, and it never changed what the answer may cite. The rule
+// stays on the evidence slide in one line; the dedicated trace is gone.
+assert(!/10-nugget-trace/.test(qmd),
+  "the nugget trace slide was cut; nothing should still point at it");
+assert(flat.includes("nothing else") && flat.includes("these exact passages"),
+  "the evidence slide must still say what the writers are given");
+
+// ---- reranking is its own slide --------------------------------------------
+// "it is not clear how document goes to passage and score" - the unit change
+// was a caption under a figure about something else. It gets the slide now.
+const rerank = fs.readFileSync(path.join(root, "2026-trec-rag-talk/02b-rerank.svg"), "utf8");
+for (const fact of ["3,500", "350", "windows, not documents", "0.81", "dropped"]) {
+  assert(rerank.includes(fact), `the rerank figure should show: ${fact}`);
 }
-assert((trace.match(/stroke-dasharray="9 6"/g) || []).length === 2,
-  "the two generated claims must be drawn dashed, the passages solid");
-assert(!/\{\.grid-3\}[\s\S]{0,120}Selected passages/.test(qmd),
-  "the nugget slide should be a traced example, not three parallel cards");
+assert(flat.includes("never scored as a document"),
+  "the rerank slide must state what is actually scored");
 
 // The disagreement slide now reports the whole distribution, not one case.
 // 42 scored topics = 20 agreeing + 5 disagreeing + 17 with one measure tied,
@@ -392,19 +422,35 @@ assert(/>20</.test(dis) && /ature>5</.test(dis) === false && dis.includes(">5<")
 
 // The retrieval figure's numbers come straight from the submitted TSVs:
 // 4,246 rows, depth 1-121, 61 distinct depths, identical doc set per run.
-const retsub = fs.readFileSync(path.join(root, "2026-trec-rag-talk/11-retrieval-submission.svg"), "utf8");
-for (const fact of ["1 – 121", "61", "4,246", "identical document set"]) {
-  assert(retsub.includes(fact), `the retrieval figure should state: ${fact}`);
+// It was one slide and unreadable. The cutoff and the three orderings are two
+// separate ideas, so they are two figures.
+const cutoff = fs.readFileSync(path.join(root, "2026-trec-rag-talk/11a-retrieval-cutoff.svg"), "utf8");
+for (const fact of ["1 – 121", "61", "4,246", "1.4826"]) {
+  assert(cutoff.includes(fact), `the cutoff figure should state: ${fact}`);
 }
+const orderings = fs.readFileSync(path.join(root, "2026-trec-rag-talk/11b-retrieval-orderings.svg"), "utf8");
+for (const fact of ["PRIORITY 1", "PRIORITY 2", "PRIORITY 3", "identical document set"]) {
+  assert(orderings.includes(fact), `the orderings figure should state: ${fact}`);
+}
+// Same set, different order: the same four letters appear in every box.
+for (const letter of ["A", "B", "C", "D"]) {
+  assert((orderings.match(new RegExp(`>${letter}</text>`, "g")) || []).length === 3,
+    `document ${letter} should appear once in each of the three orderings`);
+}
+assert(!/11-retrieval-submission/.test(qmd),
+  "the combined retrieval figure was split; nothing should still point at it");
 
 // ---- the hedging budget ----------------------------------------------------
-// The deck ends on a slide headed "What I would and would not claim". A warning
-// box on every other slide teaches the room to skip them, so only the notes
-// that stop a number on their own slide being misread may stay.
+// A warning box on every slide teaches the room to skip them, so only the
+// notes that stop a number on their own slide being misread may stay. The
+// standalone limits slide read as slop and came out; the deck now closes on
+// the architecture, and the one limit that changes a conclusion rides there.
 const boxes = (qmd.match(/::: \{\.boundary\}/g) || []).length;
 assert(boxes <= 3, `at most 3 boundary boxes, found ${boxes}`);
-assert(/What I would and would not claim/.test(qmd),
-  "the limits must still have a slide of their own");
+assert(!/What I would and would not claim/.test(qmd),
+  "the standalone limits slide was cut; its one load-bearing limit moved to the close");
+assert(/## Where that leaves the architecture/.test(qmd),
+  "the talk should close by returning to the architecture it opened on");
 
 // The prompt slide was cut — it was a screenful of monospace. The one line
 // that carried the point stays, on the planning figure's own slide.
@@ -413,20 +459,30 @@ assert(flat.includes('**"Do not answer the topic."**'),
 assert(!/promptbox|promptlead/.test(qmd), "nothing should still reference the prompt slide");
 
 // ---- what a plan contains, from narrative_blueprint.py ---------------------
-for (const field of ["label", "narrative_spans", "priority", "answer_mode",
-                     "target_words", "selected_claim_aliases"]) {
-  assert(qmd.includes(`>${field}</span>`), `the plan slide should name the field: ${field}`);
+// Shown in plain words, not schema keys: the slide was being read as a prompt
+// dump. The fields are still the blueprint's, one obligation filled in.
+for (const field of ["what to cover", "which words of the request", "how long",
+                     "which evidence"]) {
+  assert(qmd.includes(`>${field}</span>`), `the plan should name, in plain words: ${field}`);
 }
-for (const fact of ["3 to 8 obligations", "850–950 words", "character-for-character",
-                    "resolved locally"]) {
-  assert(flat.includes(fact), `the plan slide should state: ${fact}`);
+for (const fact of ["3 to 8 obligations", "character-for-character"]) {
+  assert(flat.includes(fact), `the plan half should state: ${fact}`);
 }
+// Luna's screen is five named checks, each with its own gloss - "what are the
+// five" was the question the chip row did not answer.
+for (const gate of ["support", "atomicity", "materiality", "redundancy",
+                    "replacement safety"]) {
+  assert(qmd.includes(`<span class="gl-k">${gate}</span>`),
+    `the screen should name the gate: ${gate}`);
+}
+assert((qmd.match(/class="gl-v"/g) || []).length === 5,
+  "every gate carries a plain-words gloss, or it is just a word");
 
 // Pandoc wraps a run of inline spans in a <p>, which silently collapses any
 // grid or flex row built from them onto a single line. This has regressed
 // twice, and it renders without error, so the un-wrapping rule is pinned.
-assert(/\.record > p,\s*\n\.gates > p,\s*\n\.roadmap > p \{\s*\n\s*display: contents;/.test(theme),
-  "the spans-in-a-<p> wrapper must be dropped, or record/gates/roadmap collapse");
+assert(/\.record > p,\s*\n\.gatelist > p,\s*\n\.adds > p,\s*\n\.roadmap > p \{\s*\n\s*display: contents;/.test(theme),
+  "the spans-in-a-<p> wrapper must be dropped, or these grids collapse");
 
 // ---- palettes and inlined figures -----------------------------------------
 // A linked <img src="x.svg"> is a separate document, so the page's CSS custom
@@ -438,8 +494,8 @@ const inlined = (html.match(/<svg\b/gi) || []).length;
 assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> elements`);
 
 // Each figure keeps its own accessible name once inlined.
-for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "ov", "ng",
-                  "rs", "da"]) {
+for (const id of ["tk", "ar", "ln", "rr", "sp", "ms", "pl", "ev", "rt", "t18",
+                  "dg", "ov", "rc", "ro", "da"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
 }
@@ -448,7 +504,9 @@ for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "
 for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
                           ["03b-multi-stage", "ms"], ["07-topic18", "t18"],
                           ["08-disagree", "dg"], ["09-overall", "ov"],
-                          ["10-nugget-trace", "ng"],
+                          ["02b-rerank", "rr"],
+                          ["11a-retrieval-cutoff", "rc"],
+                          ["11b-retrieval-orderings", "ro"],
                           ["04-plan", "pl"],
                           ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
@@ -556,11 +614,9 @@ assert(/cosine \*\*0\.94\*\*/.test(qmd), "the evidence slide should show a worke
 assert(flat.includes("standing in for the real passages"),
   "the illustrative sentences must be marked as not being corpus text");
 
-// The nuggetizer's two config limits now live on the figure, where the room
-// can see them next to the claims they bound.
-assert(/≤20 claims/.test(trace),
-  "the nugget trace should state maximum_claims_per_subnarrative");
-assert(/each cites ≤3 documents/.test(trace),
-  "the nugget trace should state maximum_supporting_documents_per_claim");
+// The nuggetizer's cap still rides on the lane figure, which is now the only
+// place the hint claims appear at all.
+assert(/≤20/.test(lane) && /short claims written from those passages/.test(lane),
+  "the lane figure should still bound and explain the nugget claims");
 
 console.log("reports/2026-trec-rag-talk.test.js OK");

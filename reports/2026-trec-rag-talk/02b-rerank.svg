@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 600" role="img" aria-labelledby="rr-title rr-desc">
+  <title id="rr-title">How a retrieved document becomes scored passages</title>
+  <desc id="rr-desc">A left-to-right chain in three columns. On the left, one retrieved document, drawn as a card with two more stacked behind it, because BM25 returned up to a thousand of them for this query. In the middle, that single document cut into four overlapping windows of 3,500 characters with 350 characters of overlap, drawn as four cards that overlap each other, with the shared band marked as the 350 characters that appear in both neighbours. On the right, the reranker mxbai-rerank-base-v2 scores every window against this lane's query, not against the document: window two scores 0.81 and window one 0.74 and both are kept, while window three scores 0.22 and window four 0.09 and both are dropped. The note at the foot says the unit changes here, because what moves on is windows and not documents, at most 100 per query, so one long document can contribute several passages or none at all.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .rr-q{font-size:25px;font-weight:700}
+    .rr-col{font-size:20px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+    .rr-lab{font-size:21px;font-weight:720}
+    .rr-sub{font-size:18px;fill:var(--muted)}
+    .rr-num{font-size:26px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .rr-note{font-size:21px}
+    .rr-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#rra)}
+    .rr-hair{fill:none;stroke:var(--line);stroke-width:1.6;opacity:.5}
+  </style>
+  <defs>
+    <marker id="rra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="1600" height="600" fill="var(--bg)"/>
+
+  <rect x="40" y="18" width="1520" height="54" rx="10" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6"/>
+  <text class="rr-q" x="800" y="53" text-anchor="middle">scored against this lane’s query — “illegal short term rental NYC avoid scams”</text>
+
+  <text class="rr-col" x="40"  y="108">ONE DOCUMENT</text>
+  <text class="rr-col" x="420" y="108">CUT INTO OVERLAPPING WINDOWS</text>
+  <text class="rr-col" x="980" y="108">EVERY WINDOW SCORED</text>
+
+  <!-- A. one document, with the other 999 stacked behind -->
+  <rect x="96" y="134" width="210" height="300" rx="10" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="2" opacity=".5"/>
+  <rect x="78"  y="146" width="210" height="300" rx="10" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="2.4" opacity=".75"/>
+  <rect x="60"  y="158" width="210" height="300" rx="10" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="3"/>
+  <g class="rr-hair">
+    <path d="M84 196H246M84 222H246M84 248H212M84 282H246M84 308H246M84 334H228M84 368H246M84 394H198"/>
+  </g>
+  <text class="rr-sub" x="60" y="490">BM25 returned up to</text>
+  <text class="rr-lab" x="60" y="518">1,000 of these</text>
+  <text class="rr-sub" x="60" y="544">for this one query</text>
+
+  <path class="rr-flow" d="M300 300 H404"/>
+
+  <!-- B. the windows, literally overlapping -->
+  <g>
+    <rect x="420" y="130" width="420" height="96" rx="9" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="2.8"/>
+    <text class="rr-lab" x="442" y="162">window 1</text>
+    <path class="rr-hair" d="M442 184H806M442 206H742"/>
+  </g>
+  <g>
+    <rect x="420" y="208" width="420" height="96" rx="9" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="2.8"/>
+    <text class="rr-lab" x="442" y="240">window 2</text>
+    <path class="rr-hair" d="M442 262H806M442 284H766"/>
+  </g>
+  <g>
+    <rect x="420" y="286" width="420" height="96" rx="9" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="2.8"/>
+    <text class="rr-lab" x="442" y="318">window 3</text>
+    <path class="rr-hair" d="M442 340H806M442 362H718"/>
+  </g>
+  <g>
+    <rect x="420" y="364" width="420" height="96" rx="9" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="2.8"/>
+    <text class="rr-lab" x="442" y="396">window 4</text>
+    <path class="rr-hair" d="M442 418H806M442 440H690"/>
+  </g>
+
+  <text class="rr-sub" x="420" y="496">3,500 characters each · the 350 where two meet</text>
+  <text class="rr-sub" x="420" y="520">appears in both, so a sentence on a boundary</text>
+  <text class="rr-sub" x="420" y="544">is never cut in half</text>
+
+  <!-- C. the scores -->
+  <path class="rr-flow" d="M844 178 H944"/>
+  <path class="rr-flow" d="M844 256 H944"/>
+  <path class="rr-flow" d="M844 334 H944"/>
+  <path class="rr-flow" d="M844 412 H944"/>
+
+  <text class="rr-num" x="960" y="186" style="fill:var(--s3)">0.74</text>
+  <rect x="1060" y="168" width="222" height="22" rx="5" fill="var(--s3)"/>
+  <rect x="1310" y="162" width="118" height="34" rx="17" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="2.4"/>
+  <text class="rr-lab" x="1369" y="187" text-anchor="middle" style="fill:var(--s3)">kept</text>
+
+  <text class="rr-num" x="960" y="264" style="fill:var(--s3)">0.81</text>
+  <rect x="1060" y="246" width="243" height="22" rx="5" fill="var(--s3)"/>
+  <rect x="1310" y="240" width="118" height="34" rx="17" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="2.4"/>
+  <text class="rr-lab" x="1369" y="265" text-anchor="middle" style="fill:var(--s3)">kept</text>
+
+  <text class="rr-num" x="960" y="342" style="fill:var(--muted)">0.22</text>
+  <rect x="1060" y="324" width="66" height="22" rx="5" fill="var(--line)" opacity=".55"/>
+  <text class="rr-lab" x="1310" y="343" style="fill:var(--muted)">dropped</text>
+
+  <text class="rr-num" x="960" y="420" style="fill:var(--muted)">0.09</text>
+  <rect x="1060" y="402" width="27" height="22" rx="5" fill="var(--line)" opacity=".55"/>
+  <text class="rr-lab" x="1310" y="421" style="fill:var(--muted)">dropped</text>
+
+  <text class="rr-sub" x="960" y="496">mxbai-rerank-base-v2 scores windows,</text>
+  <text class="rr-sub" x="960" y="520">never whole documents — so a long</text>
+  <text class="rr-sub" x="960" y="544">document can land in both columns</text>
+
+  <rect x="40" y="566" width="1520" height="30" rx="8" fill="var(--panel)" stroke="var(--s2)" stroke-width="2.4"/>
+  <text class="rr-note" x="64" y="588" style="font-size:19px">The unit changes here: what moves on is <tspan font-weight="800">windows, not documents</tspan> — at most 100 per query.</text>
+</svg>

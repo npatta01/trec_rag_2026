@@ -23,25 +23,24 @@ format:
     center: true
 ---
 
-## The task {.divider}
+## What we will walk through {.divider}
 
 <div class="roadmap">
-<span class="leg leg-now"><span class="leg-n">1</span>The task</span>
-<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
-<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
-<span class="leg"><span class="leg-n">4</span>What came back</span>
-<span class="leg"><span class="leg-n">5</span>What I would claim</span>
+<span class="leg leg-now"><span class="leg-n">1</span>Architecture</span>
+<span class="leg"><span class="leg-n">2</span>Retrieval</span>
+<span class="leg"><span class="leg-n">3</span>Answer Generation</span>
+<span class="leg"><span class="leg-n">4</span>Overall score</span>
 </div>
 
 ::: {.cap}
-What the track asks for, and the five pieces that answer it.
+Two submissions out of one pipeline, traced through a single request.
 :::
 
 
 ## What the track asks
 
 ::: {.eyebrow}
-The task
+119 requests · one cited answer each
 :::
 
 ::: {.diagram}
@@ -51,7 +50,7 @@ The task
 ## The architecture
 
 ::: {.eyebrow}
-How it works · the five pieces
+Five pieces, left to right
 :::
 
 ::: {.diagram}
@@ -97,15 +96,11 @@ location, and day-to-day practicality,
 Eight things asked at once. Hold on to the two bold facts — they sit in
 different sentences, and only one of the two answers ever joins them.
 :::
-## Finding the evidence {.divider}
+## Retrieval {.divider .divider-img}
 
-<div class="roadmap">
-<span class="leg"><span class="leg-n">1</span>The task</span>
-<span class="leg leg-now"><span class="leg-n">2</span>Finding the evidence</span>
-<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
-<span class="leg"><span class="leg-n">4</span>What came back</span>
-<span class="leg"><span class="leg-n">5</span>What I would claim</span>
-</div>
+::: {.secshot}
+![](2026-trec-rag-talk/img-sec-retrieval.jpg){fig-alt="A single small figure stands at the foot of a vast library of towering shelves receding into darkness, holding up a lantern whose warm light falls on only a handful of volumes on the nearest shelf. Everything else stays in cool blue shadow."}
+:::
 
 ::: {.cap}
 One vague request becomes 17 searches, then about a page of text.
@@ -115,7 +110,7 @@ One vague request becomes 17 searches, then about a page of text.
 ## Planning: how it works
 
 ::: {.eyebrow}
-How it works
+One DeepSeek call, never repeated
 :::
 
 ::: {.diagram}
@@ -123,15 +118,16 @@ How it works
 :::
 
 ::: {.cap}
-The instruction's own words: **"Do not answer the topic."** The planner
-proposes searches, never findings — it never sees a document and is never
-called again. **At most 25 searches** per topic.
+The instruction's own words: **"Do not answer the topic."**
+
+It proposes searches, never findings, and is never called again.
+**At most 25 searches** per topic.
 :::
 
 ## Planning: this request
 
 ::: {.trace-step}
-The example · one vague request, eight angles, none of them supplied by us
+The example · 8 subnarratives created for this one request
 :::
 
 ::: {.nargrid}
@@ -143,11 +139,6 @@ The example · one vague request, eight angles, none of them supplied by us
 <div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-10" y="-8" width="20" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-10 -2.5H10M-5 -12V-5M5 -12V-5M-3 2.5L3 7M3 2.5L-3 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>What if we cancel?</span></div>
 <div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -4V-11H-4M4 -11H11V-4M11 4V11H4M-4 11H-11V4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Is there room to work?</span></div>
 <div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 12C0 12 9 -1 9 -7A9 9 0 1 0 -9 -7C-9 -1 0 12 0 12Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="-7" r="3.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Is the location practical?</span></div>
-:::
-
-::: {.cap}
-The planner wrote these, not me. It had the request and nothing else — **no
-document, no search results** — and it is never called again.
 :::
 
 ## The queries each angle became
@@ -194,7 +185,7 @@ The example · 8 subnarratives × 2 queries = 16 searches, plus the untouched re
 ## Searching: how it works
 
 ::: {.eyebrow}
-How it works
+One lane of 17 · drawn to scale
 :::
 
 ::: {.diagram}
@@ -202,15 +193,30 @@ How it works
 :::
 
 ::: {.cap}
-A document never gets scored as a document. It is **cut into overlapping
-windows** — 3,500 characters, 350 of overlap — and the reranker scores each
-window against this lane's query. What survives to the next step is windows,
-not documents, which is why the unit changes at step two.
+Each of the 17 lanes runs this on its own. The numbers are **per-query
+ceilings**, not totals — and the unit changes at step two, which is the next
+slide.
 :::
-## Evidence and nuggets: how it works
+## Reranking: a document becomes passages
 
 ::: {.eyebrow}
-How it works
+Where the unit changes
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/02b-rerank.svg){fig-alt="One retrieved document, drawn with two more stacked behind it because BM25 returned up to a thousand, is cut into four overlapping windows of 3,500 characters with 350 of overlap, drawn as cards that overlap each other. The reranker mxbai-rerank-base-v2 then scores each window against this lane's query: window two scores 0.81 and window one 0.74 and both are kept, while window three at 0.22 and window four at 0.09 are dropped. A note says what moves on is windows, not documents, at most 100 per query."}
+:::
+
+::: {.cap}
+**A document is never scored as a document.** It is cut into overlapping
+windows and the reranker scores each window against this lane's query — so a
+40-page document can contribute one passage, several, or none at all.
+:::
+
+## Selecting the evidence
+
+::: {.eyebrow}
+Drop the duplicates, spread the rest
 :::
 
 ::: {.diagram}
@@ -227,37 +233,48 @@ survives in its original wording; the other is dropped.]{.dupe-verdict}
 :::
 
 ::: {.cap}
-Both writers then get one frozen package: the request, the exact evidence, the
-nuggets and the citation IDs. **Nothing else.** (The pair above is my wording,
-standing in for the real passages, which stay private.)
+This is the handoff. Both writers get one frozen package — the request, these
+exact passages, and the citation IDs — and **nothing else.** (The pair above
+is my wording, standing in for the real passages, which stay private.)
 :::
-## Evidence and nuggets: this request
 
-::: {.trace-step}
-The example · facet f001, legality and reliability
+## How deep each lane goes
+
+::: {.eyebrow}
+The Retrieval submission · where the cut falls
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/10-nugget-trace.svg){fig-alt="A left-to-right chain. Two selected passages on the left, drawn solid and headed the authority: one saying a short-term rental in New York City is one of fewer than 30 consecutive days, the other saying the city has run enforcement sweeps with fines. Both are marked as stand-in wording, because the corpus text stays private. In the middle the nuggetizer: one hosted call per subnarrative, writing only from those passages, at most 20 claims, each citing at most 3 documents. On the right the two claims that came back, drawn dashed and headed hints, never cited: n092 and n094. A note explains why n092 is true but useless here, since six weeks is 42 days and the under-30-day rule does not cover this family."}
+![](2026-trec-rag-talk/11a-retrieval-cutoff.svg){fig-alt="Four horizontal lanes for one narrative, each plotting its documents by score. The top is the untouched narrative, the three below are facet lanes. Each lane carries its own dashed cutoff line and the four sit at four different places, because each is the median plus 2.5 times 1.4826 times that lane's median absolute deviation. Documents right of a line are filled and admitted, those left are hollow and dropped, admitting 6, 4, 9 and 3. A band below says the union is the candidate core, and that depth runs from 1 to 121 documents over 61 distinct depths, averaging about 36, for 4,246 rows per run."}
 :::
 
 ::: {.cap}
-**One nuggetizer call per subnarrative** — eight for this request, each seeing
-only its own passages. Solid edges are authority, dashed are hints, and the
-rule never changes: a sentence cites the passage, never the claim. These are
-our hints; the organizers' gold nuggets are a different thing, written by
-assessors.
+**Every lane sets its own bar** from its own scores. Because the bar is a
+score and not a position, the evidence decides the depth — so one narrative
+keeps 121 documents and another keeps 1.
 :::
 
-## Writing the answer {.divider}
+## The same documents, ordered three ways
 
-<div class="roadmap">
-<span class="leg"><span class="leg-n">1</span>The task</span>
-<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
-<span class="leg leg-now"><span class="leg-n">3</span>Writing the answer</span>
-<span class="leg"><span class="leg-n">4</span>What came back</span>
-<span class="leg"><span class="leg-n">5</span>What I would claim</span>
-</div>
+::: {.eyebrow}
+The Retrieval submission · three files
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/11b-retrieval-orderings.svg){fig-alt="Three boxes side by side, one per submitted run, each with a priority badge. Priority one, narrative plus subnarrative, sorts by half the narrative percentile plus half the facet score. Priority two, evidence breadth, sorts by subnarratives supported then strong passages. Priority three, narrative only, sorts by narrative percentile then rank then document id. The same four lettered documents appear in each box in a different order. A band at the foot says all three runs hold the identical document set for a narrative."}
+:::
+
+::: {.cap}
+I hashed every `(topic, document)` pair across the three submitted files: for
+a narrative they hold the **identical set**. Only the order differs — which is
+why all three score the same per topic.
+:::
+
+## Answer Generation {.divider .divider-img}
+
+::: {.secshot}
+![](2026-trec-rag-talk/img-sec-generation.jpg){fig-alt="A dark interior. On the left one figure sits alone at a desk under a single warm pool of lamplight, writing on a blank sheet. On the right two figures at a longer desk pass a blank sheet between them under two overlapping pools of light."}
+:::
 
 ::: {.cap}
 The same sealed evidence, written twice — once alone, once with a second model judging.
@@ -267,7 +284,7 @@ The same sealed evidence, written twice — once alone, once with a second model
 ## Single-pass: Sol alone
 
 ::: {.eyebrow}
-How it works · two steps
+One model call, then a validator
 :::
 
 ::: {.diagram}
@@ -275,16 +292,14 @@ How it works · two steps
 :::
 
 ::: {.cap}
-The two that failed were **re-asked, not patched**. The retry adds one
-instruction — return a fresh answer that satisfies the schema and the citation
-rules — and the model never sees its failed attempt, because nothing from it is
-put back in the prompt.
+The two that failed were **re-asked, not patched** — the retry asks for a
+fresh answer, and the model never sees its failed attempt.
 :::
 
 ## Multi-stage: the work changes hands
 
 ::: {.eyebrow}
-How it works · five handoffs
+Seven steps, three pairs of hands
 :::
 
 ::: {.diagram}
@@ -293,66 +308,53 @@ How it works · five handoffs
 
 ::: {.cap}
 **No conversation runs through this.** Every box is its own call — one system
-prompt, one user prompt, nothing carried over — and Luna and Sol are different
-models with different instructions. Luna never sees Sol's reasoning, only the
-artefact local code hands it. That is what makes "Luna only judges" a fact
-about the wiring rather than a promise.
+prompt, one user prompt, nothing carried over. Luna never sees Sol's
+reasoning, only what local code hands it, which is what makes "Luna only
+judges" a fact about the wiring rather than a promise.
 :::
 
-## What a plan actually contains
+## The two places Luna is used
 
 ::: {.eyebrow}
-How it works · multi-stage, step 1
+Multi-stage · Luna decides, Sol writes
 :::
 
-::: {.pull}
-Not a prompt. A plan is **3 to 8 obligations** — and this is one of them.
-:::
+::: {.grid-2}
+::: {.card .card-gen}
+[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>1 · It writes the plan]{.card-label}
+Not a prompt — a list of **3 to 8 obligations**. One of them, in plain words:
 
-<div class="record record-lg">
-<span class="f-key">label</span><span class="f-val">legality and reliability</span>
-<span class="f-key">narrative_spans</span><span class="f-val">"avoid illegal listings" · "reliable enough for a family"</span>
-<span class="f-key">priority</span><span class="f-val">must</span>
-<span class="f-key">answer_mode</span><span class="f-val">evaluate</span>
-<span class="f-key">target_words</span><span class="f-val">140</span>
-<span class="f-key">selected_claim_aliases</span><span class="f-val">c003 · c011 · c014</span>
+<div class="record">
+<span class="f-key">what to cover</span><span class="f-val">legality and reliability</span>
+<span class="f-key">which words of the request</span><span class="f-val">"avoid illegal listings"</span>
+<span class="f-key">how long</span><span class="f-val">140 words</span>
+<span class="f-key">which evidence</span><span class="f-val">c003 · c011 · c014</span>
 </div>
 
-::: {.cap}
-Field names are the schema's, from `narrative_blueprint.py`; the values are my
-stand-in. Local code enforces three things: **every span must appear in the
-request character-for-character** and any that does not is replaced, **IDs are resolved
-locally** rather than trusted from model output, and the targets must total
-850–950 words. Note what is absent — **no prose**. Luna never writes a sentence
-of the answer.
+[Spans must appear in the request character-for-character, or local code
+replaces them. **No prose** — Luna never writes a sentence of the answer.]{.foot}
 :::
-
-## What Luna's screen keeps, and what it throws out
-
-::: {.eyebrow}
-How it works · the screening gate
-:::
-
-::: {.pull}
-Luna returns **five booleans**. Local code applies the edit only if all five
-come back true.
-:::
-
-<div class="gates">
-<span class="gate">support</span><span class="gate-op">and</span><span class="gate">atomicity</span><span class="gate-op">and</span><span class="gate">materiality</span><span class="gate-op">and</span><span class="gate">redundancy</span><span class="gate-op">and</span><span class="gate">replacement safety</span>
-</div>
 
 ::: {.card .card-gen}
-[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What the gate actually caught]{.card-label}
-On development topic `499`, four of five proposed edits passed. The one that
-failed would have **replaced a sentence carrying a distinct argument** — which
-is the entire reason the screen exists.
+[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>2 · It screens each edit]{.card-label}
+Five true-or-false questions. **All five must pass**, or the edit is dropped:
+
+<div class="gatelist">
+<span class="gl-k">support</span><span class="gl-v">the evidence actually says it</span>
+<span class="gl-k">atomicity</span><span class="gl-v">one fact, not three</span>
+<span class="gl-k">materiality</span><span class="gl-v">it changes the answer</span>
+<span class="gl-k">redundancy</span><span class="gl-v">not already said</span>
+<span class="gl-k">replacement safety</span><span class="gl-v">nothing lost by swapping</span>
+</div>
+
+[On development topic `499`, four of five edits passed. The one that failed
+would have replaced a sentence carrying its own argument.]{.foot}
+:::
 :::
 
 ::: {.cap}
-Luna never rewrites prose; it only answers true or false, and local code does
-the editing. Across the 119, on every topic whose checkpoint recorded fully,
-Luna audited **every evidence group, no sampling**.
+Luna answers; **local code does the editing**. Across the 119, on every topic
+whose checkpoint recorded fully, it audited every evidence group, no sampling.
 :::
 
 ## Two writers: this request
@@ -385,67 +387,65 @@ made 16 more statements**. Both spotted the 30-day trap — single-pass noted si
 weeks exceeds it; multi-stage added that the definition alone *does not
 establish* whether a particular six-week sublet is lawful.
 :::
-## What came back {.divider}
-
-<div class="roadmap">
-<span class="leg"><span class="leg-n">1</span>The task</span>
-<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
-<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
-<span class="leg leg-now"><span class="leg-n">4</span>What came back</span>
-<span class="leg"><span class="leg-n">5</span>What I would claim</span>
-</div>
-
-::: {.cap}
-The organizers' numbers, on one topic and then on all 42.
-:::
-
-
 ## The difference you can see
 
 ::: {.trace-step}
-Three topics · what the second pass added, checked against the submitted answers
+The example · what the second pass added to rag2026-18
 :::
 
-::: {.grid-3}
-::: {.card .card-gen}
-[rag2026-18 · six weeks of housing]{.card-label}
-"…if the repairs involve [lead hazards]{.hl}, ask whether the unit has been
-made lead-safe."
-
-The request says *repairs*, and separately, *a child*. Single-pass wrote 22
-statements and **never used the word "lead"**.
+::: {.adds}
+::: {.add}
+[“If the apartment repairs involve **lead hazards**, ask whether the temporary
+unit is appropriate for a child and has been made lead-safe.”]{.add-q}
+[Joins the two facts that sat in different sentences — *repairs*, and *a
+child*. The word “lead” never appears in the single-pass answer.]{.add-v}
 :::
 
-::: {.card .card-gen}
-[rag2026-57 · paying kidney donors]{.card-label}
-"…requiring safeguards against [coercion]{.hl}, inequity, trafficking, and
-abandonment of donors."
-
-The request asks whether payment "crosses a line". **Neither "coercion" nor
-"withdraw" appears anywhere in the single-pass answer.**
+::: {.add}
+[“Suspected illegal charges can be reported to the **NY State Division of
+Housing and Community Renewal** or the **NYC Department of Consumer
+Affairs**.”]{.add-q}
+[Tells them what to actually do about it. Single-pass names no authority to
+report anything to.]{.add-v}
 :::
 
-::: {.card .card-gen}
-[rag2026-95 · shootings near schools]{.card-label}
-"…familiar adult monitors who build relationships and [de-escalate]{.hl}
-conflicts, rather than only a conventional security presence."
+::: {.add}
+[“Remote-working parents should plan **childcare** explicitly, because
+balancing work and parenting is a significant practical challenge.”]{.add-q}
+[The request said *with a child* and *remote work*. Single-pass never uses the
+word childcare.]{.add-v}
+:::
 
-The residents' split was police versus community groups. Single-pass
-**proposed neither word**.
+::: {.add}
+[“A final **comparison table** should score each property on legality, all-in
+cost, safety, cancellation terms, sleeping and work separation, location,
+kitchen, laundry, Wi-Fi, and child suitability.”]{.add-q}
+[The request asked *how should we compare*. Single-pass compares in prose and
+never hands over a table.]{.add-v}
 :::
 :::
 
 ::: {.cap}
-Each quote is from the submitted multi-stage file; each absence is checked
-against the submitted single-pass file for the same topic. These are three of
-the topics where **both** measures put multi-stage ahead — chosen for that, so
-treat them as the good case, not the average one.
+Every quote is from the submitted multi-stage file; every absence is checked
+against the submitted single-pass file for the same topic. Both answers caught
+the 30-day trap — but only multi-stage added that the definition *alone does
+not establish* whether a six-week sublet is lawful.
 :::
 
-## What the organizers said about it
+## Overall score {.divider .divider-img}
+
+::: {.secshot}
+![](2026-trec-rag-talk/img-sec-score.jpg){fig-alt="A small figure seen from behind stands looking up at a tall dark wall filled with a regular grid of small rectangular panels, most of them dim blue and a scattered minority glowing warm amber, with no readable text on any of them."}
+:::
+
+::: {.cap}
+From here on, every number is the organizers' own.
+:::
+
+## What the organizers said about rag2026-18
 
 ::: {.trace-step}
-The example · rag2026-18 alone — one topic of the 42, not the overall result
+One topic of the 42 — not the overall result
 :::
 
 ::: {.diagram}
@@ -453,10 +453,8 @@ The example · rag2026-18 alone — one topic of the 42, not the overall result
 :::
 
 ::: {.boundary}
-Assessors never compared our two answers with each other. Each one was put
-against **other teams' answers**, so "preferred" means preferred over someone
-else's run. Reading these bars as single-pass versus multi-stage is the one
-mistake this chart invites.
+The two battle bars are **not our two answers against each other.** Each run
+was put against **other teams' answers**, separately.
 :::
 ## When the two measures disagree
 
@@ -504,27 +502,10 @@ Every number here is the organizers' own, from the score files they released.
 Multi-stage costs several extra model calls per topic for this. Nothing here is
 **a claim that it is novel** — only that the extra passes did something visible.
 :::
-## What the Retrieval submission did
-
-::: {.eyebrow}
-The other submission · one candidate set, three orderings
-:::
-
-::: {.diagram}
-![](2026-trec-rag-talk/11-retrieval-submission.svg){fig-alt="A left-to-right chain. The lanes: the untouched narrative plus one pooled lane per subnarrative, each admitting a document only when its aggregate score clears that lane's own robust cutoff, the median plus 2.5 times 1.4826 times the median absolute deviation. The union of those admissions is the candidate core for that narrative, 1 to 121 documents deep, 61 distinct depths, mean about 36, 4,246 rows per run, with no padding and no fixed truncation. That identical set is then ordered three ways into the three submitted files: narrative plus subnarrative, evidence breadth, and narrative only. For a given narrative all three runs contain the identical document set, so only the ordering changes."}
-:::
-
-::: {.cap}
-Depth is **decided per narrative by the evidence**, not padded to a round
-number: the submitted runs go 1 to 121 documents deep across 61 distinct
-depths. I checked the three files — for any narrative the document set is
-identical, so what differs between them is purely the order.
-:::
-
 ## A word on the retrieval side
 
 ::: {.eyebrow}
-The other submission · how it scored
+The Retrieval submission · how it scored
 :::
 
 ::: {.diagram}
@@ -537,51 +518,36 @@ topic — so this measures **what the cutoff selected**, not how it was ordered.
 We return about a third as many documents as the field median and are more
 precise for it; recall is the price.
 :::
-## What I would claim {.divider}
-
-<div class="roadmap">
-<span class="leg"><span class="leg-n">1</span>The task</span>
-<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
-<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
-<span class="leg"><span class="leg-n">4</span>What came back</span>
-<span class="leg leg-now"><span class="leg-n">5</span>What I would claim</span>
-</div>
-
-::: {.cap}
-And, more to the point, what I would not.
-:::
-
-
-## What I would and would not claim from this
+## Where that leaves the architecture
 
 ::: {.eyebrow}
-Limits
+The same five pieces, now with what they did
 :::
 
-::: {.grid-2}
-::: {.card .card-ok}
-[Supported]{.card-label}
-Given the **same evidence**, multi-stage covered more of what the assessors
-were looking for, and was preferred in a larger share of its battles against
-other teams' answers.
+::: {.diagram}
+![](2026-trec-rag-talk/00-architecture.svg){fig-alt="The same five components as the opening slide, left to right: Plan with deepseek-v4-flash, Search with Pyserini BM25 over ClimbMix, Rerank with mxbai-rerank-base-v2, Select with all-MiniLM-L6-v2, and Write with gpt-5.6-sol and gpt-5.6-luna. The chain forks at the end into three ranked retrieval files and two answer files."}
+:::
+
+::: {.grid-3}
+::: {.card .card-ret}
+[The first four boxes]{.card-label}
+Returned about **a third as many documents** as the field median, and were
+more precise for it. Recall is the price.
+:::
+
+::: {.card .card-gen}
+[The last box, run twice]{.card-label}
+Same evidence in. Multi-stage supported more nuggets on **26 of 42** topics,
+tied on 15, lost 1.
 :::
 
 ::: {.card .card-source}
-[Not supported]{.card-label}
-**Which stage caused it** — planning, auditing, revision, model mix and length
-all moved together.
-
-**That length explains it.** Multi-stage wrote 531–1,011 words against 203–749.
-
-**Better grounding.** A separate RAGDoll check favoured *single-pass*, 0.757
-against 0.653.
+[The one that points the other way]{.card-label}
+A separate citation-support check favoured **single-pass**, 0.757 to 0.653.
+Coverage and grounding are not the same question.
 :::
 :::
 
-::: {.boundary}
-The organizer gains **should not be read as better grounding**. Coverage and
-citation support are different questions, and here they point different ways.
-:::
 ## Everything here is public
 
 ::: {.eyebrow}

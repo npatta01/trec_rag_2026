@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 600" role="img" aria-labelledby="ms-title ms-desc">
-  <title id="ms-title">Multi-stage: the work changes hands five times</title>
+  <title id="ms-title">Multi-stage: the work changes hands seven times</title>
   <desc id="ms-desc">A three-lane strip. Time runs left to right and the lane says who did it: Luna the reviewer, marked with a crescent moon; Sol the writer, marked with a sun; and local code, marked with angle brackets and a dashed outline. The path zigzags between the lanes seven times. One, Luna plans the answer. Two, Sol writes the draft. Three, Luna audits each evidence group on its own, returning at most six missing-detail cards per group. Four, local code merges those cards. Five, Sol proposes edits, at most three. Six, Luna screens each proposed edit against five booleans that must all pass. Seven, local code applies only the edits that passed. The result is 119 validated answers. This is one pass through the stages, not a repeating loop, and if revision fails the draft that already passed validation stands.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
@@ -46,19 +46,21 @@
   <!-- 1 Luna plans -->
   <rect x="280" y="134" width="186" height="80" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
   <text class="ms-step"  x="294" y="156" style="fill:var(--gen)">1</text>
-  <text class="ms-label" x="373" y="186" text-anchor="middle">Plans the answer</text>
+  <text class="ms-label" x="373" y="180" text-anchor="middle">Plans</text>
+  <text class="ms-sub"   x="373" y="202" text-anchor="middle">3–8 obligations</text>
   <path class="ms-flow" d="M466 174 H476 V310 H483"/>
 
   <!-- 2 Sol drafts -->
   <rect x="487" y="274" width="186" height="80" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
   <text class="ms-step"  x="501" y="296" style="fill:var(--ret)">2</text>
-  <text class="ms-label" x="580" y="326" text-anchor="middle">Writes the draft</text>
+  <text class="ms-label" x="580" y="320" text-anchor="middle">Drafts</text>
+  <text class="ms-sub"   x="580" y="342" text-anchor="middle">the whole answer</text>
   <path class="ms-flow" d="M673 314 H683 V174 H690"/>
 
   <!-- 3 Luna audits -->
   <rect x="694" y="134" width="186" height="80" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
   <text class="ms-step"  x="708" y="156" style="fill:var(--gen)">3</text>
-  <text class="ms-label" x="787" y="180" text-anchor="middle">Audits each group</text>
+  <text class="ms-label" x="787" y="180" text-anchor="middle">Audits</text>
   <text class="ms-sub"   x="787" y="202" text-anchor="middle">≤6 cards per group</text>
   <path class="ms-flow" d="M880 174 H890 V443 H897"/>
 
@@ -70,14 +72,14 @@
   <!-- 4 Sol proposes -->
   <rect x="1032" y="274" width="186" height="80" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
   <text class="ms-step"  x="1046" y="296" style="fill:var(--ret)">4</text>
-  <text class="ms-label" x="1125" y="320" text-anchor="middle">Proposes edits</text>
-  <text class="ms-sub"   x="1125" y="342" text-anchor="middle">at most 3</text>
+  <text class="ms-label" x="1125" y="320" text-anchor="middle">Proposes</text>
+  <text class="ms-sub"   x="1125" y="342" text-anchor="middle">at most 3 edits</text>
   <path class="ms-flow" d="M1218 314 H1228 V174 H1235"/>
 
   <!-- 5 Luna screens -->
   <rect x="1239" y="134" width="186" height="80" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
   <text class="ms-step"  x="1253" y="156" style="fill:var(--gen)">5</text>
-  <text class="ms-label" x="1332" y="180" text-anchor="middle">Screens each edit</text>
+  <text class="ms-label" x="1332" y="180" text-anchor="middle">Screens</text>
   <text class="ms-sub"   x="1332" y="202" text-anchor="middle">all five must pass</text>
   <path class="ms-flow" d="M1425 174 H1435 V443 H1442"/>
 

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 560" role="img" aria-labelledby="pl-title pl-desc">
   <title id="pl-title">One model call turns the narrative into a bounded plan</title>
-  <desc id="pl-desc">The narrative goes into a single DeepSeek call, which returns a plan: between one and eight subnarratives, each carrying one to three plain BM25 queries, shown as small dots. The original narrative is kept as its own search lane alongside them. The planner never sees a retrieved document and is never called again for that topic, and the whole plan is capped at twenty-five searches.</desc>
+  <desc id="pl-desc">The narrative goes into a single DeepSeek call made with structured output at temperature zero. The call returns a plan whose shape is shown inside the box: a list of between one and eight subnarratives, each carrying its own text, one angle in its own words, and a list of one to three plain BM25 query strings. Nothing else goes in, and no document is ever shown to it. On the right the plan fans out into up to eight subnarrative rows, each with one dot per query, while the original narrative is kept as its own dashed search lane below them. The planner is never called again for that topic, and the whole plan is capped at twenty-five searches.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
@@ -8,6 +8,7 @@
     .pl-big{font-size:34px;font-weight:740}
     .pl-mid{font-size:28px;font-weight:700}
     .pl-sm{font-size:24px;fill:var(--muted)}
+    .pl-code{font-size:23px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
     .pl-hdr{font-size:26px;font-weight:780;fill:var(--ret)}
     .pl-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#plar)}
   </style>
@@ -16,18 +17,21 @@
   </defs>
   <rect width="1500" height="560" fill="var(--bg)"/>
 
-  <rect x="30" y="228" width="260" height="104" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
-  <text class="pl-big" x="160" y="272" text-anchor="middle">The request</text>
-  <text class="pl-sm"  x="160" y="306" text-anchor="middle">nothing else</text>
+  <rect x="24" y="234" width="212" height="92" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
+  <text class="pl-mid" x="130" y="276" text-anchor="middle">The request</text>
+  <text class="pl-sm"  x="130" y="306" text-anchor="middle">nothing else</text>
 
-  <path class="pl-flow" d="M294 280 H386"/>
+  <path class="pl-flow" d="M240 280 H276"/>
 
-  <rect x="392" y="222" width="300" height="116" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
-  <text class="pl-big" x="542" y="266" text-anchor="middle">One call</text>
-  <text class="pl-sm"  x="542" y="300" text-anchor="middle">DeepSeek · schema</text>
-  <text class="pl-sm"  x="542" y="326" text-anchor="middle">never repeated</text>
+  <rect x="282" y="152" width="436" height="256" rx="14" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3.5"/>
+  <text class="pl-big" x="306" y="198">One DeepSeek call</text>
+  <text class="pl-sm"  x="306" y="230">structured output · temperature 0</text>
+  <text class="pl-code" x="306" y="276">subnarratives[ 1 – 8 ]</text>
+  <text class="pl-code" x="330" y="306">· text — one angle, its own words</text>
+  <text class="pl-code" x="330" y="336">· queries[ 1 – 3 ] — plain BM25 strings</text>
+  <text class="pl-sm"  x="306" y="382">no documents in, none ever shown to it</text>
 
-  <path class="pl-flow" d="M696 280 H780"/>
+  <path class="pl-flow" d="M722 280 H780"/>
 
   <!-- fan into subnarratives -->
   <path d="M790 280 C840 280 840 118 890 118" fill="none" stroke="var(--ret)" stroke-width="3"/>
