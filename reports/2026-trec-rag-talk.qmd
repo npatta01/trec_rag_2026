@@ -101,6 +101,28 @@ called again. **At most 25 searches** per topic.
 ## Planning: this request
 
 ::: {.trace-step}
+The example · one vague request, eight angles, none of them supplied by us
+:::
+
+::: {.nargrid}
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -8H-7M-3 -8H11M-11 0H-7M-3 0H11M-11 8H-7M-3 8H6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>What options exist?</span></div>
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-7 10V-6M7 10V-11M-13 10H13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>How do the four types compare?</span></div>
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-7 7L7 -7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Which listings are illegal?</span></div>
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-12" y="-7.5" width="24" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="0" r="3.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>What does it really cost?</span></div>
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -11L9 -7.5V1C9 7 4.8 10.6 0 12C-4.8 10.6 -9 7 -9 1V-7.5Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-4 0.5L-1 3.5L4.5 -2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Is it safe for a child?</span></div>
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-10" y="-8" width="20" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-10 -2.5H10M-5 -12V-5M5 -12V-5M-3 2.5L3 7M3 2.5L-3 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>What if we cancel?</span></div>
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -4V-11H-4M4 -11H11V-4M11 4V11H4M-4 11H-11V4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Is there room to work?</span></div>
+<div class="qcard"><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 12C0 12 9 -1 9 -7A9 9 0 1 0 -9 -7C-9 -1 0 12 0 12Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="-7" r="3.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Is the location practical?</span></div>
+:::
+
+::: {.cap}
+The planner wrote these, not me. It had the request and nothing else — **no
+document, no search results** — and it is never called again.
+:::
+
+## The queries each angle became
+
+::: {.trace-step}
 The example · 8 subnarratives × 2 queries = 16 searches, plus the untouched request = 17 lanes
 :::
 

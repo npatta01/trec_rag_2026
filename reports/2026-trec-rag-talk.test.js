@@ -140,8 +140,8 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 20,
-  `expected 20 content slides, found ${sections.length}`);
+assert(sections.length === 21,
+  `expected 21 content slides, found ${sections.length}`);
 assert(!/01-approach/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/01-approach.svg")),
   "the funnel figure was cut; nothing should still point at it");
 
@@ -173,6 +173,19 @@ assert(/8 subnarratives . 2 queries = 16 searches/.test(qmd),
 // untouched-narrative lane. The slide must not stop at 16.
 assert(/= 16 searches, plus the untouched request = 17 lanes/.test(qmd),
   "the planning slide must account for the untouched-narrative lane");
+
+// Planning is told over two slides: the eight angles, then the queries each
+// one became. The audience tracks a question by its number and colour across
+// the pair, so both slides must list the same eight in the same order.
+const angleCards = [...qmd.matchAll(/<div class="qcard">.*?<\/svg><span>(.*?)<\/span><\/div>/gs)]
+  .map((m) => m[1].trim());
+const queryCards = [...qmd.matchAll(/<summary><svg class="glyph qico".*?<\/svg>(.*?)<\/summary>/gs)]
+  .map((m) => m[1].trim());
+assert(angleCards.length === 8,
+  `expected 8 angle cards, found ${angleCards.length}`);
+assert(JSON.stringify(angleCards) === JSON.stringify(queryCards),
+  `the two planning slides must list the same eight angles in the same order:\n` +
+  `  angles:  ${JSON.stringify(angleCards)}\n  queries: ${JSON.stringify(queryCards)}`);
 
 // The 40 budget is a SELECTED PASSAGE cap. In the handoff schema a "group" is
 // a subnarrative (group_id == subnarrative_id), one per subnarrative on all
@@ -291,9 +304,12 @@ for (const [fig, tok, want] of [["00-architecture", "ar", 5], ["02-one-lane", "l
 // Every subnarrative card gets its own symbol, so eight open cards do not read
 // as one wall of identical boxes.
 const qicons = (qmd.match(/class="glyph qico"/g) || []).length;
-assert(qicons === 8, `expected one symbol per subnarrative, found ${qicons}`);
+assert(qicons === 16,
+  `expected one symbol per subnarrative on both planning slides, found ${qicons}`);
 assert(/nth-child\(3n \+ 1\)/.test(theme),
   "the subnarrative cards should cycle through accents");
+assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
+  "the angle cards must cycle the same accents as the query cards");
 
 // ---- figure colours must actually apply ------------------------------------
 // Each figure's stylesheet sets `text{fill:var(--ink)}`. A presentation
