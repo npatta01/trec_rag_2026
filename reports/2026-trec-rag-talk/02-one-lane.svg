@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 580" role="img" aria-labelledby="ln-title ln-desc">
   <title id="ln-title">What one BM25 query lane gives up, stage by stage</title>
-  <desc id="ln-desc">On the left, four squares drawn to scale on a common baseline, where the area of each square is its count. The first is at most 1,000 documents and dwarfs the rest. The second is at most 100 passages, a tenth of the area. The third is at most 40 selected passages. The fourth, drawn in amber with a dashed edge, is at most 20 advisory nuggets and is barely a tile beside the first square. Documents become passages at the second step, so the unit changes there. On the right, the same four stages as a list, each with its own symbol: search with Pyserini BM25, rerank by chunking and scoring with mxbai rerank base v2, select by dropping near duplicates with all MiniLM L6 v2 and spreading the rest with maximal marginal relevance, and finally the nuggets, which are advisory hints rather than authority. Every figure is a per-query ceiling, which is what the less-than-or-equal sign on it means.</desc>
+  <desc id="ln-desc">On the left, four squares drawn to scale on a common baseline, where the area of each square is its count. The first is at most 1,000 documents and dwarfs the rest. The second is at most 100 passages, a tenth of the area. The third is at most 40 selected passages. The fourth, drawn in amber with a dashed edge, is at most 20 nugget claims and is barely a tile beside the first square. Documents become passages at the second step, so the unit changes there. On the right, the same four stages as a list, each with its own symbol: search with Pyserini BM25, rerank by chunking and scoring with mxbai rerank base v2, select by dropping near duplicates with all MiniLM L6 v2 and spreading the rest with maximal marginal relevance, which picks each next passage for being relevant and unlike the ones already kept, and finally the nuggets, which are short claims the writer may use but never cites. Every figure is a per-query ceiling, which is what the less-than-or-equal sign on it means.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--adv:#91610d;--adv-soft:#faecc7;--s1:#106f92;--s1-soft:#d6edf5;--s2:#5530e8;--s2-soft:#dcd6f5;--s3:#b01496;--s3-soft:#f5d6f0;--s4:#965811;--s4-soft:#f5e7d6}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--adv:#f0c46f;--adv-soft:#433616;--s1:#23a7d6;--s1-soft:#17353f;--s2:#8c75e8;--s2-soft:#1f173f;--s3:#e456cc;--s3-soft:#3f1739;--s4:#db8624;--s4-soft:#3f2d17}}
@@ -56,9 +56,11 @@
 
   <g transform="translate(856,360)" style="color:var(--s3)"><circle r="23" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="2.6"/><use href="#ln-g-filter"/></g>
   <text class="ln-row" x="896" y="354">Select</text>
-  <text class="ln-sub" x="896" y="380">drop near-duplicates with all-MiniLM-L6-v2, then spread with MMR</text>
+  <text class="ln-sub" x="896" y="380">drop near-duplicates (all-MiniLM-L6-v2), then MMR —</text>
+  <text class="ln-sub" x="896" y="404">each next pick relevant and unlike the ones already kept</text>
 
   <g transform="translate(856,454)" style="color:var(--adv)"><circle r="23" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6" stroke-dasharray="7 5"/><use href="#ln-g-hint"/></g>
   <text class="ln-row" x="896" y="448">Nuggets</text>
-  <text class="ln-sub" x="896" y="474">short claims written from those passages — hints, not authority</text>
+  <text class="ln-sub" x="896" y="474">short claims written from those passages, for the writer to use</text>
+  <text class="ln-sub" x="896" y="498">the answer still cites the passage, never the claim</text>
 </svg>

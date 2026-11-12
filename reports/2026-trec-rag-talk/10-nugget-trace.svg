@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 600" role="img" aria-labelledby="ng-title ng-desc">
-  <title id="ng-title">From selected passage to advisory claim, for one subnarrative of this request</title>
-  <desc id="ng-desc">A left-to-right chain in three parts. On the left, two selected passages drawn as solid cards headed "the authority": one saying a short-term rental in New York City is one of fewer than 30 consecutive days, the other saying the city has run enforcement sweeps against illegal listings, with fines. Both are marked as the speaker's own wording standing in for the real passages, because the corpus text stays private. In the middle, the nuggetizer: one hosted call per subnarrative, writing only from those passages, at most twenty claims, each attributed to at most three of the documents behind it. On the right, the two claims that came back, drawn with dashed edges and headed "advisory only": n092, that New York City defines a short-term rental as fewer than 30 consecutive days, and n094, that the city has cracked down on illegal rentals including raids and fines. A note marks n092 as a trap: the family needs six weeks, which is longer than thirty days, so the definition settles nothing on its own.</desc>
+  <title id="ng-title">From selected passage to hint claim, for one subnarrative of this request</title>
+  <desc id="ng-desc">A left-to-right chain in three parts. On the left, two selected passages drawn as solid cards headed "the authority": one saying a short-term rental in New York City is one of fewer than 30 consecutive days, the other saying the city has run enforcement sweeps against illegal listings, with fines. Both are marked as the speaker's own wording standing in for the real passages, because the corpus text stays private. In the middle, the nuggetizer: one hosted call per subnarrative, writing only from those passages, at most twenty claims, each attributed to at most three of the documents behind it. On the right, the two claims that came back, drawn with dashed edges and headed "hints, never cited": n092, that New York City defines a short-term rental as fewer than 30 consecutive days, and n094, that the city has cracked down on illegal rentals including raids and fines. A note marks why a hint stays a hint: n092 is true but useless here, because six weeks is 42 days and the under-thirty-day rule does not cover this family at all, so a writer leaning on it would answer a question nobody asked.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616}}
@@ -50,8 +50,8 @@
   <path class="ng-flow" d="M946 216 H1002 V117 H1042"/>
   <path class="ng-flow" d="M1002 216 V285 H1042"/>
 
-  <!-- advisory only: dashed edges -->
-  <text class="ng-role" x="1046" y="36" style="fill:var(--adv)">WHAT CAME BACK — ADVISORY ONLY</text>
+  <!-- hints only: dashed edges -->
+  <text class="ng-role" x="1046" y="36" style="fill:var(--adv)">WHAT CAME BACK — HINTS, NEVER CITED</text>
 
   <rect x="1046" y="58" width="514" height="118" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3" stroke-dasharray="9 6"/>
   <text class="ng-id"   x="1070" y="94" style="fill:var(--adv)">n092</text>
@@ -65,9 +65,9 @@
 
   <!-- the trap -->
   <rect x="40" y="452" width="1520" height="112" rx="12" fill="var(--panel)" stroke="var(--adv)" stroke-width="3"/>
-  <text class="ng-trap" x="68" y="492" style="fill:var(--adv)">n092 is a trap.</text>
-  <text class="ng-body" x="68" y="526">The family needs six weeks, which is longer than 30 days —</text>
-  <text class="ng-body" x="68" y="556">so the definition settles nothing on its own.</text>
+  <text class="ng-trap" x="68" y="492" style="fill:var(--adv)">Why a hint stays a hint: n092 is true, and useless here.</text>
+  <text class="ng-body" x="68" y="526">Six weeks is 42 days, so the under-30-day rule does not cover this family at all.</text>
+  <text class="ng-body" x="68" y="556">A writer who leaned on the hint would answer a question nobody asked.</text>
 
   <path class="ng-flow" d="M1560 117 H1582 V508 H1564"/>
 </svg>

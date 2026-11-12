@@ -23,6 +23,21 @@ format:
     center: true
 ---
 
+## The task {.divider}
+
+<div class="roadmap">
+<span class="leg leg-now"><span class="leg-n">1</span>The task</span>
+<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
+<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
+<span class="leg"><span class="leg-n">4</span>What came back</span>
+<span class="leg"><span class="leg-n">5</span>What I would claim</span>
+</div>
+
+::: {.cap}
+What the track asks for, and the five pieces that answer it.
+:::
+
+
 ## What the track asks
 
 ::: {.eyebrow}
@@ -82,6 +97,21 @@ location, and day-to-day practicality,
 Eight things asked at once. Hold on to the two bold facts — they sit in
 different sentences, and only one of the two answers ever joins them.
 :::
+## Finding the evidence {.divider}
+
+<div class="roadmap">
+<span class="leg"><span class="leg-n">1</span>The task</span>
+<span class="leg leg-now"><span class="leg-n">2</span>Finding the evidence</span>
+<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
+<span class="leg"><span class="leg-n">4</span>What came back</span>
+<span class="leg"><span class="leg-n">5</span>What I would claim</span>
+</div>
+
+::: {.cap}
+One vague request becomes 17 searches, then about a page of text.
+:::
+
+
 ## Planning: how it works
 
 ::: {.eyebrow}
@@ -168,12 +198,14 @@ How it works
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/02-one-lane.svg){fig-alt="One BM25 query lane, stage by stage: up to 1,000 documents retrieved, chunked and reranked down to at most 100 kept passages, reduced to at most 40 selected passages, producing at most 20 advisory nuggets. The nugget stage is drawn in amber with a dashed edge because nuggets are advisory, not authoritative."}
+![](2026-trec-rag-talk/02-one-lane.svg){fig-alt="One BM25 query lane, stage by stage: up to 1,000 documents retrieved, chunked and reranked down to at most 100 kept passages, reduced to at most 40 selected passages, producing at most 20 nugget claims. The nugget stage is drawn in amber with a dashed edge because the answer may use those claims but must always cite the passage instead."}
 :::
 
 ::: {.cap}
-One lane of seventeen, and the **≤** on each number is a cap I configured.
-Three orders of magnitude of text, cut down to about a page.
+A document never gets scored as a document. It is **cut into overlapping
+windows** — 3,500 characters, 350 of overlap — and the reranker scores each
+window against this lane's query. What survives to the next step is windows,
+not documents, which is why the unit changes at step two.
 :::
 ## Evidence and nuggets: how it works
 
@@ -182,7 +214,7 @@ How it works
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/05-evidence.svg){fig-alt="Nine retrieved passages are drawn as cards, where cards saying the same thing carry the same line pattern and brackets mark the three sets of near-duplicates. An all-MiniLM-L6-v2 embedding treats any pair above cosine 0.92 as a duplicate, so each set collapses to one survivor in its original wording, and maximal marginal relevance with lambda 0.7 keeps the survivors spread. Nine passages become five selected, capped at forty per subnarrative, and these are the authority the answer must cite. They are passed separately to a nugget generator returning up to twenty short claims, drawn in amber with a dashed edge because they are advisory hints that never replace the evidence."}
+![](2026-trec-rag-talk/05-evidence.svg){fig-alt="Nine retrieved passages are drawn as cards, where cards saying the same thing carry the same line pattern and brackets mark the three sets of near-duplicates. An all-MiniLM-L6-v2 embedding treats any pair above cosine 0.92 as a duplicate, so each set collapses to one survivor in its original wording, and maximal marginal relevance with lambda 0.7 keeps the survivors spread. Nine passages become five selected, capped at forty per subnarrative, and these are the authority the answer must cite. They are passed separately to a nugget generator returning up to twenty short claims, drawn in amber with a dashed edge because the answer may use them but must cite the passage, never the claim."}
 :::
 
 ::: {.dupe}
@@ -206,14 +238,31 @@ The example · facet f001, legality and reliability
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/10-nugget-trace.svg){fig-alt="A left-to-right chain. Two selected passages on the left, drawn solid and headed the authority: one saying a short-term rental in New York City is one of fewer than 30 consecutive days, the other saying the city has run enforcement sweeps with fines. Both are marked as stand-in wording, because the corpus text stays private. In the middle the nuggetizer: one hosted call per subnarrative, writing only from those passages, at most 20 claims, each citing at most 3 documents. On the right the two claims that came back, drawn dashed and headed advisory only: n092 and n094. A note marks n092 as a trap."}
+![](2026-trec-rag-talk/10-nugget-trace.svg){fig-alt="A left-to-right chain. Two selected passages on the left, drawn solid and headed the authority: one saying a short-term rental in New York City is one of fewer than 30 consecutive days, the other saying the city has run enforcement sweeps with fines. Both are marked as stand-in wording, because the corpus text stays private. In the middle the nuggetizer: one hosted call per subnarrative, writing only from those passages, at most 20 claims, each citing at most 3 documents. On the right the two claims that came back, drawn dashed and headed hints, never cited: n092 and n094. A note explains why n092 is true but useless here, since six weeks is 42 days and the under-30-day rule does not cover this family."}
 :::
 
 ::: {.cap}
-Solid edges are authority, dashed edges are advice — the same rule holds all
-the way to the answer. These are our own hints; the organizers' gold nuggets
-are a separate thing, written by assessors.
+**One nuggetizer call per subnarrative** — eight for this request, each seeing
+only its own passages. Solid edges are authority, dashed are hints, and the
+rule never changes: a sentence cites the passage, never the claim. These are
+our hints; the organizers' gold nuggets are a different thing, written by
+assessors.
 :::
+
+## Writing the answer {.divider}
+
+<div class="roadmap">
+<span class="leg"><span class="leg-n">1</span>The task</span>
+<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
+<span class="leg leg-now"><span class="leg-n">3</span>Writing the answer</span>
+<span class="leg"><span class="leg-n">4</span>What came back</span>
+<span class="leg"><span class="leg-n">5</span>What I would claim</span>
+</div>
+
+::: {.cap}
+The same sealed evidence, written twice — once alone, once with a second model judging.
+:::
+
 
 ## Single-pass: Sol alone
 
@@ -226,8 +275,10 @@ How it works · two steps
 :::
 
 ::: {.cap}
-Two steps and one model call. **117 of the 119 passed validation first try** —
-this is the baseline the extra stages have to beat.
+The two that failed were **re-asked, not patched**. The retry adds one
+instruction — return a fresh answer that satisfies the schema and the citation
+rules — and the model never sees its failed attempt, because nothing from it is
+put back in the prompt.
 :::
 
 ## Multi-stage: the work changes hands
@@ -241,9 +292,11 @@ How it works · five handoffs
 :::
 
 ::: {.cap}
-**Sol writes; Luna only judges; local code decides.** The lane a box sits in
-says who did it, so the zigzag *is* the handoff. Multi-stage starts from the
-evidence, not from the single-pass answer.
+**No conversation runs through this.** Every box is its own call — one system
+prompt, one user prompt, nothing carried over — and Luna and Sol are different
+models with different instructions. Luna never sees Sol's reasoning, only the
+artefact local code hands it. That is what makes "Luna only judges" a fact
+about the wiring rather than a promise.
 :::
 
 ## What a plan actually contains
@@ -253,43 +306,25 @@ How it works · multi-stage, step 1
 :::
 
 ::: {.pull}
-A plan is **3 to 8 obligations**. That is the whole object.
+Not a prompt. A plan is **3 to 8 obligations** — and this is one of them.
 :::
 
-::: {.grid-2}
-<div class="record">
-<span class="f-key">label</span><span class="f-val">a short name for this obligation</span>
-<span class="f-key">narrative_spans</span><span class="f-val">1–4 spans <b>copied character-for-character</b> out of the request</span>
-<span class="f-key">priority</span><span class="f-val">must · should · could</span>
-<span class="f-key">answer_mode</span><span class="f-val">describe · explain · compare · evaluate · recommend · enumerate</span>
-<span class="f-key">target_words</span><span class="f-val">a budget for this obligation alone</span>
-<span class="f-key">selected_claim_aliases</span><span class="f-val">c001, c014 … picked from the hints it was handed</span>
+<div class="record record-lg">
+<span class="f-key">label</span><span class="f-val">legality and reliability</span>
+<span class="f-key">narrative_spans</span><span class="f-val">"avoid illegal listings" · "reliable enough for a family"</span>
+<span class="f-key">priority</span><span class="f-val">must</span>
+<span class="f-key">answer_mode</span><span class="f-val">evaluate</span>
+<span class="f-key">target_words</span><span class="f-val">140</span>
+<span class="f-key">selected_claim_aliases</span><span class="f-val">c003 · c011 · c014</span>
 </div>
 
-::: {}
-::: {.card .card-gen}
-[The spans are an authentication boundary]{.card-label}
-Local code checks every span really occurs in the request, and **replaces any
-that does not**.
-:::
-
-::: {.card .card-ret}
-[It cannot invent an identifier]{.card-label}
-Real claim and document IDs are **resolved locally**, never taken from model
-output.
-:::
-
-::: {.card .card-source}
-[The budget is arithmetic]{.card-label}
-Targets must total **850–950 words**, checked before a word is written.
-:::
-:::
-:::
-
 ::: {.cap}
-Field names are the schema's, from `narrative_blueprint.py`. A plan says what
-the answer owes the reader and what each part may cite — it holds **no prose**,
-so Luna never writes a sentence of the answer.
+Field names are the schema's, from `narrative_blueprint.py`; the values are my
+stand-in. Local code enforces three things: **every span must appear in the
+request character-for-character** and any that does not is replaced, **IDs are resolved
+locally** rather than trusted from model output, and the targets must total
+850–950 words. Note what is absent — **no prose**. Luna never writes a sentence
+of the answer.
 :::
 
 ## What Luna's screen keeps, and what it throws out
@@ -298,29 +333,28 @@ so Luna never writes a sentence of the answer.
 How it works · the screening gate
 :::
 
-::: {.grid-2-1}
-::: {.card .card-gen}
-[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Luna's five gates, all must pass]{.card-label}
-Luna returns **only booleans** — support, atomicity, materiality, redundancy,
-replacement safety.
-
-Local code applies an edit only when **all five are true**. The screen never
-rewrites prose itself.
+::: {.pull}
+Luna returns **five booleans**. Local code applies the edit only if all five
+come back true.
 :::
 
-| Dev topic | Edits kept |
-|:---|---:|
-| `233` | 1 of 4 |
-| `300` | 3 of 3 |
-| `499` | 4 of 5 |
+<div class="gates">
+<span class="gate">support</span><span class="gate-op">and</span><span class="gate">atomicity</span><span class="gate-op">and</span><span class="gate">materiality</span><span class="gate-op">and</span><span class="gate">redundancy</span><span class="gate-op">and</span><span class="gate">replacement safety</span>
+</div>
+
+::: {.card .card-gen}
+[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What the gate actually caught]{.card-label}
+On development topic `499`, four of five proposed edits passed. The one that
+failed would have **replaced a sentence carrying a distinct argument** — which
+is the entire reason the screen exists.
 :::
 
 ::: {.cap}
-On topic `499` the screen **rejected a replacement that would have erased a
-distinct argument** — which is what the gate is for. Those three are
-development topics; across the 119, on every topic whose checkpoint recorded
-fully, Luna audited **every evidence group, no sampling**.
+Luna never rewrites prose; it only answers true or false, and local code does
+the editing. Across the 119, on every topic whose checkpoint recorded fully,
+Luna audited **every evidence group, no sampling**.
 :::
+
 ## Two writers: this request
 
 ::: {.trace-step}
@@ -351,6 +385,21 @@ made 16 more statements**. Both spotted the 30-day trap — single-pass noted si
 weeks exceeds it; multi-stage added that the definition alone *does not
 establish* whether a particular six-week sublet is lawful.
 :::
+## What came back {.divider}
+
+<div class="roadmap">
+<span class="leg"><span class="leg-n">1</span>The task</span>
+<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
+<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
+<span class="leg leg-now"><span class="leg-n">4</span>What came back</span>
+<span class="leg"><span class="leg-n">5</span>What I would claim</span>
+</div>
+
+::: {.cap}
+The organizers' numbers, on one topic and then on all 42.
+:::
+
+
 ## The difference you can see
 
 ::: {.trace-step}
@@ -379,7 +428,7 @@ separately that there is a child. One writer joined those two facts.
 ## What the organizers said about it
 
 ::: {.trace-step}
-The example · NIST Batch 2, human-written nuggets
+The example · rag2026-18 alone — one topic of the 42, not the overall result
 :::
 
 ::: {.diagram}
@@ -387,9 +436,10 @@ The example · NIST Batch 2, human-written nuggets
 :::
 
 ::: {.boundary}
-**Each run is judged against other teams' answers, not against the other one of
-ours** — so the battle counts never say a human chose between these two. One of
-**42 scored topics**.
+Assessors never compared our two answers with each other. Each one was put
+against **other teams' answers**, so "preferred" means preferred over someone
+else's run. Reading these bars as single-pass versus multi-stage is the one
+mistake this chart invites.
 :::
 ## When the two measures disagree
 
@@ -435,6 +485,21 @@ The other submission
 All three Retrieval runs differ **only in ordering**, and scored identically
 per topic included — so this measures what we *selected*, not how we ordered it.
 :::
+## What I would claim {.divider}
+
+<div class="roadmap">
+<span class="leg"><span class="leg-n">1</span>The task</span>
+<span class="leg"><span class="leg-n">2</span>Finding the evidence</span>
+<span class="leg"><span class="leg-n">3</span>Writing the answer</span>
+<span class="leg"><span class="leg-n">4</span>What came back</span>
+<span class="leg leg-now"><span class="leg-n">5</span>What I would claim</span>
+</div>
+
+::: {.cap}
+And, more to the point, what I would not.
+:::
+
+
 ## What I would and would not claim from this
 
 ::: {.eyebrow}
@@ -444,8 +509,9 @@ Limits
 ::: {.grid-2}
 ::: {.card .card-ok}
 [Supported]{.card-label}
-With evidence held fixed, multi-stage got higher coverage and a better
-assessor record, on every collection.
+Given the **same evidence**, multi-stage covered more of what the assessors
+were looking for, and was preferred in a larger share of its battles against
+other teams' answers.
 :::
 
 ::: {.card .card-source}

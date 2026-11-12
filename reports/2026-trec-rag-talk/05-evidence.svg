@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 580" role="img" aria-labelledby="ev-title ev-desc">
-  <title id="ev-title">Near-duplicate passages collapse to one survivor each, then produce advisory nuggets</title>
-  <desc id="ev-desc">Nine retrieved passages are drawn as cards. Cards that say the same thing carry the same line pattern, and brackets mark the three sets of near-duplicates. An all-MiniLM-L6-v2 embedding treats any pair above cosine 0.92 as the same thing said twice, so each set collapses to a single survivor in its original wording, and maximal marginal relevance with lambda 0.7 keeps the survivors spread apart. Nine passages become five selected passages, capped at forty per subnarrative. These are the authority the answer must cite. They are passed separately to a nugget generator returning up to twenty short claims, drawn in amber with a dashed edge because they are advisory hints that never replace the evidence.</desc>
+  <title id="ev-title">Near-duplicate passages collapse to one survivor each, then produce hint claims the answer may use but never cites</title>
+  <desc id="ev-desc">Nine retrieved passages are drawn as cards. Cards that say the same thing carry the same line pattern, and brackets mark the three sets of near-duplicates. An all-MiniLM-L6-v2 embedding treats any pair above cosine 0.92 as the same thing said twice, so each set collapses to a single survivor in its original wording, and maximal marginal relevance with lambda 0.7 picks each next survivor for being relevant and unlike the ones already kept apart. Nine passages become five selected passages, capped at forty per subnarrative. These are the authority the answer must cite. They are passed separately to a nugget generator returning up to twenty short claims, drawn in amber with a dashed edge because the answer may use them but must cite the passage, never the claim.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
@@ -59,8 +59,10 @@
   <text class="ev-mech"   x="386" y="250" text-anchor="middle">all-MiniLM-L6-v2</text>
   <text class="ev-mechsm" x="386" y="278" text-anchor="middle">cosine ≥ 0.92</text>
   <path class="ev-flow" d="M282 312 H478"/>
-  <text class="ev-tiny" x="386" y="348" text-anchor="middle">MMR λ 0.7</text>
-  <text class="ev-tiny" x="386" y="374" text-anchor="middle">keeps the spread</text>
+  <text class="ev-tiny" x="386" y="348" text-anchor="middle">then MMR λ 0.7</text>
+  <text class="ev-tiny" x="386" y="374" text-anchor="middle">each next pick:</text>
+  <text class="ev-tiny" x="386" y="400" text-anchor="middle">relevant, and</text>
+  <text class="ev-tiny" x="386" y="426" text-anchor="middle">unlike the rest</text>
 
   <!-- C. selected evidence: one survivor per set, patterns preserved -->
   <rect x="500" y="76" width="450" height="464" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3.5"/>
@@ -86,9 +88,9 @@
 
   <path class="ev-flow" d="M962 312 H1002" stroke="var(--adv)" stroke-dasharray="8 6"/>
 
-  <!-- D. advisory nuggets -->
+  <!-- D. hint claims: dashed, never cited -->
   <rect x="1010" y="76" width="460" height="464" rx="14" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3.5" stroke-dasharray="9 7"/>
-  <text class="ev-role" x="1034" y="116" style="fill:var(--adv)">ADVISORY ONLY</text>
+  <text class="ev-role" x="1034" y="116" style="fill:var(--adv)">HINTS — NEVER CITED</text>
   <text class="ev-hd"   x="1034" y="158">Generated nuggets</text>
   <g fill="none" stroke="var(--adv)" stroke-width="2.5" stroke-dasharray="6 5">
     <rect x="1034" y="190" width="412" height="44" rx="7"/>
@@ -98,5 +100,5 @@
   </g>
   <text class="ev-sm"   x="1034" y="480">≤20 short claims</text>
   <text class="ev-tiny" x="1034" y="508">written from the evidence</text>
-  <text class="ev-tiny" x="1034" y="532">never a replacement for it</text>
+  <text class="ev-tiny" x="1034" y="532">cite the passage, never these</text>
 </svg>

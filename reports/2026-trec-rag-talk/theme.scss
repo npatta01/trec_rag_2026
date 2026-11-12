@@ -1190,6 +1190,96 @@ body.reveal-viewport,
   padding: 0.7em 0.9em;
 }
 
+// One obligation shown filled in rather than six field names shown empty:
+// the slide was being read as a prompt dump, which is exactly what a plan is
+// not. Set large, because it is now the only object on the slide.
+.record-lg {
+  font-size: 0.78em;
+  gap: 0.42em 1.1em;
+  padding: 0.85em 1.1em;
+}
+
+// Luna's screen is an AND of five booleans. Drawn as five chips joined by the
+// operator, that is one glance; written as a sentence it was a paragraph.
+// Five legs of the talk. Each section opens on the same list with its own leg
+// lit, so the roadmap and the section breaks are one component: the audience
+// can always see where they are and what is left, without a contents slide
+// they only ever see once.
+.roadmap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  margin: 0.5em 0 0;
+}
+
+.leg {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75em;
+  font-size: 0.82em;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--muted);
+  padding: 0.3em 0.7em;
+  border-radius: 8px;
+  border-left: 5px solid transparent;
+}
+
+.leg-n {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82em;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.leg-now {
+  color: var(--ink);
+  background: var(--ret-soft);
+  border-left-color: var(--ret);
+}
+
+.leg-now .leg-n { color: var(--ret); }
+
+// A section break is a held pause, so it centres instead of filling.
+.reveal .slides > section.divider > .roadmap { align-content: center; }
+
+.gates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3em 0.45em;
+  margin: 0.2em 0 0.7em;
+}
+
+.gate {
+  font-size: 0.72em;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--gen-soft);
+  border: 1px solid var(--gen);
+  border-radius: 999px;
+  padding: 0.22em 0.7em;
+  white-space: nowrap;
+}
+
+.gate-op {
+  font-size: 0.56em;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+// Pandoc wraps a contiguous run of inline spans in a <p>. That leaves the grid
+// (or flex row) holding a single child, and every pair collapses onto one line.
+// display:contents drops the wrapper out of the box tree so the spans become
+// items of the layout again, however Pandoc decides to wrap them.
+.record > p,
+.gates > p,
+.roadmap > p {
+  display: contents;
+}
+
 .f-key {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.9em;

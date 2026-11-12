@@ -125,7 +125,9 @@ const requiredBoundaries = [
   "rubric items were not released",
   "should not be read as better grounding",
   // The battle counts are per-run against the field, never head to head.
-  "not against the other one of",
+  // The old phrasing read as slop; the claim it carried has to survive the
+  // rewrite, so the guard tracks the claim's new sentence.
+  "never compared our two answers with each other",
 ];
 for (const boundary of requiredBoundaries) {
   assert(flat.includes(boundary), `deck should keep the boundary note: ${boundary}`);
@@ -140,8 +142,17 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 21,
-  `expected 21 content slides, found ${sections.length}`);
+assert(sections.length === 26,
+  `expected 26 content slides, found ${sections.length}`);
+
+// Five section breaks, each showing the same roadmap with its own leg lit, so
+// the talk's shape is visible from any one of them.
+const dividers = (html.match(/class="[^"]*\bdivider\b/g) || []).length;
+assert(dividers === 5, `expected 5 section dividers, found ${dividers}`);
+const lit = (qmd.match(/class="leg leg-now"/g) || []).length;
+assert(lit === 5, `each divider lights exactly one leg, found ${lit}`);
+assert((qmd.match(/class="roadmap"/g) || []).length === 5,
+  "every divider carries the whole roadmap, not just its own name");
 assert(!/01-approach/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/01-approach.svg")),
   "the funnel figure was cut; nothing should still point at it");
 
@@ -358,8 +369,10 @@ for (const name of ["slate-light", "slate-dark", "forest-light", "forest-dark"])
 // Authority and advice are told apart by edge, not only by colour: the
 // selected passages are solid, the generated claims are dashed.
 const trace = fs.readFileSync(path.join(root, "2026-trec-rag-talk/10-nugget-trace.svg"), "utf8");
-for (const fact of ["n092", "n094", "THE AUTHORITY", "ADVISORY ONLY",
-                    "≤20 claims", "is a trap", "standing in for the real passages"]) {
+// "advisory" and "trap" were jargon a reader bounced off; the rule they stood
+// for is concrete, so the guard now tracks the rule rather than the word.
+for (const fact of ["n092", "n094", "THE AUTHORITY", "HINTS, NEVER CITED",
+                    "≤20 claims", "useless here", "standing in for the real passages"]) {
   assert(trace.includes(fact), `the nugget trace should show: ${fact}`);
 }
 assert((trace.match(/stroke-dasharray="9 6"/g) || []).length === 2,
@@ -391,6 +404,12 @@ for (const fact of ["3 to 8 obligations", "850–950 words", "character-for-char
                     "resolved locally"]) {
   assert(flat.includes(fact), `the plan slide should state: ${fact}`);
 }
+
+// Pandoc wraps a run of inline spans in a <p>, which silently collapses any
+// grid or flex row built from them onto a single line. This has regressed
+// twice, and it renders without error, so the un-wrapping rule is pinned.
+assert(/\.record > p,\s*\n\.gates > p,\s*\n\.roadmap > p \{\s*\n\s*display: contents;/.test(theme),
+  "the spans-in-a-<p> wrapper must be dropped, or record/gates/roadmap collapse");
 
 // ---- palettes and inlined figures -----------------------------------------
 // A linked <img src="x.svg"> is a separate document, so the page's CSS custom

@@ -27,7 +27,7 @@
 
   <rect x="280" y="16" width="1180" height="64" rx="10" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6"/>
   <text class="sp-head" x="870" y="46" text-anchor="middle">One sealed evidence handoff</text>
-  <text class="sp-sub"  x="870" y="70" text-anchor="middle">exact passages · advisory nuggets · allowed citation IDs — Sol never searches</text>
+  <text class="sp-sub"  x="870" y="70" text-anchor="middle">exact passages · nugget hints · allowed citation IDs — Sol never searches</text>
 
   <rect class="sp-lane" x="280" y="118" width="1180" height="116" rx="10"/>
   <rect class="sp-lane" x="280" y="256" width="1180" height="152" rx="10"/>
