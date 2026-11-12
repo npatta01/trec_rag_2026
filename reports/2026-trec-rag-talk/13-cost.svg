@@ -17,19 +17,18 @@
 
   <!-- A. paid once -->
   <rect x="40" y="34" width="640" height="300" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
-  <text class="co-kick" x="66" y="70" style="fill:var(--ret)">PAID ONCE</text>
+  <text class="co-kick" x="66" y="70" style="fill:var(--ret)">PAID ONCE · RETRIEVAL</text>
   <text class="co-hd"   x="66" y="106">The evidence both runs read</text>
 
-  <text class="co-row" x="66"  y="152">one planner call per request</text>
-  <text class="co-n"   x="560" y="152">119</text>
-  <text class="co-row" x="66"  y="192">one nuggetizer call per subnarrative</text>
-  <text class="co-n"   x="560" y="192">691</text>
-  <text class="co-sub" x="66"  y="218">the planner wrote 3 – 8 of them per request</text>
+  <text class="co-big" x="66"  y="164" style="fill:var(--ret)">4 – 9</text>
+  <text class="co-row" x="210" y="156">model calls per narrative</text>
+  <text class="co-sub" x="210" y="182">1 planner + 1 per subnarrative</text>
 
-  <line x1="66" y1="242" x2="654" y2="242" stroke="var(--ret)" stroke-width="1.5" opacity=".5"/>
-  <text class="co-hd" x="66"  y="282" style="font-size:23px">shared model calls</text>
-  <text class="co-big" x="500" y="286" style="fill:var(--ret)">810</text>
-  <text class="co-sub" x="66" y="314">neither run paid for this twice</text>
+  <line x1="66" y1="208" x2="654" y2="208" stroke="var(--ret)" stroke-width="1.5" opacity=".5"/>
+  <text class="co-sub" x="66"  y="238">across all 119 narratives</text>
+  <text class="co-row" x="66"  y="274">119 planner · 691 nuggetizer</text>
+  <text class="co-row" x="66"  y="308" style="font-weight:800">810 shared calls</text>
+  <text class="co-sub" x="330" y="308">neither run paid for it twice</text>
 
   <!-- A2. what cost no model calls -->
   <rect x="40" y="348" width="640" height="118" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="6 5"/>
@@ -41,23 +40,24 @@
 
   <!-- B. paid twice -->
   <rect x="716" y="34" width="844" height="432" rx="14" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3.5"/>
-  <text class="co-kick" x="744" y="70" style="fill:var(--gen)">PAID ONCE PER STRATEGY</text>
-  <text class="co-hd"   x="744" y="106">Generation — the only part that differs</text>
+  <text class="co-kick" x="744" y="70" style="fill:var(--gen)">PAID ONCE PER STRATEGY · GENERATION</text>
+  <text class="co-hd"   x="744" y="106">The only part that differs</text>
 
-  <text class="co-row" x="744"  y="178">Single-pass</text>
-  <rect  x="940" y="150" width="52" height="52" rx="6" fill="var(--ret)"/>
-  <text class="co-n"   x="1018" y="188" style="fill:var(--ret)">121</text>
-  <text class="co-sub" x="744"  y="230">one call each, plus 2 retries</text>
+  <text class="co-row" x="744"  y="166">Single-pass</text>
+  <text class="co-big" x="952"  y="172" style="fill:var(--ret)">1</text>
+  <text class="co-sub" x="1000" y="166">call per narrative</text>
+  <rect  x="744" y="190" width="52" height="26" rx="5" fill="var(--ret)"/>
+  <text class="co-sub" x="812"  y="210">121 in all · 119 + 2 retries</text>
 
-  <text class="co-row" x="744"  y="296">Multi-stage</text>
-  <rect  x="940" y="268" width="500" height="52" rx="6" fill="var(--gen)"/>
-  <text class="co-n"   x="1452" y="306" style="fill:var(--gen)">1,167</text>
-  <text class="co-sub" x="744"  y="348">4 fixed calls each, plus one audit per subnarrative</text>
+  <text class="co-row" x="744"  y="284">Multi-stage</text>
+  <text class="co-big" x="952"  y="290" style="fill:var(--gen)">7 – 12</text>
+  <text class="co-sub" x="1136" y="284">calls per narrative</text>
+  <rect  x="744" y="308" width="500" height="26" rx="5" fill="var(--gen)"/>
+  <text class="co-sub" x="744"  y="358">1,167 in all · 4 fixed, plus one audit per subnarrative</text>
 
-  <line x1="744" y1="378" x2="1532" y2="378" stroke="var(--gen)" stroke-width="1.5" opacity=".5"/>
-  <text class="co-big" x="744"  y="430" style="fill:var(--gen)">9.6×</text>
-  <text class="co-row" x="884"  y="418">the calls, for the same evidence</text>
-  <text class="co-sub" x="884"  y="446">per request: 1 call against 7 to 12</text>
+  <line x1="744" y1="382" x2="1532" y2="382" stroke="var(--gen)" stroke-width="1.5" opacity=".5"/>
+  <text class="co-big" x="744"  y="434" style="fill:var(--gen)">9.6×</text>
+  <text class="co-row" x="884"  y="428">the calls, for the same evidence</text>
 
   <!-- the honest footing -->
   <rect x="40" y="488" width="1520" height="100" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="cv-title cv-desc">
+  <title id="cv-title">Nugget coverage on all three judged collections</title>
+  <desc id="cv-desc">Three groups of paired bars on a nought-to-one scale, one group per collection the organizers scored, each showing single-pass above multi-stage. On NIST's human-intuition rubrics, 17 narratives, single-pass covered 0.774 and multi-stage 0.874, with multi-stage ahead on 8 narratives, tied on 8 and behind on 1. On NIST's human-authored nuggets, 25 narratives, single-pass covered 0.570 and multi-stage 0.658, with multi-stage ahead on 18, tied on 7 and behind on none. On the automatically generated nuggets, 25 narratives, single-pass covered 0.128 and multi-stage 0.250, with multi-stage ahead on 22, tied on 3 and behind on none. A note at the foot says these are three separate rubrics written three different ways, that all three put multi-stage ahead, and that the absolute levels are not comparable between collections because each one counts different items.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .cv-kick{font-size:21px;font-weight:800;letter-spacing:.05em;fill:var(--muted)}
+    .cv-name{font-size:25px;font-weight:760}
+    .cv-sub{font-size:19px;fill:var(--muted)}
+    .cv-run{font-size:18px;font-weight:700}
+    .cv-val{font-size:23px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .cv-tally{font-size:19px;fill:var(--muted)}
+    .cv-note{font-size:20px}
+  </style>
+  <rect width="1600" height="620" fill="var(--bg)"/>
+
+  <text class="cv-kick" x="40" y="40">SHARE OF THE EXPECTED ITEMS EACH ANSWER FULLY SUPPORTED · 0 TO 1</text>
+  <rect x="1148" y="22" width="18" height="18" rx="4" fill="var(--ret)"/>
+  <text class="cv-run" x="1174" y="38" style="fill:var(--ret)">single-pass</text>
+  <rect x="1300" y="22" width="18" height="18" rx="4" fill="var(--gen)"/>
+  <text class="cv-run" x="1326" y="38" style="fill:var(--gen)">multi-stage</text>
+
+  <!-- 1. human-intuition rubrics, batch 1 -->
+  <text class="cv-name" x="40" y="104">NIST human rubrics</text>
+  <text class="cv-sub"  x="40" y="132">batch 1 · 17 narratives</text>
+  <rect x="470" y="72"  width="464" height="38" rx="6" fill="var(--ret)"/>
+  <text class="cv-val"  x="950" y="99"  style="fill:var(--ret)">0.774</text>
+  <rect x="470" y="120" width="524" height="38" rx="6" fill="var(--gen)"/>
+  <text class="cv-val"  x="1010" y="147" style="fill:var(--gen)">0.874</text>
+  <text class="cv-tally" x="1148" y="121">multi ahead on 8, tied 8, behind 1</text>
+
+  <!-- 2. human-authored nuggets, batch 2 -->
+  <text class="cv-name" x="40" y="236">NIST human nuggets</text>
+  <text class="cv-sub"  x="40" y="264">batch 2 · 25 narratives</text>
+  <rect x="470" y="204" width="342" height="38" rx="6" fill="var(--ret)"/>
+  <text class="cv-val"  x="828" y="231"  style="fill:var(--ret)">0.570</text>
+  <rect x="470" y="252" width="395" height="38" rx="6" fill="var(--gen)"/>
+  <text class="cv-val"  x="881" y="279" style="fill:var(--gen)">0.658</text>
+  <text class="cv-tally" x="1148" y="253">multi ahead on 18, tied 7, behind 0</text>
+
+  <!-- 3. auto-generated nuggets, batch 2 -->
+  <text class="cv-name" x="40" y="368">Auto-generated nuggets</text>
+  <text class="cv-sub"  x="40" y="396">batch 2 · 25 narratives</text>
+  <rect x="470" y="336" width="77" height="38" rx="6" fill="var(--ret)"/>
+  <text class="cv-val"  x="563" y="363"  style="fill:var(--ret)">0.128</text>
+  <rect x="470" y="384" width="150" height="38" rx="6" fill="var(--gen)"/>
+  <text class="cv-val"  x="636" y="411" style="fill:var(--gen)">0.250</text>
+  <text class="cv-tally" x="1148" y="385">multi ahead on 22, tied 3, behind 0</text>
+
+  <line x1="470" y1="446" x2="1070" y2="446" stroke="var(--line)" stroke-width="1.5" opacity=".45"/>
+  <text class="cv-sub" x="470" y="472">0</text>
+  <text class="cv-sub" x="1058" y="472">1</text>
+
+  <rect x="40" y="498" width="1520" height="96" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
+  <text class="cv-note" x="66" y="532" style="font-weight:800;fill:var(--ok)">THREE RUBRICS, WRITTEN THREE DIFFERENT WAYS — ALL THREE PUT MULTI-STAGE AHEAD</text>
+  <text class="cv-note" x="66" y="562">Assessors wrote the first two by hand; a model generated the third. Across all 42 narratives single-pass covered more on <tspan font-weight="800">exactly one</tspan>.</text>
+  <text class="cv-sub"  x="66" y="586">The levels are not comparable between collections — each one counts a different set of items. Only the gap within a row is.</text>
+</svg>

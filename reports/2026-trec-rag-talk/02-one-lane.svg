@@ -43,7 +43,7 @@
   <text class="ln-num"  x="668" y="492" text-anchor="middle" style="fill:var(--adv)">≤20</text>
   <text class="ln-unit" x="668" y="518" text-anchor="middle">nuggets</text>
 
-  <text class="ln-sub" x="40" y="556">Documents become passages at the second step, so the unit changes there. Every figure is a per-query ceiling — that is what the ≤ means.</text>
+  <text class="ln-sub" x="40" y="556">Every figure is a per-query ceiling — that is what the ≤ means.</text>
 
   <!-- the same four stages, named -->
   <g transform="translate(856,172)" style="color:var(--s1)"><circle r="23" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="2.6"/><use href="#ln-g-search"/></g>
@@ -52,15 +52,13 @@
 
   <g transform="translate(856,266)" style="color:var(--s2)"><circle r="23" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="2.6"/><use href="#ln-g-rank"/></g>
   <text class="ln-row" x="896" y="260">Rerank</text>
-  <text class="ln-sub" x="896" y="286">chunk at 3,500/350, then score with mxbai-rerank-base-v2</text>
+  <text class="ln-sub" x="896" y="286">mxbai-rerank-base-v2</text>
 
   <g transform="translate(856,360)" style="color:var(--s3)"><circle r="23" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="2.6"/><use href="#ln-g-filter"/></g>
   <text class="ln-row" x="896" y="354">Select</text>
-  <text class="ln-sub" x="896" y="380">drop near-duplicates (all-MiniLM-L6-v2), then MMR —</text>
-  <text class="ln-sub" x="896" y="404">each next pick relevant and unlike the ones already kept</text>
+  <text class="ln-sub" x="896" y="380">drop duplicates, then spread</text>
 
   <g transform="translate(856,454)" style="color:var(--adv)"><circle r="23" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6" stroke-dasharray="7 5"/><use href="#ln-g-hint"/></g>
   <text class="ln-row" x="896" y="448">Nuggets</text>
-  <text class="ln-sub" x="896" y="474">short claims written from those passages, for the writer to use</text>
-  <text class="ln-sub" x="896" y="498">the answer still cites the passage, never the claim</text>
+  <text class="ln-sub" x="896" y="474">hints for the writer, never cited</text>
 </svg>

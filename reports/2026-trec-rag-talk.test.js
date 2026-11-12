@@ -29,7 +29,7 @@ for (const asset of [
   "2026-trec-rag-talk/02b-rerank.svg",
   "2026-trec-rag-talk/11a-retrieval-cutoff.svg",
   "2026-trec-rag-talk/13-cost.svg",
-  "2026-trec-rag-talk/14-lead.svg",
+  "2026-trec-rag-talk/15-coverage.svg",
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
@@ -115,12 +115,11 @@ assert(cells === 42, `the overall figure should draw 42 topic squares, found ${c
 for (const fact of ["0.757", "0.653"]) {
   assert(qmd.includes(fact), `the limits slide should keep: ${fact}`);
 }
-for (const fact of requiredFacts) {
-  assert(qmd.includes(fact), `deck should quote: ${fact}`);
-}
-
 // Prose wraps across lines in the source, so compare on collapsed whitespace.
 const flat = qmd.replace(/\s+/g, " ");
+for (const fact of requiredFacts) {
+  assert(flat.includes(fact), `deck should quote: ${fact}`);
+}
 
 // Evidence boundaries that must survive editing.
 const requiredBoundaries = [
@@ -153,8 +152,8 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 29,
-  `expected 29 content slides, found ${sections.length}`);
+assert(sections.length === 30,
+  `expected 30 content slides, found ${sections.length}`);
 
 // Four sections, named the way the work is actually divided. The contents are
 // shown once, at the top; the three breaks after it carry a picture instead,
@@ -193,16 +192,15 @@ for (const fig of ["02-one-lane", "02b-rerank", "04-plan", "05-evidence", "06-re
   }
 }
 
-// The planning example must stay expandable, one entry per subnarrative,
-// and must state the per-request query arithmetic rather than a bare total.
+// The planning example must stay expandable, one entry per subnarrative:
+// two on the slide, all eight in the appendix.
 const details = (html.match(/<details\b/g) || []).length;
-assert(details === 8, `expected 8 expandable subnarratives, found ${details}`);
-assert(/8 subnarratives . 2 queries = 16 searches/.test(qmd),
-  "the planning slide must show the per-request query arithmetic");
-// The trace records 17 planned queries for this request: 16 plus the
-// untouched-narrative lane. The slide must not stop at 16.
-assert(/= 16 searches, plus the untouched request = 17 lanes/.test(qmd),
-  "the planning slide must account for the untouched-narrative lane");
+assert(details === 10, `expected 2 + 8 expandable subnarratives, found ${details}`);
+// The arithmetic moved with the full grid. The trace records 17 planned
+// queries for this request: 16 plus the untouched-narrative lane, and the
+// appendix must not stop at 16.
+assert(/8 subnarratives . 2 queries = 16, plus the untouched request = 17/.test(qmd),
+  "the appendix must account for the untouched-narrative lane");
 
 // Planning is told over two slides: the eight angles, then the queries each
 // one became. The audience tracks a question by its number and colour across
@@ -213,9 +211,14 @@ const queryCards = [...qmd.matchAll(/<summary><svg class="glyph qico".*?<\/svg>(
   .map((m) => m[1].trim());
 assert(angleCards.length === 8,
   `expected 8 angle cards, found ${angleCards.length}`);
-assert(JSON.stringify(angleCards) === JSON.stringify(queryCards),
-  `the two planning slides must list the same eight angles in the same order:\n` +
-  `  angles:  ${JSON.stringify(angleCards)}\n  queries: ${JSON.stringify(queryCards)}`);
+// Two on the slide, eight in the appendix: the slide's pair must be the first
+// two angles, and the appendix must repeat all eight in the same order.
+assert(JSON.stringify(queryCards.slice(0, 2)) === JSON.stringify(angleCards.slice(0, 2)),
+  `the queries slide must show the first two angles, in order:\n` +
+  `  angles:  ${JSON.stringify(angleCards.slice(0, 2))}\n  queries: ${JSON.stringify(queryCards.slice(0, 2))}`);
+assert(JSON.stringify(queryCards.slice(2)) === JSON.stringify(angleCards),
+  `the appendix must list the same eight angles in the same order:\n` +
+  `  angles:  ${JSON.stringify(angleCards)}\n  appendix: ${JSON.stringify(queryCards.slice(2))}`);
 
 // The 40 budget is a SELECTED PASSAGE cap. In the handoff schema a "group" is
 // a subnarrative (group_id == subnarrative_id), one per subnarrative on all
@@ -347,8 +350,8 @@ for (const [fig, tok, want] of [["00-architecture", "ar", 5], ["02-one-lane", "l
 // Every subnarrative card gets its own symbol, so eight open cards do not read
 // as one wall of identical boxes.
 const qicons = (qmd.match(/class="glyph qico"/g) || []).length;
-assert(qicons === 16,
-  `expected one symbol per subnarrative on both planning slides, found ${qicons}`);
+assert(qicons === 18,
+  `expected 8 angles + 2 on the slide + 8 in the appendix, found ${qicons}`);
 // The art is a dark backdrop with the title printed over it, so the words on
 // a break must be light in BOTH themes - the theme's own ink would vanish.
 assert(/section\.divider-img \{[^}]*background: #0b1220/.test(theme),
@@ -370,7 +373,7 @@ assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
 const figures = ["00-task", "00-architecture", "02-one-lane", "02b-rerank",
                  "03a-single-pass", "03b-multi-stage", "04-plan", "05-evidence",
                  "06-retrieval", "07-topic18", "08-disagree", "09-overall",
-                 "11a-retrieval-cutoff", "13-cost", "14-lead"];
+                 "11a-retrieval-cutoff", "13-cost", "15-coverage"];
 for (const f of figures) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
   assert(!/<text\b[^>]*\sfill="var\(/.test(svg),
@@ -480,7 +483,10 @@ assert(qmd.indexOf("## Everything here is public") < appendixAt,
 // The subnarrative and query totals are counted from the published coverage
 // report, which carries every topic's plan: 3-8 subnarratives, 691 in all.
 const cost = fs.readFileSync(path.join(root, "2026-trec-rag-talk/13-cost.svg"), "utf8");
-for (const fact of ["119", "691", "810", "121", "1,167", "9.6", "1,787", "3 – 8"]) {
+// Per narrative first, because that is the number a listener can hold:
+// retrieval 4-9 calls, generation 1 against 7-12. Totals follow.
+for (const fact of ["4 – 9", "7 – 12", "119", "691", "810", "121", "1,167",
+                    "9.6", "1,787", "per narrative"]) {
   assert(cost.includes(fact), `the cost figure should state: ${fact}`);
 }
 assert(476 + 691 === 1167 && 119 + 2 === 121,
@@ -503,11 +509,12 @@ assert(!/What I would and would not claim/.test(qmd),
 assert(/## Where that leaves the architecture/.test(qmd),
   "the talk should close by returning to the architecture it opened on");
 
-// The prompt slide was cut — it was a screenful of monospace. The one line
-// that carried the point stays, on the planning figure's own slide.
-assert(flat.includes('**"Do not answer the topic."**'),
-  "the planner's governing instruction must survive the prompt slide being cut");
+// The prompt slide was cut, and so, later, was the one line that carried it.
+// The constraint is real but it is the speaker's to say out loud: the slide is
+// the title and the figure. Nothing should reintroduce the prompt dump.
 assert(!/promptbox|promptlead/.test(qmd), "nothing should still reference the prompt slide");
+assert(!/Do not answer the topic/.test(qmd),
+  "the planner's instruction was cut as a caption; do not quietly put it back");
 
 // ---- what a plan contains, from narrative_blueprint.py ---------------------
 // Shown in plain words, not schema keys: the slide was being read as a prompt
@@ -546,7 +553,7 @@ assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> ele
 
 // Each figure keeps its own accessible name once inlined.
 for (const id of ["tk", "ar", "ln", "rr", "sp", "ms", "pl", "ev", "rt", "t18",
-                  "dg", "ov", "rc", "co", "ld", "da"]) {
+                  "dg", "ov", "rc", "co", "cv", "da"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
 }
@@ -558,7 +565,7 @@ for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
                           ["02b-rerank", "rr"],
                           ["11a-retrieval-cutoff", "rc"],
                           ["13-cost", "co"],
-                          ["14-lead", "ld"],
+                          ["15-coverage", "cv"],
                           ["04-plan", "pl"],
                           ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
@@ -657,8 +664,15 @@ for (const [fig, tok] of [["00-task", "tk"], ["00-architecture", "ar"]]) {
 }
 
 // The planning queries are shown, not hidden behind a click.
+// Two lanes on the slide, all eight in the appendix: the full grid was a wall
+// mid-talk, but it is the thing people ask to see afterwards.
 const openDetails = (qmd.match(/<details open>/g) || []).length;
-assert(openDetails === 8, `expected 8 pre-expanded subnarratives, found ${openDetails}`);
+assert(openDetails === 10, `expected 2 lanes on the slide and 8 in the appendix, found ${openDetails}`);
+const appendixQueriesAt = qmd.indexOf("## Appendix · all 17 query lanes");
+assert(appendixQueriesAt > qmd.indexOf("## Appendix {.divider}"),
+  "the full query grid belongs in the appendix");
+assert((qmd.slice(appendixQueriesAt).match(/<details open>/g) || []).length === 8,
+  "the appendix carries all eight lanes");
 
 // The dedup step is shown concretely, and flagged as illustrative wording
 // because real corpus passages stay private.
@@ -668,7 +682,11 @@ assert(flat.includes("standing in for the real passages"),
 
 // The nuggetizer's cap still rides on the lane figure, which is now the only
 // place the hint claims appear at all.
-assert(/≤20/.test(lane) && /short claims written from those passages/.test(lane),
-  "the lane figure should still bound and explain the nugget claims");
+// The stage list was two lines of prose per stage. One short line each now.
+assert(/≤20/.test(lane) && /hints for the writer, never cited/.test(lane),
+  "the lane figure should still bound and label the nugget claims");
+for (const stage of ["Search", "Rerank", "Select", "Nuggets"]) {
+  assert(lane.includes(`>${stage}</text>`), `the lane figure should keep the stage: ${stage}`);
+}
 
 console.log("reports/2026-trec-rag-talk.test.js OK");

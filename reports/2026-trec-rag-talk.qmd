@@ -96,7 +96,7 @@ different sentences, and only one of the two answers ever joins them.
 ## Retrieval {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/sec-retrieval.jpg){fig-alt="A row of seven plain rectangles of slightly different heights standing on a thin line in the lower third of a dark field, like books on a shelf. Six are deep blue; one is warm sand."}
+![](2026-trec-rag-talk/bg-retrieval.jpg){fig-alt="An abstract dark navy field. Slender vertical bands crowd the left and right edges and thin toward the centre, like a corridor opening up; two carry a warm sand accent. The middle of the frame is empty."}
 :::
 
 ::: {.cap}
@@ -108,10 +108,6 @@ One vague request becomes 17 searches, then about a page of text.
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/04-plan.svg){fig-alt="The request goes into a single DeepSeek call, which returns up to eight subnarratives, each carrying one to three plain BM25 queries shown as dots. The untouched request is kept as its own search lane. The planner never sees a document and is never called again."}
-:::
-
-::: {.cap}
-The instruction's own words: **"Do not answer the topic."**
 :::
 
 ## Planning: this request
@@ -134,7 +130,7 @@ The example · 8 subnarratives created for this one request
 ## The queries each angle became
 
 ::: {.trace-step}
-The example · 8 subnarratives × 2 queries = 16 searches, plus the untouched request = 17 lanes
+The example · two of the eight — the other six look the same
 :::
 
 ::: {.qgrid}
@@ -146,37 +142,11 @@ The example · 8 subnarratives × 2 queries = 16 searches, plus the untouched re
 <code>Airbnb vs extended stay hotel vs corporate housing vs sublet comparison</code>
 <code>short term rental types NYC family advantages disadvantages</code>
 </details>
-<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-7 7L7 -7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Which listings are illegal?</summary>
-<code>illegal short term rental NYC avoid scams</code>
-<code>unreliable temporary housing New York City red flags</code>
-</details>
-<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-12" y="-7.5" width="24" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="0" r="3.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What does it really cost?</summary>
-<code>real cost comparison short term rental NYC fees taxes</code>
-<code>hidden costs temporary housing New York City</code>
-</details>
-<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -11L9 -7.5V1C9 7 4.8 10.6 0 12C-4.8 10.6 -9 7 -9 1V-7.5Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-4 0.5L-1 3.5L4.5 -2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is it safe for a child?</summary>
-<code>safety family short term rental New York City neighborhood</code>
-<code>child safe temporary housing NYC</code>
-</details>
-<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-10" y="-8" width="20" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-10 -2.5H10M-5 -12V-5M5 -12V-5M-3 2.5L3 7M3 2.5L-3 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What if we cancel?</summary>
-<code>cancellation policy short term rental NYC</code>
-<code>flexible cancellation temporary housing New York City</code>
-</details>
-<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -4V-11H-4M4 -11H11V-4M11 4V11H4M-4 11H-11V4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is there room to work?</summary>
-<code>space family short term rental NYC one bedroom</code>
-<code>temporary housing space child remote work New York City</code>
-</details>
-<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 12C0 12 9 -1 9 -7A9 9 0 1 0 -9 -7C-9 -1 0 12 0 12Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="-7" r="3.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is the location practical?</summary>
-<code>location convenience short term rental NYC public transit</code>
-<code>temporary housing near work school New York City</code>
-</details>
+
+
 :::
 
 ## Searching: how it works
-
-::: {.eyebrow}
-One lane of 17
-:::
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/02-one-lane.svg){fig-alt="One BM25 query lane, stage by stage: up to 1,000 documents retrieved, chunked and reranked down to at most 100 kept passages, reduced to at most 40 selected passages, producing at most 20 nugget claims. The nugget stage is drawn in amber with a dashed edge because the answer may use those claims but must always cite the passage instead."}
@@ -215,7 +185,7 @@ real passages, which stay private. Survivors are then spread by MMR.)
 ## Answer Generation {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/sec-generation.jpg){fig-alt="Two plain rectangles lying side by side in the lower third of a dark field, like two sheets of paper. The left one is blank; the right one carries three short warm marks across it."}
+![](2026-trec-rag-talk/bg-generation.jpg){fig-alt="An abstract dark navy field. Two broad soft-edged planes enter from the lower left and lower right and overlap near the bottom centre, one steel blue and one warm sand. The middle of the frame is empty."}
 :::
 
 ::: {.cap}
@@ -321,25 +291,23 @@ made 16 more statements**. Both spotted the 30-day trap — single-pass noted si
 weeks exceeds it; multi-stage added that the definition alone *does not
 establish* whether a particular six-week sublet is lawful.
 :::
-## The difference you can see
-
-::: {.trace-step}
-The example · rag2026-18
-:::
+## The difference, in nugget coverage
 
 ::: {.diagram}
-![](2026-trec-rag-talk/14-lead.svg){fig-alt="Two quoted fragments of the request on the left, drawn as separate cards because they sit in different sentences: while our apartment is repaired, and especially with a child. Two arrows converge on a card headed multi-stage joined them, holding the sentence it wrote about lead hazards and whether the temporary unit has been made lead-safe. A dimmed card below, headed single-pass left them apart, notes that across all 22 of its statements the word lead never appears."}
+![](2026-trec-rag-talk/15-coverage.svg){fig-alt="Three groups of paired bars on a nought-to-one scale, one per judged collection, single-pass above multi-stage in each. NIST human rubrics over 17 narratives: 0.774 against 0.874, multi-stage ahead on 8, tied 8, behind 1. NIST human nuggets over 25 narratives: 0.570 against 0.658, ahead on 18, tied 7, behind 0. Auto-generated nuggets over 25 narratives: 0.128 against 0.250, ahead on 22, tied 3, behind 0. A note says all three rubrics put multi-stage ahead, that single-pass covered more on exactly one of the 42 narratives, and that levels are not comparable between collections."}
 :::
 
 ::: {.cap}
-Three more like it, all absent from the single-pass answer: **where to report
-an illegal charge**, **childcare**, and a **final comparison table**.
+What that looks like in prose: on rag2026-18 multi-stage wrote *"if the apartment
+repairs involve **lead hazards**, ask whether the temporary unit has been made
+lead-safe"* — joining two facts the request put in different sentences. The word
+never appears in the single-pass answer.
 :::
 
 ## Overall score {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/sec-score.jpg){fig-alt="A flat grid of small squares, seven across and three down, in the lower third of a dark field. Most are deep blue; five scattered ones are warm sand."}
+![](2026-trec-rag-talk/bg-score.jpg){fig-alt="An abstract dark navy field. A wide shallow arc sweeps across the lower third, echoed by fainter arcs above it that dissolve before the middle; the lowest edge is picked out in warm sand."}
 :::
 
 ::: {.cap}
@@ -401,7 +369,7 @@ Multi-stage costs several extra model calls per topic for this. Nothing here is
 ## Cost {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/sec-cost.jpg){fig-alt="Two plain vertical bars standing on a thin baseline in the lower third of a dark field: a short pale one on the left and a much taller warm one on the right."}
+![](2026-trec-rag-talk/bg-cost.jpg){fig-alt="An abstract dark navy field. Broad horizontal bands stack in the lower half, each taller than the one below, the topmost in warm sand, fading out well below the centre."}
 :::
 
 ::: {.cap}
@@ -504,3 +472,45 @@ topic — so this measures **what the cutoff selected**, not how it was ordered.
 We return about a third as many documents as the field median and are more
 precise for it; recall is the price.
 :::
+
+## Appendix · all 17 query lanes
+
+::: {.trace-step}
+rag2026-18 · 8 subnarratives × 2 queries = 16, plus the untouched request = 17
+:::
+
+::: {.qgrid}
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -8H-7M-3 -8H11M-11 0H-7M-3 0H11M-11 8H-7M-3 8H6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What options exist?</summary>
+<code>furnished temporary housing New York City family three six weeks</code>
+<code>short term furnished rental NYC family child</code>
+</details>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-7 10V-6M7 10V-11M-13 10H13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>How do the four types compare?</summary>
+<code>Airbnb vs extended stay hotel vs corporate housing vs sublet comparison</code>
+<code>short term rental types NYC family advantages disadvantages</code>
+</details>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-7 7L7 -7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Which listings are illegal?</summary>
+<code>illegal short term rental NYC avoid scams</code>
+<code>unreliable temporary housing New York City red flags</code>
+</details>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-12" y="-7.5" width="24" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="0" r="3.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What does it really cost?</summary>
+<code>real cost comparison short term rental NYC fees taxes</code>
+<code>hidden costs temporary housing New York City</code>
+</details>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -11L9 -7.5V1C9 7 4.8 10.6 0 12C-4.8 10.6 -9 7 -9 1V-7.5Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-4 0.5L-1 3.5L4.5 -2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is it safe for a child?</summary>
+<code>safety family short term rental New York City neighborhood</code>
+<code>child safe temporary housing NYC</code>
+</details>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><rect x="-10" y="-8" width="20" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-10 -2.5H10M-5 -12V-5M5 -12V-5M-3 2.5L3 7M3 2.5L-3 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What if we cancel?</summary>
+<code>cancellation policy short term rental NYC</code>
+<code>flexible cancellation temporary housing New York City</code>
+</details>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -4V-11H-4M4 -11H11V-4M11 4V11H4M-4 11H-11V4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is there room to work?</summary>
+<code>space family short term rental NYC one bedroom</code>
+<code>temporary housing space child remote work New York City</code>
+</details>
+<details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 12C0 12 9 -1 9 -7A9 9 0 1 0 -9 -7C-9 -1 0 12 0 12Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="0" cy="-7" r="3.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is the location practical?</summary>
+<code>location convenience short term rental NYC public transit</code>
+<code>temporary housing near work school New York City</code>
+</details>
+:::
+
