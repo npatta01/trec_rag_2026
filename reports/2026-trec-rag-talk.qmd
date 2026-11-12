@@ -403,28 +403,45 @@ The organizers' numbers, on one topic and then on all 42.
 ## The difference you can see
 
 ::: {.trace-step}
-The example · one difference you can read
+Three topics · what the second pass added, checked against the submitted answers
 :::
 
-::: {.grid-2}
-::: {.card .card-ret}
-[Single-pass · 22 statements]{.card-label}
-Covers legality, cost, safety, space, location.
+::: {.grid-3}
+::: {.card .card-gen}
+[rag2026-18 · six weeks of housing]{.card-label}
+"…if the repairs involve [lead hazards]{.hl}, ask whether the unit has been
+made lead-safe."
 
-**The word "lead" never appears.**
+The request says *repairs*, and separately, *a child*. Single-pass wrote 22
+statements and **never used the word "lead"**.
 :::
 
 ::: {.card .card-gen}
-[Multi-stage · statement 24]{.card-label}
-"If the apartment repairs involve [lead hazards]{.hl}, ask whether the temporary
-unit is appropriate for a child and has been [made lead-safe]{.hl}."
+[rag2026-57 · paying kidney donors]{.card-label}
+"…requiring safeguards against [coercion]{.hl}, inequity, trafficking, and
+abandonment of donors."
+
+The request asks whether payment "crosses a line". **Neither "coercion" nor
+"withdraw" appears anywhere in the single-pass answer.**
+:::
+
+::: {.card .card-gen}
+[rag2026-95 · shootings near schools]{.card-label}
+"…familiar adult monitors who build relationships and [de-escalate]{.hl}
+conflicts, rather than only a conventional security presence."
+
+The residents' split was police versus community groups. Single-pass
+**proposed neither word**.
 :::
 :::
 
 ::: {.cap}
-**The request never says "lead."** It says the apartment is being repaired, and
-separately that there is a child. One writer joined those two facts.
+Each quote is from the submitted multi-stage file; each absence is checked
+against the submitted single-pass file for the same topic. These are three of
+the topics where **both** measures put multi-stage ahead — chosen for that, so
+treat them as the good case, not the average one.
 :::
+
 ## What the organizers said about it
 
 ::: {.trace-step}
@@ -456,6 +473,22 @@ Same two answers, opposite ranking. The rubric items were not released, so I
 cannot say what was credited — only that **the two measures disagree here**.
 :::
 
+## How often they disagree
+
+::: {.eyebrow}
+Across all 42 scored topics
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/12-disagree-all.svg){fig-alt="Across the 42 scored topics the two measures agree on 20, all of them favouring multi-stage; they disagree on 5; and on 17 one measure is exactly tied. The five disagreements are listed with the run each measure puts ahead: rag2026-13, rubric single-pass 1.000 against 0.857 while assessors favour multi-stage 67 per cent against 50; rag2026-59, rubric multi-stage 1.000 against 0.800 while assessors favour single-pass 67 against 58; rag2026-97, rubric multi-stage 1.000 against 0.714, assessors single-pass 55 against 50; rag2026-2, rubric multi-stage 0.833 against 0.667, assessors single-pass 40 against 38; and rag2026-109, rubric multi-stage 0.667 against 0.611 while assessors favour single-pass 69 against 29, the widest gap on the list."}
+:::
+
+::: {.cap}
+The previous slide was not a one-off, and it was not typical either. **Five of
+42** disagree; on the 20 where both measures move together they move the same
+way every time. The 17 left over had one measure exactly tied.
+:::
+
 ## Overall: 42 scored topics
 
 ::: {.eyebrow}
@@ -471,10 +504,27 @@ Every number here is the organizers' own, from the score files they released.
 Multi-stage costs several extra model calls per topic for this. Nothing here is
 **a claim that it is novel** — only that the extra passes did something visible.
 :::
+## What the Retrieval submission did
+
+::: {.eyebrow}
+The other submission · one candidate set, three orderings
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/11-retrieval-submission.svg){fig-alt="A left-to-right chain. The lanes: the untouched narrative plus one pooled lane per subnarrative, each admitting a document only when its aggregate score clears that lane's own robust cutoff, the median plus 2.5 times 1.4826 times the median absolute deviation. The union of those admissions is the candidate core for that narrative, 1 to 121 documents deep, 61 distinct depths, mean about 36, 4,246 rows per run, with no padding and no fixed truncation. That identical set is then ordered three ways into the three submitted files: narrative plus subnarrative, evidence breadth, and narrative only. For a given narrative all three runs contain the identical document set, so only the ordering changes."}
+:::
+
+::: {.cap}
+Depth is **decided per narrative by the evidence**, not padded to a round
+number: the submitted runs go 1 to 121 documents deep across 61 distinct
+depths. I checked the three files — for any narrative the document set is
+identical, so what differs between them is purely the order.
+:::
+
 ## A word on the retrieval side
 
 ::: {.eyebrow}
-The other submission
+The other submission · how it scored
 :::
 
 ::: {.diagram}
@@ -482,8 +532,10 @@ The other submission
 :::
 
 ::: {.cap}
-All three Retrieval runs differ **only in ordering**, and scored identically
-per topic included — so this measures what we *selected*, not how we ordered it.
+Because the three runs hold the same documents, they scored identically per
+topic — so this measures **what the cutoff selected**, not how it was ordered.
+We return about a third as many documents as the field median and are more
+precise for it; recall is the price.
 :::
 ## What I would claim {.divider}
 

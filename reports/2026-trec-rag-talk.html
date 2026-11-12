@@ -2007,19 +2007,24 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 <section class="slide level2 center">
 <h2>The difference you can see</h2>
 <div class="trace-step">
-<p>The example · one difference you can read</p>
+<p>Three topics · what the second pass added, checked against the submitted answers</p>
 </div>
-<div class="grid-2">
-<div class="card card-ret">
-<p><span class="card-label">Single-pass · 22 statements</span> Covers legality, cost, safety, space, location.</p>
-<p><strong>The word “lead” never appears.</strong></p>
+<div class="grid-3">
+<div class="card card-gen">
+<p><span class="card-label">rag2026-18 · six weeks of housing</span> “…if the repairs involve <span class="hl">lead hazards</span>, ask whether the unit has been made lead-safe.”</p>
+<p>The request says <em>repairs</em>, and separately, <em>a child</em>. Single-pass wrote 22 statements and <strong>never used the word “lead”</strong>.</p>
 </div>
 <div class="card card-gen">
-<p><span class="card-label">Multi-stage · statement 24</span> “If the apartment repairs involve <span class="hl">lead hazards</span>, ask whether the temporary unit is appropriate for a child and has been <span class="hl">made lead-safe</span>.”</p>
+<p><span class="card-label">rag2026-57 · paying kidney donors</span> “…requiring safeguards against <span class="hl">coercion</span>, inequity, trafficking, and abandonment of donors.”</p>
+<p>The request asks whether payment “crosses a line”. <strong>Neither “coercion” nor “withdraw” appears anywhere in the single-pass answer.</strong></p>
+</div>
+<div class="card card-gen">
+<p><span class="card-label">rag2026-95 · shootings near schools</span> “…familiar adult monitors who build relationships and <span class="hl">de-escalate</span> conflicts, rather than only a conventional security presence.”</p>
+<p>The residents’ split was police versus community groups. Single-pass <strong>proposed neither word</strong>.</p>
 </div>
 </div>
 <div class="cap">
-<p><strong>The request never says “lead.”</strong> It says the apartment is being repaired, and separately that there is a child. One writer joined those two facts.</p>
+<p>Each quote is from the submitted multi-stage file; each absence is checked against the submitted single-pass file for the same topic. These are three of the topics where <strong>both</strong> measures put multi-stage ahead — chosen for that, so treat them as the good case, not the average one.</p>
 </div>
 </section>
 <section class="slide level2 center">
@@ -2164,6 +2169,105 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 </div>
 </section>
 <section class="slide level2 center">
+<h2>How often they disagree</h2>
+<div class="eyebrow">
+<p>Across all 42 scored topics</p>
+</div>
+<div class="diagram">
+<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1500 560" role="img" aria-labelledby="da-title da-desc">
+  <title id="da-title">How often the automated rubric and the human assessors rank the two runs differently</title>
+  <desc id="da-desc">Across the 42 scored topics, the two measures agree on 20, all 20 of them favouring multi-stage; they disagree on 5; and on the remaining 17 one of the two measures is exactly tied, so there is nothing to disagree about. The five disagreements are listed, each with the run the automated rubric puts ahead and the run the human assessors put ahead. On rag2026-13 the rubric favours single-pass, 1.000 against 0.857, while the assessors favour multi-stage, 67 per cent of its battles against 50. On rag2026-59 the rubric favours multi-stage, 1.000 against 0.800, while the assessors favour single-pass, 67 against 58. On rag2026-97 the rubric favours multi-stage, 1.000 against 0.714, the assessors single-pass, 55 against 50. On rag2026-2 the rubric favours multi-stage, 0.833 against 0.667, the assessors single-pass, 40 against 38. On rag2026-109 the rubric favours multi-stage, 0.667 against 0.611, while the assessors favour single-pass by the widest margin on the list, 69 per cent against 29. Four of the five disagreements run the same way, with the rubric ahead on multi-stage and the assessors ahead on single-pass.</desc>
+  <style>
+text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.da-kick{font-size:21px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+.da-big{font-size:38px;font-weight:800}
+.da-cap{font-size:19px;fill:var(--muted)}
+.da-col{font-size:18px;font-weight:800;letter-spacing:.07em;fill:var(--muted)}
+.da-top{font-size:21px;font-weight:720;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.da-run{font-size:19px;font-weight:760}
+.da-sc{font-size:17px}
+</style>
+  <rect width="1500" height="560" fill="var(--bg)" />
+
+  <!-- the three outcomes, to scale against each other -->
+  <rect x="40" y="34" width="420" height="104" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3" />
+  <text class="da-big" x="64" y="88" style="fill:var(--ok)">20</text>
+  <text class="da-cap" x="130" y="76">agree — and all 20</text>
+  <text class="da-cap" x="130" y="100">favour multi-stage</text>
+  <text class="da-kick" x="64" y="124">OF 42 SCORED TOPICS</text>
+
+  <rect x="476" y="34" width="420" height="104" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3" />
+  <text class="da-big" x="500" y="88" style="fill:var(--adv)">5</text>
+  <text class="da-cap" x="552" y="76">disagree — the two</text>
+  <text class="da-cap" x="552" y="100">measures point apart</text>
+  <text class="da-kick" x="500" y="124">LISTED BELOW</text>
+
+  <rect x="912" y="34" width="548" height="104" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2" />
+  <text class="da-big" x="936" y="88">17</text>
+  <text class="da-cap" x="1000" y="76">one measure is exactly tied,</text>
+  <text class="da-cap" x="1000" y="100">so there is nothing to disagree about</text>
+
+  <!-- column heads -->
+  <text class="da-col" x="64" y="188">TOPIC</text>
+  <text class="da-col" x="300" y="188">AUTOMATED RUBRIC PUTS AHEAD</text>
+  <text class="da-col" x="880" y="188">HUMAN ASSESSORS PUT AHEAD</text>
+  <line x1="40" y1="202" x2="1460" y2="202" stroke="var(--line)" stroke-width="1.5" opacity=".5"></line>
+
+  <!-- rag2026-13 : rubric single-pass, assessors multi-stage -->
+  <text class="da-top" x="64" y="248">rag2026-13</text>
+  <rect x="300" y="224" width="300" height="36" rx="18" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.4" />
+  <text class="da-run" x="320" y="249" style="fill:var(--ret)">single-pass</text>
+  <text class="da-sc" x="452" y="249">1.000 v 0.857</text>
+  <rect x="880" y="224" width="300" height="36" rx="18" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.4" />
+  <text class="da-run" x="900" y="249" style="fill:var(--gen)">multi-stage</text>
+  <text class="da-sc" x="1036" y="249">67% v 50%</text>
+
+  <!-- rag2026-59 -->
+  <text class="da-top" x="64" y="306">rag2026-59</text>
+  <rect x="300" y="282" width="300" height="36" rx="18" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.4" />
+  <text class="da-run" x="320" y="307" style="fill:var(--gen)">multi-stage</text>
+  <text class="da-sc" x="456" y="307">1.000 v 0.800</text>
+  <rect x="880" y="282" width="300" height="36" rx="18" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.4" />
+  <text class="da-run" x="900" y="307" style="fill:var(--ret)">single-pass</text>
+  <text class="da-sc" x="1032" y="307">67% v 58%</text>
+
+  <!-- rag2026-97 -->
+  <text class="da-top" x="64" y="364">rag2026-97</text>
+  <rect x="300" y="340" width="300" height="36" rx="18" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.4" />
+  <text class="da-run" x="320" y="365" style="fill:var(--gen)">multi-stage</text>
+  <text class="da-sc" x="456" y="365">1.000 v 0.714</text>
+  <rect x="880" y="340" width="300" height="36" rx="18" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.4" />
+  <text class="da-run" x="900" y="365" style="fill:var(--ret)">single-pass</text>
+  <text class="da-sc" x="1032" y="365">55% v 50%</text>
+
+  <!-- rag2026-2 -->
+  <text class="da-top" x="64" y="422">rag2026-2</text>
+  <rect x="300" y="398" width="300" height="36" rx="18" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.4" />
+  <text class="da-run" x="320" y="423" style="fill:var(--gen)">multi-stage</text>
+  <text class="da-sc" x="456" y="423">0.833 v 0.667</text>
+  <rect x="880" y="398" width="300" height="36" rx="18" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.4" />
+  <text class="da-run" x="900" y="423" style="fill:var(--ret)">single-pass</text>
+  <text class="da-sc" x="1032" y="423">40% v 38%</text>
+
+  <!-- rag2026-109 : the widest gap on the list -->
+  <text class="da-top" x="64" y="480">rag2026-109</text>
+  <rect x="300" y="456" width="300" height="36" rx="18" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.4" />
+  <text class="da-run" x="320" y="481" style="fill:var(--gen)">multi-stage</text>
+  <text class="da-sc" x="456" y="481">0.667 v 0.611</text>
+  <rect x="880" y="456" width="300" height="36" rx="18" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3.4" />
+  <text class="da-run" x="900" y="481" style="fill:var(--ret)">single-pass</text>
+  <text class="da-sc" x="1032" y="481">69% v 29%</text>
+  <text class="da-cap" x="1200" y="481">— the widest gap here</text>
+
+  <text class="da-cap" x="64" y="534">Four of the five run the same way: the rubric ahead on multi-stage, the assessors ahead on single-pass.</text>
+</svg>
+</p>
+</div>
+<div class="cap">
+<p>The previous slide was not a one-off, and it was not typical either. <strong>Five of 42</strong> disagree; on the 20 where both measures move together they move the same way every time. The 17 left over had one measure exactly tied.</p>
+</div>
+</section>
+<section class="slide level2 center">
 <h2>Overall: 42 scored topics</h2>
 <div class="eyebrow">
 <p>Across everything NIST scored</p>
@@ -2259,9 +2363,104 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 </div>
 </section>
 <section class="slide level2 center">
+<h2>What the Retrieval submission did</h2>
+<div class="eyebrow">
+<p>The other submission · one candidate set, three orderings</p>
+</div>
+<div class="diagram">
+<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1600 580" role="img" aria-labelledby="rs-title rs-desc">
+  <title id="rs-title">How the Retrieval submission was built: one candidate set per narrative, ordered three ways</title>
+  <desc id="rs-desc">A left-to-right chain. On the left, the authenticated source lanes for one narrative: the untouched narrative lane plus one pooled lane per subnarrative. Each lane admits a document only when its aggregate score clears that lane&#39;s own robust threshold, the median plus 2.5 times 1.4826 times the median absolute deviation; when the deviation is zero the score must simply beat the median. In the middle, the union of those admissions forms the candidate core for that narrative, and if the union is empty the single strongest narrative document is taken instead. The core uses narrative-specific depth with no padding: across the 119 narratives, 4,246 rows per run, depth from 1 to 121 documents, 61 distinct depths and a mean of about 36. On the right, that identical set is ordered three ways into three submitted files: narrative percentile alone; a half-and-half blend of narrative percentile and subnarrative score; and evidence breadth, counting supported subnarratives first. The document set for a narrative is byte-identical across all three runs, so only the ordering differs.</desc>
+  <style>
+text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.rs-kick{font-size:22px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
+.rs-role{font-size:20px;font-weight:800;letter-spacing:.07em}
+.rs-hd{font-size:28px;font-weight:760}
+.rs-sm{font-size:20px;fill:var(--muted)}
+.rs-tiny{font-size:18px;fill:var(--muted)}
+.rs-mono{font-size:18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--muted)}
+.rs-num{font-size:26px;font-weight:800}
+.rs-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#rsar)}
+</style>
+  <defs>
+    <marker id="rsar" viewbox="0 0 10 10" refx="9" refy="5" markerwidth="7" markerheight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke" /></marker>
+  </defs>
+  <rect width="1600" height="580" fill="var(--bg)" />
+
+  <text class="rs-kick" x="40" y="44">ONE CANDIDATE SET PER NARRATIVE · ORDERED THREE WAYS · THREE SUBMITTED FILES</text>
+
+  <!-- A. the lanes, each with its own threshold -->
+  <rect x="40" y="76" width="392" height="330" rx="14" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="3" />
+  <text class="rs-role" x="66" y="114" style="fill:var(--s2)">THE LANES</text>
+  <g fill="var(--panel)" stroke="var(--s2)" stroke-width="2.4">
+    <rect x="66" y="136" width="340" height="38" rx="7" />
+    <rect x="66" y="182" width="340" height="38" rx="7" />
+    <rect x="66" y="228" width="340" height="38" rx="7" />
+  </g>
+  <text class="rs-sm" x="84" y="161">the untouched narrative</text>
+  <text class="rs-sm" x="84" y="207">facet: subnarrative 1</text>
+  <text class="rs-sm" x="84" y="253">facet: subnarrative 2 …</text>
+  <text class="rs-tiny" x="66" y="296">A document is admitted by a lane only when</text>
+  <text class="rs-mono" x="66" y="326">A(d) ≥ median + 2.5 · 1.4826 · MAD</text>
+  <text class="rs-tiny" x="66" y="356">— that lane&#39;s own robust cutoff, not a</text>
+  <text class="rs-tiny" x="66" y="380">fixed rank and not a fixed depth.</text>
+
+  <path class="rs-flow" d="M432 240 H490" />
+
+  <!-- B. the union: the candidate core -->
+  <rect x="496" y="76" width="420" height="330" rx="14" fill="var(--s4-soft)" stroke="var(--s4)" stroke-width="3.5" />
+  <text class="rs-role" x="522" y="114" style="fill:var(--s4)">THE CANDIDATE CORE</text>
+  <text class="rs-hd" x="522" y="154">The union of admissions</text>
+  <text class="rs-sm" x="522" y="188">one set per narrative — and if that</text>
+  <text class="rs-sm" x="522" y="214">union is empty, the single strongest</text>
+  <text class="rs-sm" x="522" y="240">narrative document instead</text>
+
+  <line x1="522" y1="266" x2="890" y2="266" stroke="var(--s4)" stroke-width="1.5" opacity=".55"></line>
+  <text class="rs-num" x="522" y="306">1 – 121</text>
+  <text class="rs-tiny" x="660" y="306">documents deep, per narrative</text>
+  <text class="rs-num" x="522" y="348">61</text>
+  <text class="rs-tiny" x="570" y="348">distinct depths · mean ≈ 36 · no padding,</text>
+  <text class="rs-tiny" x="570" y="372">no fixed truncation · 4,246 rows per run</text>
+
+  <path class="rs-flow" d="M916 240 H974" />
+
+  <!-- C. three orderings of the identical set -->
+  <rect x="980" y="76" width="580" height="330" rx="14" fill="var(--s5-soft)" stroke="var(--s5)" stroke-width="3" />
+  <text class="rs-role" x="1006" y="114" style="fill:var(--s5)">THREE ORDERINGS · THE SAME DOCUMENTS</text>
+
+  <g fill="var(--panel)" stroke="var(--s5)" stroke-width="2.4">
+    <rect x="1006" y="136" width="528" height="76" rx="8" />
+    <rect x="1006" y="222" width="528" height="76" rx="8" />
+    <rect x="1006" y="308" width="528" height="76" rx="8" />
+  </g>
+  <text class="rs-hd" x="1026" y="166" style="font-size:22px">Narrative + subnarrative</text>
+  <text class="rs-mono" x="1026" y="194">0.5 · narrative pct + 0.5 · facet score</text>
+  <text class="rs-mono" x="1400" y="166" style="fill:var(--s5)">priority 1</text>
+
+  <text class="rs-hd" x="1026" y="252" style="font-size:22px">Evidence breadth</text>
+  <text class="rs-mono" x="1026" y="280">supported subnarratives, then strong passages</text>
+  <text class="rs-mono" x="1400" y="252" style="fill:var(--s5)">priority 2</text>
+
+  <text class="rs-hd" x="1026" y="338" style="font-size:22px">Narrative only</text>
+  <text class="rs-mono" x="1026" y="366">narrative percentile, then rank, then docid</text>
+  <text class="rs-mono" x="1400" y="338" style="fill:var(--s5)">priority 3</text>
+
+  <!-- the invariant, stated where it can be checked -->
+  <rect x="40" y="428" width="1520" height="118" rx="12" fill="var(--panel)" stroke="var(--ok)" stroke-width="3" />
+  <text class="rs-role" x="68" y="466" style="fill:var(--ok)">WHAT IS HELD CONSTANT</text>
+  <text class="rs-sm" x="68" y="502">For a given narrative the three runs contain the <tspan font-weight="800" style="fill:var(--ink)">identical document set</tspan> — only the ordering changes.</text>
+  <text class="rs-tiny" x="68" y="532">So the three runs scored the same per topic, and the Retrieval numbers measure what was selected, not how it was ordered.</text>
+</svg>
+</p>
+</div>
+<div class="cap">
+<p>Depth is <strong>decided per narrative by the evidence</strong>, not padded to a round number: the submitted runs go 1 to 121 documents deep across 61 distinct depths. I checked the three files — for any narrative the document set is identical, so what differs between them is purely the order.</p>
+</div>
+</section>
+<section class="slide level2 center">
 <h2>A word on the retrieval side</h2>
 <div class="eyebrow">
-<p>The other submission</p>
+<p>The other submission · how it scored</p>
 </div>
 <div class="diagram">
 <p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1400 520" role="img" aria-labelledby="rt-title rt-desc">
@@ -2309,7 +2508,7 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 </p>
 </div>
 <div class="cap">
-<p>All three Retrieval runs differ <strong>only in ordering</strong>, and scored identically per topic included — so this measures what we <em>selected</em>, not how we ordered it.</p>
+<p>Because the three runs hold the same documents, they scored identically per topic — so this measures <strong>what the cutoff selected</strong>, not how it was ordered. We return about a third as many documents as the field median and are more precise for it; recall is the price.</p>
 </div>
 </section>
 <section class="slide level2 divider center">

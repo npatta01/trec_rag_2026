@@ -49,7 +49,7 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 13, `expected 12 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 15, `expected 15 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -142,8 +142,8 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 26,
-  `expected 26 content slides, found ${sections.length}`);
+assert(sections.length === 28,
+  `expected 28 content slides, found ${sections.length}`);
 
 // Five section breaks, each showing the same roadmap with its own leg lit, so
 // the talk's shape is visible from any one of them.
@@ -380,6 +380,23 @@ assert((trace.match(/stroke-dasharray="9 6"/g) || []).length === 2,
 assert(!/\{\.grid-3\}[\s\S]{0,120}Selected passages/.test(qmd),
   "the nugget slide should be a traced example, not three parallel cards");
 
+// The disagreement slide now reports the whole distribution, not one case.
+// 42 scored topics = 20 agreeing + 5 disagreeing + 17 with one measure tied,
+// computed from the organizer sxs counts and rubric scores.
+const dis = fs.readFileSync(path.join(root, "2026-trec-rag-talk/12-disagree-all.svg"), "utf8");
+for (const t of ["rag2026-13", "rag2026-59", "rag2026-97", "rag2026-2", "rag2026-109"]) {
+  assert(dis.includes(t), `the disagreement figure should list ${t}`);
+}
+assert(/>20</.test(dis) && /ature>5</.test(dis) === false && dis.includes(">5<") && dis.includes(">17<"),
+  "the disagreement figure must show the 20 / 5 / 17 split of the 42");
+
+// The retrieval figure's numbers come straight from the submitted TSVs:
+// 4,246 rows, depth 1-121, 61 distinct depths, identical doc set per run.
+const retsub = fs.readFileSync(path.join(root, "2026-trec-rag-talk/11-retrieval-submission.svg"), "utf8");
+for (const fact of ["1 – 121", "61", "4,246", "identical document set"]) {
+  assert(retsub.includes(fact), `the retrieval figure should state: ${fact}`);
+}
+
 // ---- the hedging budget ----------------------------------------------------
 // The deck ends on a slide headed "What I would and would not claim". A warning
 // box on every other slide teaches the room to skip them, so only the notes
@@ -421,7 +438,8 @@ const inlined = (html.match(/<svg\b/gi) || []).length;
 assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> elements`);
 
 // Each figure keeps its own accessible name once inlined.
-for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "ov", "ng"]) {
+for (const id of ["tk", "ar", "ln", "sp", "ms", "pl", "ev", "rt", "t18", "dg", "ov", "ng",
+                  "rs", "da"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
 }

@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 580" role="img" aria-labelledby="rs-title rs-desc">
+  <title id="rs-title">How the Retrieval submission was built: one candidate set per narrative, ordered three ways</title>
+  <desc id="rs-desc">A left-to-right chain. On the left, the authenticated source lanes for one narrative: the untouched narrative lane plus one pooled lane per subnarrative. Each lane admits a document only when its aggregate score clears that lane's own robust threshold, the median plus 2.5 times 1.4826 times the median absolute deviation; when the deviation is zero the score must simply beat the median. In the middle, the union of those admissions forms the candidate core for that narrative, and if the union is empty the single strongest narrative document is taken instead. The core uses narrative-specific depth with no padding: across the 119 narratives, 4,246 rows per run, depth from 1 to 121 documents, 61 distinct depths and a mean of about 36. On the right, that identical set is ordered three ways into three submitted files: narrative percentile alone; a half-and-half blend of narrative percentile and subnarrative score; and evidence breadth, counting supported subnarratives first. The document set for a narrative is byte-identical across all three runs, so only the ordering differs.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .rs-kick{font-size:22px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
+    .rs-role{font-size:20px;font-weight:800;letter-spacing:.07em}
+    .rs-hd{font-size:28px;font-weight:760}
+    .rs-sm{font-size:20px;fill:var(--muted)}
+    .rs-tiny{font-size:18px;fill:var(--muted)}
+    .rs-mono{font-size:18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--muted)}
+    .rs-num{font-size:26px;font-weight:800}
+    .rs-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#rsar)}
+  </style>
+  <defs>
+    <marker id="rsar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="1600" height="580" fill="var(--bg)"/>
+
+  <text class="rs-kick" x="40" y="44">ONE CANDIDATE SET PER NARRATIVE · ORDERED THREE WAYS · THREE SUBMITTED FILES</text>
+
+  <!-- A. the lanes, each with its own threshold -->
+  <rect x="40" y="76" width="392" height="330" rx="14" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="3"/>
+  <text class="rs-role" x="66" y="114" style="fill:var(--s2)">THE LANES</text>
+  <g fill="var(--panel)" stroke="var(--s2)" stroke-width="2.4">
+    <rect x="66" y="136" width="340" height="38" rx="7"/>
+    <rect x="66" y="182" width="340" height="38" rx="7"/>
+    <rect x="66" y="228" width="340" height="38" rx="7"/>
+  </g>
+  <text class="rs-sm" x="84" y="161">the untouched narrative</text>
+  <text class="rs-sm" x="84" y="207">facet: subnarrative 1</text>
+  <text class="rs-sm" x="84" y="253">facet: subnarrative 2 …</text>
+  <text class="rs-tiny" x="66" y="296">A document is admitted by a lane only when</text>
+  <text class="rs-mono" x="66" y="326">A(d) ≥ median + 2.5 · 1.4826 · MAD</text>
+  <text class="rs-tiny" x="66" y="356">— that lane's own robust cutoff, not a</text>
+  <text class="rs-tiny" x="66" y="380">fixed rank and not a fixed depth.</text>
+
+  <path class="rs-flow" d="M432 240 H490"/>
+
+  <!-- B. the union: the candidate core -->
+  <rect x="496" y="76" width="420" height="330" rx="14" fill="var(--s4-soft)" stroke="var(--s4)" stroke-width="3.5"/>
+  <text class="rs-role" x="522" y="114" style="fill:var(--s4)">THE CANDIDATE CORE</text>
+  <text class="rs-hd"   x="522" y="154">The union of admissions</text>
+  <text class="rs-sm"   x="522" y="188">one set per narrative — and if that</text>
+  <text class="rs-sm"   x="522" y="214">union is empty, the single strongest</text>
+  <text class="rs-sm"   x="522" y="240">narrative document instead</text>
+
+  <line x1="522" y1="266" x2="890" y2="266" stroke="var(--s4)" stroke-width="1.5" opacity=".55"/>
+  <text class="rs-num"  x="522" y="306">1 – 121</text>
+  <text class="rs-tiny" x="660" y="306">documents deep, per narrative</text>
+  <text class="rs-num"  x="522" y="348">61</text>
+  <text class="rs-tiny" x="570" y="348">distinct depths · mean ≈ 36 · no padding,</text>
+  <text class="rs-tiny" x="570" y="372">no fixed truncation · 4,246 rows per run</text>
+
+  <path class="rs-flow" d="M916 240 H974"/>
+
+  <!-- C. three orderings of the identical set -->
+  <rect x="980" y="76" width="580" height="330" rx="14" fill="var(--s5-soft)" stroke="var(--s5)" stroke-width="3"/>
+  <text class="rs-role" x="1006" y="114" style="fill:var(--s5)">THREE ORDERINGS · THE SAME DOCUMENTS</text>
+
+  <g fill="var(--panel)" stroke="var(--s5)" stroke-width="2.4">
+    <rect x="1006" y="136" width="528" height="76" rx="8"/>
+    <rect x="1006" y="222" width="528" height="76" rx="8"/>
+    <rect x="1006" y="308" width="528" height="76" rx="8"/>
+  </g>
+  <text class="rs-hd"   x="1026" y="166" style="font-size:22px">Narrative + subnarrative</text>
+  <text class="rs-mono" x="1026" y="194">0.5 · narrative pct + 0.5 · facet score</text>
+  <text class="rs-mono" x="1400" y="166" style="fill:var(--s5)">priority 1</text>
+
+  <text class="rs-hd"   x="1026" y="252" style="font-size:22px">Evidence breadth</text>
+  <text class="rs-mono" x="1026" y="280">supported subnarratives, then strong passages</text>
+  <text class="rs-mono" x="1400" y="252" style="fill:var(--s5)">priority 2</text>
+
+  <text class="rs-hd"   x="1026" y="338" style="font-size:22px">Narrative only</text>
+  <text class="rs-mono" x="1026" y="366">narrative percentile, then rank, then docid</text>
+  <text class="rs-mono" x="1400" y="338" style="fill:var(--s5)">priority 3</text>
+
+  <!-- the invariant, stated where it can be checked -->
+  <rect x="40" y="428" width="1520" height="118" rx="12" fill="var(--panel)" stroke="var(--ok)" stroke-width="3"/>
+  <text class="rs-role" x="68" y="466" style="fill:var(--ok)">WHAT IS HELD CONSTANT</text>
+  <text class="rs-sm"  x="68" y="502">For a given narrative the three runs contain the <tspan font-weight="800" style="fill:var(--ink)">identical document set</tspan> — only the ordering changes.</text>
+  <text class="rs-tiny" x="68" y="532">So the three runs scored the same per topic, and the Retrieval numbers measure what was selected, not how it was ordered.</text>
+</svg>
