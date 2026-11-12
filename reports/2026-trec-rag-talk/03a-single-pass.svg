@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 500" role="img" aria-labelledby="sp-title sp-desc">
-  <title id="sp-title">Single-pass: Sol writes once, local code validates, one retry</title>
-  <desc id="sp-desc">A two-lane strip. Time runs left to right and the lane says who did it: Sol the writer, marked with a sun, and local code, marked with angle brackets and a dashed outline. The sealed evidence handoff feeds the strip. Sol writes the answer in one call to gpt 5.6 sol. Local code then validates it against three things: the output schema, that every citation names a document the topic is allowed to cite, and that the answer is at most 1,024 words. A dashed arrow runs back from the check to Sol: one retry is allowed, and it was used on two of the one hundred and nineteen requests. The result is 119 validated answers, one model call each, two where the retry fired.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 440" role="img" aria-labelledby="sp-title sp-desc">
+  <title id="sp-title">Single-pass: one model call, then a validator</title>
+  <desc id="sp-desc">A two-lane strip fed by one sealed evidence handoff. In the upper lane Sol, marked with a sun, writes the answer in one call. In the lower lane local code, marked with angle brackets and a dashed outline, validates it against three things: the output schema, that every citation names a document the topic may cite, and a limit of at most 1,024 words. A dashed arrow runs back from the validator to Sol for one retry, used on 2 of 119 requests. The result is 119 answers, one model call each. Sol is openai/gpt-5.6-sol.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .sp-head{font-size:27px;font-weight:760}
-    .sp-who{font-size:27px;font-weight:780}
-    .sp-model{font-size:14px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .sp-label{font-size:25px;font-weight:700}
-    .sp-sub{font-size:19px;fill:var(--muted)}
-    .sp-chip{font-size:19px;font-weight:700;fill:var(--adv)}
+    .sp-head{font-size:30px;font-weight:760}
+    .sp-who{font-size:30px;font-weight:780}
+    .sp-label{font-size:27px;font-weight:700}
+    .sp-sub{font-size:23px;fill:var(--muted)}
+    .sp-chip{font-size:23px;font-weight:700;fill:var(--adv)}
+    .sp-prov{font-size:20px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .sp-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#spa)}
     .sp-back{fill:none;stroke:var(--adv);stroke-width:3;stroke-dasharray:8 6;marker-end:url(#spb)}
     .sp-lane{fill:var(--panel);opacity:.45}
@@ -19,54 +19,47 @@
   <defs>
     <marker id="spa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
     <marker id="spb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
-    <g id="sp-g-sun" class="sp-ico"><circle cx="0" cy="0" r="5.2"/><path d="M0 -12.5V-9.2M0 9.2V12.5M-12.5 0H-9.2M9.2 0H12.5M-8.8 -8.8L-6.4 -6.4M6.4 6.4L8.8 8.8M8.8 -8.8L6.4 -6.4M-6.4 6.4L-8.8 8.8"/></g>
+    <g id="sp-g-sun" class="sp-ico"><circle cx="0" cy="0" r="4.8"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1"/></g>
     <g id="sp-g-code" class="sp-ico"><path d="M-4 -8L-11 0L-4 8M4 -8L11 0L4 8"/></g>
-    <g id="sp-g-tick" class="sp-ico"><path d="M-7 0.5L-2 5.5L7 -4.5"/></g>
+    <g id="sp-g-tick" class="sp-ico"><path d="M-7 0L-2 5L7 -5"/></g>
   </defs>
-  <rect width="1500" height="500" fill="var(--bg)"/>
+  <rect width="1240" height="440" fill="var(--bg)"/>
 
-  <rect x="280" y="16" width="1180" height="64" rx="10" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6"/>
-  <text class="sp-head" x="870" y="46" text-anchor="middle">One sealed evidence handoff</text>
-  <text class="sp-sub"  x="870" y="70" text-anchor="middle">exact passages · nugget hints · allowed citation IDs — Sol never searches</text>
+  <rect x="260" y="8" width="950" height="58" rx="10" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6"/>
+  <text class="sp-head" x="735" y="47" text-anchor="middle">One sealed evidence handoff</text>
 
-  <rect class="sp-lane" x="292" y="118" width="1168" height="116" rx="10"/>
-  <rect class="sp-lane" x="292" y="256" width="1168" height="152" rx="10"/>
+  <rect class="sp-lane" x="260" y="84" width="950" height="108" rx="10"/>
+  <rect class="sp-lane" x="260" y="212" width="950" height="164" rx="10"/>
 
-  <g transform="translate(90,176)" style="color:var(--ret)"><circle r="24" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#sp-g-sun"/></g>
-  <text class="sp-who"   x="126" y="172" style="fill:var(--ret)">Sol</text>
-  <text class="sp-model" x="126" y="196">openai/gpt-5.6-sol</text>
+  <g transform="translate(70,138)" style="color:var(--ret)"><circle r="24" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#sp-g-sun"/></g>
+  <text class="sp-who" x="104" y="148" style="fill:var(--ret)">Sol</text>
 
-  <g transform="translate(90,332)" style="color:var(--line)"><circle r="24" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/><use href="#sp-g-code"/></g>
-  <text class="sp-who"   x="126" y="328" style="fill:var(--muted)" font-size="23">local code</text>
-  <text class="sp-model" x="126" y="352">no model</text>
+  <g transform="translate(70,288)" style="color:var(--line)"><circle r="24" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/><use href="#sp-g-code"/></g>
+  <text class="sp-who" x="104" y="296" style="fill:var(--muted)" font-size="24">local code</text>
 
-  <path class="sp-flow" d="M470 80 V128"/>
+  <path class="sp-flow" d="M420 66 V92"/>
 
-  <rect x="300" y="136" width="340" height="80" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
-  <text class="sp-label" x="470" y="184" text-anchor="middle">Writes the answer</text>
+  <rect x="300" y="96" width="320" height="84" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
+  <text class="sp-label" x="460" y="147" text-anchor="middle">Writes the answer</text>
 
-  <path class="sp-flow" d="M640 176 H664 V332 H696"/>
+  <path class="sp-flow" d="M620 138 H650 V294 H676"/>
 
-  <rect x="700" y="268" width="380" height="128" rx="10" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/>
-  <text class="sp-label" x="724" y="302">Validates it</text>
+  <rect x="680" y="226" width="520" height="136" rx="10" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/>
+  <text class="sp-label" x="704" y="266">Validates it</text>
   <g style="color:var(--ok)">
-    <g transform="translate(738,330)"><use href="#sp-g-tick"/></g>
-    <g transform="translate(738,360)"><use href="#sp-g-tick"/></g>
-    <g transform="translate(738,386)"><use href="#sp-g-tick"/></g>
+    <g transform="translate(722,292)"><use href="#sp-g-tick"/></g>
+    <g transform="translate(722,324)"><use href="#sp-g-tick"/></g>
+    <g transform="translate(722,352)"><use href="#sp-g-tick"/></g>
   </g>
-  <text class="sp-sub" x="758" y="337">the output schema</text>
-  <text class="sp-sub" x="758" y="367">every citation is an allowed document</text>
-  <text class="sp-sub" x="758" y="393">at most 1,024 words</text>
+  <text class="sp-sub" x="746" y="299">the output schema</text>
+  <text class="sp-sub" x="746" y="331">every citation is allowed</text>
+  <text class="sp-sub" x="746" y="359">at most 1,024 words</text>
 
-  <path class="sp-back" d="M890 268 V248 H470 V224"/>
-  <text class="sp-chip" x="690" y="182">one retry — used on 2 of 119</text>
+  <path class="sp-back" d="M700 226 V160 H626"/>
+  <text class="sp-chip" x="714" y="167">one retry — used on 2 of 119</text>
 
-  <path class="sp-flow" d="M1080 332 H1112"/>
-  <rect x="1116" y="276" width="344" height="112" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
-  <text class="sp-label" x="1288" y="320" text-anchor="middle" style="fill:var(--ok)">119 answers</text>
-  <text class="sp-sub"   x="1288" y="350" text-anchor="middle">one model call each —</text>
-  <text class="sp-sub"   x="1288" y="374" text-anchor="middle">two where the retry fired</text>
+  <rect x="260" y="392" width="950" height="42" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
+  <text class="sp-label" x="735" y="421" text-anchor="middle" style="fill:var(--ok)">119 answers · one model call each</text>
 
-  <text class="sp-sub" x="40" y="462">117 of the 119 passed validation first try. Sol is never shown the</text>
-  <text class="sp-sub" x="40" y="486">retrieval files, the corpus, or any score — only the sealed package.</text>
+  <text class="sp-prov" x="30" y="415">openai/gpt-5.6-sol</text>
 </svg>

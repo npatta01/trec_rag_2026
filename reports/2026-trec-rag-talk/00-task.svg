@@ -6,8 +6,8 @@
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
     .tk-hd{font-size:31px;font-weight:760}
-    .tk-sm{font-size:21px;fill:var(--muted)}
-    .tk-role{font-size:20px;font-weight:800;letter-spacing:.07em}
+    .tk-sm{font-size:23px;fill:var(--muted)}
+    .tk-role{font-size:23px;font-weight:800;letter-spacing:.07em}
     .tk-req{font-size:24px;font-weight:700}
     .tk-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#tkar)}
   </style>
@@ -74,6 +74,5 @@
   <text class="tk-req" x="812" y="392">≤ 1,024 words</text>
   <text class="tk-sm"  x="1010" y="392">— length is the budget you spend</text>
   <text class="tk-req" x="812" y="436">every statement cited</text>
-  <text class="tk-sm"  x="1104" y="436">— uncited is worth</text>
-  <text class="tk-sm"  x="1104" y="458">nothing, however true</text>
+  <text class="tk-sm"  x="1104" y="436">— uncited counts for nothing</text>
 </svg>

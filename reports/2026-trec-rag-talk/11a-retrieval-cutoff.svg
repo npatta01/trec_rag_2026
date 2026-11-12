@@ -1,21 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="rc-title rc-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 626" role="img" aria-labelledby="rc-title rc-desc">
   <title id="rc-title">Each lane decides its own cutoff, and the union is the candidate core</title>
   <desc id="rc-desc">Four horizontal lanes for one narrative, each plotting its documents by score from low on the left to high on the right. The top lane is the untouched narrative; the three below are the facet lanes, one per subnarrative. Every lane carries its own dashed cutoff line, and the four lines sit at four different places, because each is computed from that lane's own scores as the median plus 2.5 times 1.4826 times the median absolute deviation. Documents to the right of a lane's line are filled in and admitted; those to the left are hollow and dropped. The lanes admit 6, 4, 9 and 3 documents respectively. Below, a band shows that the union of those admissions is the candidate core for the narrative, and that because the cutoff is a score and not a position, depth is decided by the evidence: across the 119 narratives the submitted depth runs from 1 to 121 documents over 61 distinct depths, averaging about 36, for 4,246 rows per run.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .rc-kick{font-size:23px;font-weight:800;letter-spacing:.05em;fill:var(--adv)}
-    .rc-form{font-size:22px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--muted)}
-    .rc-lane{font-size:23px;font-weight:720}
-    .rc-sub{font-size:19px;fill:var(--muted)}
+    .rc-kick{font-size:24px;font-weight:800;letter-spacing:.05em;fill:var(--adv)}
+    .rc-form{font-size:24px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--muted)}
+    .rc-lane{font-size:24px;font-weight:720}
+    .rc-sub{font-size:24px;fill:var(--muted)}
     .rc-cut{fill:none;stroke:var(--ok);stroke-width:3;stroke-dasharray:8 6}
     .rc-track{fill:none;stroke:var(--line);stroke-width:1.6;opacity:.45}
     .rc-in{fill:var(--ret)}
     .rc-out{fill:none;stroke:var(--line);stroke-width:2.4;opacity:.6}
     .rc-cnt{font-size:24px;font-weight:800;fill:var(--ret)}
     .rc-big{font-size:34px;font-weight:800}
-    .rc-note{font-size:21px}
+    .rc-note{font-size:24px}
   </style>
   <rect width="1600" height="620" fill="var(--bg)"/>
 
@@ -27,7 +27,6 @@
 
   <!-- lane 1: the untouched narrative -->
   <text class="rc-lane" x="40" y="158">the untouched narrative</text>
-  <text class="rc-sub"  x="40" y="182">its own scores, its own cutoff</text>
   <line class="rc-track" x1="330" y1="166" x2="1250" y2="166"/>
   <g class="rc-out"><circle cx="372" cy="166" r="9"/><circle cx="436" cy="166" r="9"/><circle cx="498" cy="166" r="9"/><circle cx="563" cy="166" r="9"/><circle cx="640" cy="166" r="9"/><circle cx="705" cy="166" r="9"/><circle cx="786" cy="166" r="9"/><circle cx="854" cy="166" r="9"/></g>
   <path class="rc-cut" d="M902 126 V206"/>
@@ -36,7 +35,6 @@
 
   <!-- lane 2 -->
   <text class="rc-lane" x="40" y="252">facet · subnarrative 1</text>
-  <text class="rc-sub"  x="40" y="276">a tighter lane, so a higher bar</text>
   <line class="rc-track" x1="330" y1="260" x2="1250" y2="260"/>
   <g class="rc-out"><circle cx="360" cy="260" r="9"/><circle cx="424" cy="260" r="9"/><circle cx="486" cy="260" r="9"/><circle cx="548" cy="260" r="9"/><circle cx="614" cy="260" r="9"/><circle cx="682" cy="260" r="9"/><circle cx="748" cy="260" r="9"/><circle cx="820" cy="260" r="9"/><circle cx="884" cy="260" r="9"/><circle cx="952" cy="260" r="9"/><circle cx="1018" cy="260" r="9"/></g>
   <path class="rc-cut" d="M1062 220 V300"/>
@@ -45,7 +43,6 @@
 
   <!-- lane 3 -->
   <text class="rc-lane" x="40" y="346">facet · subnarrative 2</text>
-  <text class="rc-sub"  x="40" y="370">scores bunched, so a lower bar</text>
   <line class="rc-track" x1="330" y1="354" x2="1250" y2="354"/>
   <g class="rc-out"><circle cx="366" cy="354" r="9"/><circle cx="432" cy="354" r="9"/><circle cx="500" cy="354" r="9"/><circle cx="566" cy="354" r="9"/></g>
   <path class="rc-cut" d="M612 314 V394"/>
@@ -54,7 +51,6 @@
 
   <!-- lane 4 -->
   <text class="rc-lane" x="40" y="440">facet · subnarrative 3</text>
-  <text class="rc-sub"  x="40" y="464">one clear winner, little else</text>
   <line class="rc-track" x1="330" y1="448" x2="1250" y2="448"/>
   <g class="rc-out"><circle cx="356" cy="448" r="9"/><circle cx="418" cy="448" r="9"/><circle cx="478" cy="448" r="9"/><circle cx="540" cy="448" r="9"/><circle cx="604" cy="448" r="9"/><circle cx="668" cy="448" r="9"/><circle cx="730" cy="448" r="9"/><circle cx="798" cy="448" r="9"/><circle cx="862" cy="448" r="9"/><circle cx="930" cy="448" r="9"/><circle cx="998" cy="448" r="9"/><circle cx="1068" cy="448" r="9"/></g>
   <path class="rc-cut" d="M1136 408 V488"/>
@@ -64,15 +60,15 @@
   <text class="rc-sub" x="902" y="508" text-anchor="middle">four lanes, four different cutoffs</text>
 
   <!-- the union -->
-  <rect x="40" y="528" width="1520" height="76" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
+  <rect x="40" y="528" width="1520" height="84" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
   <text class="rc-note" x="66" y="562" style="font-weight:800;fill:var(--ok)">THE UNION IS THE CANDIDATE CORE</text>
   <text class="rc-note" x="66" y="592">The bar is a score, not a position.</text>
   <text class="rc-big"  x="700" y="568">1 – 121</text>
-  <text class="rc-sub"  x="700" y="594">documents deep</text>
+  <text class="rc-sub"  x="700" y="600">documents deep</text>
   <text class="rc-big"  x="920" y="568">61</text>
-  <text class="rc-sub"  x="920" y="594">distinct depths</text>
+  <text class="rc-sub"  x="920" y="600">distinct depths</text>
   <text class="rc-big"  x="1104" y="568">≈ 36</text>
-  <text class="rc-sub"  x="1104" y="594">mean depth</text>
+  <text class="rc-sub"  x="1104" y="600">mean depth</text>
   <text class="rc-big"  x="1300" y="568">4,246</text>
-  <text class="rc-sub"  x="1300" y="594">rows per run · no padding</text>
+  <text class="rc-sub"  x="1300" y="600">rows per run</text>
 </svg>

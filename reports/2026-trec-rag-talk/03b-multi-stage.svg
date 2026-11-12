@@ -1,16 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 600" role="img" aria-labelledby="ms-title ms-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 520" role="img" aria-labelledby="ms-title ms-desc">
   <title id="ms-title">Multi-stage: the work changes hands seven times</title>
-  <desc id="ms-desc">A three-lane strip. Time runs left to right and the lane says who did it: Luna the reviewer, marked with a crescent moon; Sol the writer, marked with a sun; and local code, marked with angle brackets and a dashed outline. The path zigzags between the lanes seven times. One, Luna plans the answer. Two, Sol writes the draft. Three, Luna audits each evidence group on its own, returning at most six missing-detail cards per group. Four, local code merges those cards. Five, Sol proposes edits, at most three. Six, Luna screens each proposed edit against five booleans that must all pass. Seven, local code applies only the edits that passed. The result is 119 validated answers. This is one pass through the stages, not a repeating loop, and if revision fails the draft that already passed validation stands.</desc>
+  <desc id="ms-desc">A three-lane strip fed by the same sealed evidence handoff. Time runs left to right and the lane says who did it: Luna marked with a crescent moon, Sol marked with a sun, and local code marked with angle brackets and a dashed outline. The path zigzags between the lanes seven times. One, Luna plans. Two, Sol drafts. Three, Luna audits. Four, local code merges. Five, Sol proposes. Six, Luna screens. Seven, local code applies. A band at the foot gives the bounds: Luna plans 3 to 8 obligations, audits each group returning at most 6 cards per group, Sol proposes at most 3 edits, and all five of Luna's checks must pass or local code applies only what passed. The result is 119 answers from one pass through the stages, not a repeating loop, and if revision fails the draft that already passed validation stands. Luna is openai/gpt-5.6-luna and Sol is openai/gpt-5.6-sol.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .ms-who{font-size:25px;font-weight:780}
-    .ms-model{font-size:13px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .ms-label{font-size:21px;font-weight:700}
-    .ms-sub{font-size:17px;fill:var(--muted)}
-    .ms-step{font-size:18px;font-weight:800}
-    .ms-flow{fill:none;stroke:var(--line);stroke-width:2.8;marker-end:url(#msa)}
+    .ms-who{font-size:28px;font-weight:780}
+    .ms-label{font-size:26px;font-weight:720}
+    .ms-code{font-size:22px;font-weight:700;fill:var(--muted)}
+    .ms-step{font-size:22px;font-weight:800}
+    .ms-foot{font-size:23px}
+    .ms-prov{font-size:21px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .ms-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#msa)}
     .ms-lane{fill:var(--panel);opacity:.45}
     .ms-ico{fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
   </style>
@@ -20,75 +21,68 @@
     <g id="ms-g-moon" class="ms-ico"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z"/></g>
     <g id="ms-g-code" class="ms-ico"><path d="M-4 -8L-11 0L-4 8M4 -8L11 0L4 8"/></g>
   </defs>
-  <rect width="1600" height="600" fill="var(--bg)"/>
+  <rect width="1400" height="520" fill="var(--bg)"/>
 
-  <rect class="ms-lane" x="292" y="110" width="1268" height="120" rx="10"/>
-  <rect class="ms-lane" x="292" y="250" width="1268" height="120" rx="10"/>
-  <rect class="ms-lane" x="292" y="390" width="1268" height="106" rx="10"/>
+  <text class="ms-code" x="240" y="30">the same sealed evidence handoff</text>
+  <path class="ms-flow" d="M260 40 V78"/>
 
-  <g transform="translate(86,170)" style="color:var(--gen)"><circle r="23" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/><use href="#ms-g-moon"/></g>
-  <text class="ms-who"   x="120" y="166" style="fill:var(--gen)">Luna</text>
-  <text class="ms-model" x="120" y="190">openai/gpt-5.6-luna</text>
-  <text class="ms-sub"   x="120" y="214">judges, never writes</text>
+  <rect class="ms-lane" x="220" y="64" width="1150" height="100" rx="10"/>
+  <rect class="ms-lane" x="220" y="184" width="1150" height="100" rx="10"/>
+  <rect class="ms-lane" x="220" y="304" width="1150" height="86" rx="10"/>
 
-  <g transform="translate(86,310)" style="color:var(--ret)"><circle r="23" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#ms-g-sun"/></g>
-  <text class="ms-who"   x="120" y="306" style="fill:var(--ret)">Sol</text>
-  <text class="ms-model" x="120" y="330">openai/gpt-5.6-sol</text>
-  <text class="ms-sub"   x="120" y="354">writes, never judges</text>
+  <g transform="translate(46,114)" style="color:var(--gen)"><circle r="22" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/><use href="#ms-g-moon"/></g>
+  <text class="ms-who" x="80" y="124" style="fill:var(--gen)">Luna</text>
 
-  <g transform="translate(86,443)" style="color:var(--line)"><circle r="23" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/><use href="#ms-g-code"/></g>
-  <text class="ms-who"   x="120" y="439" style="fill:var(--muted)" font-size="23">local code</text>
-  <text class="ms-model" x="120" y="463">no model</text>
+  <g transform="translate(46,234)" style="color:var(--ret)"><circle r="22" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#ms-g-sun"/></g>
+  <text class="ms-who" x="80" y="244" style="fill:var(--ret)">Sol</text>
 
-  <path class="ms-flow" d="M300 60 H370 V126"/>
-  <text class="ms-sub" x="300" y="52">the same sealed evidence handoff</text>
+  <g transform="translate(46,347)" style="color:var(--line)"><circle r="22" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/><use href="#ms-g-code"/></g>
+  <text class="ms-code" x="80" y="354">local code</text>
 
   <!-- 1 Luna plans -->
-  <rect x="280" y="134" width="186" height="80" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
-  <text class="ms-step"  x="294" y="156" style="fill:var(--gen)">1</text>
-  <text class="ms-label" x="373" y="180" text-anchor="middle">Plans</text>
-  <text class="ms-sub"   x="373" y="202" text-anchor="middle">3–8 obligations</text>
-  <path class="ms-flow" d="M466 174 H476 V310 H483"/>
+  <rect x="220" y="79" width="170" height="70" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
+  <text class="ms-step"  x="234" y="102" style="fill:var(--gen)">1</text>
+  <text class="ms-label" x="305" y="128" text-anchor="middle">Plans</text>
+  <path class="ms-flow" d="M390 114 H399 V234 H404"/>
 
   <!-- 2 Sol drafts -->
-  <rect x="487" y="274" width="186" height="80" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
-  <text class="ms-step"  x="501" y="296" style="fill:var(--ret)">2</text>
-  <text class="ms-label" x="580" y="320" text-anchor="middle">Drafts</text>
-  <text class="ms-sub"   x="580" y="342" text-anchor="middle">the whole answer</text>
-  <path class="ms-flow" d="M673 314 H683 V174 H690"/>
+  <rect x="408" y="199" width="170" height="70" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
+  <text class="ms-step"  x="422" y="222" style="fill:var(--ret)">2</text>
+  <text class="ms-label" x="493" y="248" text-anchor="middle">Drafts</text>
+  <path class="ms-flow" d="M578 234 H587 V114 H592"/>
 
   <!-- 3 Luna audits -->
-  <rect x="694" y="134" width="186" height="80" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
-  <text class="ms-step"  x="708" y="156" style="fill:var(--gen)">3</text>
-  <text class="ms-label" x="787" y="180" text-anchor="middle">Audits</text>
-  <text class="ms-sub"   x="787" y="202" text-anchor="middle">≤6 cards per group</text>
-  <path class="ms-flow" d="M880 174 H890 V443 H897"/>
+  <rect x="596" y="79" width="170" height="70" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
+  <text class="ms-step"  x="610" y="102" style="fill:var(--gen)">3</text>
+  <text class="ms-label" x="681" y="128" text-anchor="middle">Audits</text>
+  <path class="ms-flow" d="M766 114 H775 V347 H780"/>
 
-  <rect x="901" y="414" width="110" height="60" rx="10" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/>
-  <text class="ms-sub" x="956" y="438" text-anchor="middle">merges</text>
-  <text class="ms-sub" x="956" y="458" text-anchor="middle">the cards</text>
-  <path class="ms-flow" d="M1011 443 H1021 V314 H1028"/>
+  <!-- 4 code merges -->
+  <rect x="784" y="317" width="95" height="60" rx="10" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/>
+  <text class="ms-code" x="831" y="366" text-anchor="middle">merges</text>
+  <path class="ms-flow" d="M879 347 H888 V234 H893"/>
 
-  <!-- 4 Sol proposes -->
-  <rect x="1032" y="274" width="186" height="80" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
-  <text class="ms-step"  x="1046" y="296" style="fill:var(--ret)">4</text>
-  <text class="ms-label" x="1125" y="320" text-anchor="middle">Proposes</text>
-  <text class="ms-sub"   x="1125" y="342" text-anchor="middle">at most 3 edits</text>
-  <path class="ms-flow" d="M1218 314 H1228 V174 H1235"/>
+  <!-- 5 Sol proposes -->
+  <rect x="897" y="199" width="170" height="70" rx="10" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/>
+  <text class="ms-step"  x="911" y="222" style="fill:var(--ret)">5</text>
+  <text class="ms-label" x="982" y="248" text-anchor="middle">Proposes</text>
+  <path class="ms-flow" d="M1067 234 H1076 V114 H1081"/>
 
-  <!-- 5 Luna screens -->
-  <rect x="1239" y="134" width="186" height="80" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
-  <text class="ms-step"  x="1253" y="156" style="fill:var(--gen)">5</text>
-  <text class="ms-label" x="1332" y="180" text-anchor="middle">Screens</text>
-  <text class="ms-sub"   x="1332" y="202" text-anchor="middle">all five must pass</text>
-  <path class="ms-flow" d="M1425 174 H1435 V443 H1442"/>
+  <!-- 6 Luna screens -->
+  <rect x="1085" y="79" width="170" height="70" rx="10" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="2.6"/>
+  <text class="ms-step"  x="1099" y="102" style="fill:var(--gen)">6</text>
+  <text class="ms-label" x="1170" y="128" text-anchor="middle">Screens</text>
+  <path class="ms-flow" d="M1255 114 H1264 V347 H1269"/>
 
-  <rect x="1446" y="414" width="110" height="60" rx="10" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/>
-  <text class="ms-sub" x="1501" y="438" text-anchor="middle">applies only</text>
-  <text class="ms-sub" x="1501" y="458" text-anchor="middle">what passed</text>
-  <path class="ms-flow" d="M1501 474 V512"/>
+  <!-- 7 code applies -->
+  <rect x="1273" y="317" width="95" height="60" rx="10" fill="none" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="5 5"/>
+  <text class="ms-code" x="1320" y="366" text-anchor="middle">applies</text>
+  <text class="ms-step" x="1286" y="338" style="fill:var(--muted)">7</text>
+  <text class="ms-step" x="797" y="338" style="fill:var(--muted)">4</text>
 
-  <rect x="280" y="516" width="1280" height="62" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
-  <text class="ms-label" x="920" y="544" text-anchor="middle">119 validated answers · one pass through the stages, not a repeating loop</text>
-  <text class="ms-sub"   x="920" y="568" text-anchor="middle">if revision fails, the draft that already passed validation stands — the extra stages can only add</text>
+  <rect x="220" y="406" width="1150" height="68" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
+  <text class="ms-foot" x="244" y="434">3–8 obligations · ≤6 cards per group · at most 3 edits · all five must pass</text>
+  <text class="ms-foot" x="244" y="462">code applies only what passed · 119 answers · one pass, not a repeating loop</text>
+
+  <text class="ms-prov" x="24" y="500">openai/gpt-5.6-luna · openai/gpt-5.6-sol</text>
 </svg>

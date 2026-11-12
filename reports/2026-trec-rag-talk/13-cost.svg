@@ -5,13 +5,13 @@
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .co-kick{font-size:22px;font-weight:800;letter-spacing:.05em;fill:var(--muted)}
+    .co-kick{font-size:24px;font-weight:800;letter-spacing:.05em;fill:var(--muted)}
     .co-hd{font-size:26px;font-weight:800}
-    .co-row{font-size:22px}
-    .co-sub{font-size:19px;fill:var(--muted)}
+    .co-row{font-size:24px}
+    .co-sub{font-size:24px;fill:var(--muted)}
     .co-n{font-size:26px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .co-big{font-size:40px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .co-note{font-size:21px}
+    .co-note{font-size:24px}
   </style>
   <rect width="1600" height="620" fill="var(--bg)"/>
 

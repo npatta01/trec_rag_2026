@@ -1458,3 +1458,28 @@ body.reveal-viewport,
   line-height: 1.32;
   color: var(--muted);
 }
+
+// ------------------------------------------------- two lanes, set large
+// Eight lanes on one slide was a wall, so six moved to the appendix. The pair
+// that stays is only worth keeping if it can be read from the back of a room,
+// so it gets the whole slide and roughly twice the type.
+.qpair {
+  gap: 0.6em 0.9em;
+  align-content: center;
+}
+
+.qpair details {
+  padding: 0.55em 0.85em;
+  border-left-width: 8px;
+}
+
+.qpair summary {
+  font-size: 0.92em;
+  gap: 0.5em;
+}
+
+.qpair code {
+  font-size: 0.62em;
+  margin-top: 0.34em;
+  padding: 0.3em 0.55em;
+}

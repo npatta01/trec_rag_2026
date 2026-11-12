@@ -30,6 +30,7 @@ for (const asset of [
   "2026-trec-rag-talk/11a-retrieval-cutoff.svg",
   "2026-trec-rag-talk/13-cost.svg",
   "2026-trec-rag-talk/15-coverage.svg",
+  "2026-trec-rag-talk/16-luna.svg",
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
@@ -52,7 +53,7 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 22, `expected 22 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 23, `expected 23 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -111,10 +112,14 @@ for (const [fig, facts] of chartedFacts) {
 const grid = fs.readFileSync(path.join(root, "2026-trec-rag-talk/09-overall.svg"), "utf8");
 const cells = (grid.match(/<rect x="\d+" y="\d+" width="30" height="30"/g) || []).length;
 assert(cells === 42, `the overall figure should draw 42 topic squares, found ${cells}`);
-// RAGDoll favoured single-pass; that stays in the limits slide's own words.
-for (const fact of ["0.757", "0.653"]) {
-  assert(qmd.includes(fact), `the limits slide should keep: ${fact}`);
-}
+// The citation-support result (RAGDoll favoured single-pass, 0.757 to 0.653)
+// came off the deck at the author's request - the close is the architecture
+// and nothing else. It is still reachable through the linked reports. What the
+// deck must never do is claim the opposite.
+assert(!/better grounding|better.grounded|more faithful/i.test(qmd),
+  "the deck must not claim multi-stage was better grounded - it was not");
+assert(/2026-ragdoll-rag26-ss1/.test(qmd) && /2026-ragdoll-rag26-ms1-final/.test(qmd),
+  "the citation-support reports must stay linked, since the number is no longer stated");
 // Prose wraps across lines in the source, so compare on collapsed whitespace.
 const flat = qmd.replace(/\s+/g, " ");
 for (const fact of requiredFacts) {
@@ -128,11 +133,8 @@ const requiredBoundaries = [
   "the organizers' own, from the score files",
   "42 scored topics",
   "rubric items were not released",
-  // The standalone limits slide was cut for reading as slop. The one limit
-  // that actually changes a reader's conclusion - that citation support went
-  // the other way - has to stay somewhere, and now closes the talk.
-  "favoured **single-pass**",
-  "Coverage and grounding are not the same question",
+  // The citation-support limit came off the deck entirely at the author's
+  // request; the check above pins what the deck must not claim instead.
   // The battle counts are per-run against the field, never head to head. The
   // phrasing has been cut twice for reading as slop; the claim it carries has
   // to survive each rewrite, so the guard tracks the claim's current sentence.
@@ -250,8 +252,11 @@ assert(!/no per-topic audit log/.test(qmd),
   "the per-topic audit counts are published in the release; don't deny them");
 assert(!/\b(she|her|hers)\b/i.test(qmd.replace(/\bwhether\b/gi, "")),
   "Luna is a model; the deck should not give it a gender");
-assert(flat.includes("every evidence group, no sampling"),
-  "the Luna slide should state the audit breadth the trace records");
+// Audit breadth was a caption line and came off with the rest of the copy.
+// The figure still bounds the audit, which is the part that constrains it.
+assert(/≤6 cards per group/.test(fs.readFileSync(
+  path.join(root, "2026-trec-rag-talk/03b-multi-stage.svg"), "utf8")),
+  "the relay figure must still bound the per-group audit");
 
 // Every per-query figure is a configured cap, never a measured yield. That
 // used to be an amber warning box on the slide; it is now carried by the ≤ on
@@ -331,11 +336,10 @@ assert(/id="sp-g-sun"/.test(single),
   "the single-pass figure must mark Sol as a sun");
 assert(/id="ms-g-sun"/.test(writers) && /id="ms-g-moon"/.test(writers),
   "the multi-stage figure must mark Sol as a sun and Luna as a moon");
-// Two suns: the single-pass card and the multi-stage card. Three moons: the
-// same multi-stage card, plus one on each half of the slide about Luna's two
-// jobs - the mark is how the room tracks which model is being talked about.
+// Two suns and one moon: both cards on the two-writers slide. The slide about
+// Luna's two jobs is one figure now, which carries its own marks.
 assert((qmd.match(/class="glyph g-sun"/g) || []).length === 2 &&
-       (qmd.match(/class="glyph g-moon"/g) || []).length === 3,
+       (qmd.match(/class="glyph g-moon"/g) || []).length === 1,
   "Sol and Luna keep their marks on the slides that name them");
 for (const src of [qmd, single, writers]) {
   assert(!/M0 -13 L8 3 L0 12/.test(src) && !/cx="-2" cy="-3" r="8\.5"/.test(src),
@@ -373,7 +377,7 @@ assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
 const figures = ["00-task", "00-architecture", "02-one-lane", "02b-rerank",
                  "03a-single-pass", "03b-multi-stage", "04-plan", "05-evidence",
                  "06-retrieval", "07-topic18", "08-disagree", "09-overall",
-                 "11a-retrieval-cutoff", "13-cost", "15-coverage"];
+                 "11a-retrieval-cutoff", "13-cost", "15-coverage", "16-luna"];
 for (const f of figures) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
   assert(!/<text\b[^>]*\sfill="var\(/.test(svg),
@@ -422,7 +426,7 @@ assert(flat.includes("nothing else") && flat.includes("these exact passages"),
 // The slide is the title and the figure, nothing else: its eyebrow, its
 // caption and the figure's own foot bar all said the same thing three times.
 const rerank = fs.readFileSync(path.join(root, "2026-trec-rag-talk/02b-rerank.svg"), "utf8");
-for (const fact of ["3,500", "350", "≤100 KEPT PER QUERY", "0.81", "dropped"]) {
+for (const fact of ["3,500", "350", "≤100 KEPT", "0.81", "dropped"]) {
   assert(rerank.includes(fact), `the rerank figure should show: ${fact}`);
 }
 assert(!/The unit changes here/.test(rerank),
@@ -517,30 +521,52 @@ assert(!/Do not answer the topic/.test(qmd),
   "the planner's instruction was cut as a caption; do not quietly put it back");
 
 // ---- what a plan contains, from narrative_blueprint.py ---------------------
-// Shown in plain words, not schema keys: the slide was being read as a prompt
-// dump. The fields are still the blueprint's, one obligation filled in.
-for (const field of ["what to cover", "which words of the request", "how long",
-                     "which evidence"]) {
-  assert(qmd.includes(`>${field}</span>`), `the plan should name, in plain words: ${field}`);
+// "I am lost on this myself" - a schema record does not show what happens.
+// The slide is one picture: one obligation in plain words, an arrow, and the
+// sentence Sol actually wrote from it in the submitted answer.
+const luna = fs.readFileSync(path.join(root, "2026-trec-rag-talk/16-luna.svg"), "utf8");
+for (const fact of ["3 TO 8 OBLIGATIONS", "legality and reliability", "140 words",
+                    "c003 · c011 · c014", "SOL WRITES FROM IT",
+                    "registered with", "Class B status"]) {
+  assert(luna.includes(fact), `the Luna figure should show: ${fact}`);
 }
-for (const fact of ["3 to 8 obligations", "character-for-character"]) {
-  assert(flat.includes(fact), `the plan half should state: ${fact}`);
-}
-// Luna's screen is five named checks, each with its own gloss - "what are the
-// five" was the question the chip row did not answer.
+// Five named checks, each with its own gloss - "what are the five" was the
+// question the chip row never answered.
 for (const gate of ["support", "atomicity", "materiality", "redundancy",
                     "replacement safety"]) {
-  assert(qmd.includes(`<span class="gl-k">${gate}</span>`),
-    `the screen should name the gate: ${gate}`);
+  assert(luna.includes(`>${gate}</text>`), `the screen should name the check: ${gate}`);
 }
-assert((qmd.match(/class="gl-v"/g) || []).length === 5,
-  "every gate carries a plain-words gloss, or it is just a word");
+assert((luna.match(/class="lu-gloss"/g) || []).length === 5,
+  "every check carries a plain-words gloss, or it is just a word");
+assert(/never writes a sentence of the answer/.test(luna),
+  "the figure must still say Luna writes no prose");
 
 // Pandoc wraps a run of inline spans in a <p>, which silently collapses any
 // grid or flex row built from them onto a single line. This has regressed
 // twice, and it renders without error, so the un-wrapping rule is pinned.
 assert(/\.record > p,\s*\n\.gatelist > p,\s*\n\.adds > p,\s*\n\.roadmap > p \{\s*\n\s*display: contents;/.test(theme),
   "the spans-in-a-<p> wrapper must be dropped, or these grids collapse");
+
+// ---- the type floor ------------------------------------------------------
+// "the copy might be small to see". A figure drawn in a 1600-unit viewBox is
+// scaled to about 1150px of slide width, so an 18px label lands near 13px on
+// a 760-high slide - roughly 1.7% of slide height, which the back row cannot
+// read. Every figure's smallest type must clear ~17 slide px once scaled.
+const SLIDE_CONTENT_PX = 1150;
+const FLOOR = 17;
+for (const file of fs.readdirSync(path.join(root, "2026-trec-rag-talk"))) {
+  if (!file.endsWith(".svg")) continue;
+  const svg = fs.readFileSync(path.join(root, "2026-trec-rag-talk", file), "utf8");
+  const vb = svg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/);
+  if (!vb) continue;
+  const k = SLIDE_CONTENT_PX / parseFloat(vb[1]);
+  const sizes = [...svg.matchAll(/font-size[:=]"?(\d+(?:\.\d+)?)/g)].map((m) => parseFloat(m[1]));
+  if (!sizes.length) continue;
+  const smallest = Math.min(...sizes);
+  assert(smallest * k >= FLOOR - 0.5,
+    `${file}: smallest type is ${(smallest * k).toFixed(1)} slide px ` +
+    `(${smallest}px in a ${vb[1]}-unit viewBox) — the floor is ${FLOOR}`);
+}
 
 // ---- palettes and inlined figures -----------------------------------------
 // A linked <img src="x.svg"> is a separate document, so the page's CSS custom
@@ -553,7 +579,7 @@ assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> ele
 
 // Each figure keeps its own accessible name once inlined.
 for (const id of ["tk", "ar", "ln", "rr", "sp", "ms", "pl", "ev", "rt", "t18",
-                  "dg", "ov", "rc", "co", "cv", "da"]) {
+                  "dg", "ov", "rc", "co", "cv", "lu", "da"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
 }
@@ -566,6 +592,7 @@ for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
                           ["11a-retrieval-cutoff", "rc"],
                           ["13-cost", "co"],
                           ["15-coverage", "cv"],
+                          ["16-luna", "lu"],
                           ["04-plan", "pl"],
                           ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");

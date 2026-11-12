@@ -5,13 +5,13 @@
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .da-kick{font-size:21px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+    .da-kick{font-size:23px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
     .da-big{font-size:38px;font-weight:800}
-    .da-cap{font-size:19px;fill:var(--muted)}
-    .da-col{font-size:18px;font-weight:800;letter-spacing:.07em;fill:var(--muted)}
-    .da-top{font-size:21px;font-weight:720;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .da-run{font-size:19px;font-weight:760}
-    .da-sc{font-size:17px}
+    .da-cap{font-size:23px;fill:var(--muted)}
+    .da-col{font-size:23px;font-weight:800;letter-spacing:.07em;fill:var(--muted)}
+    .da-top{font-size:23px;font-weight:720;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .da-run{font-size:23px;font-weight:760}
+    .da-sc{font-size:23px}
   </style>
   <rect width="1500" height="560" fill="var(--bg)"/>
 

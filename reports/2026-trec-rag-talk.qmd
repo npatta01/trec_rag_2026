@@ -96,7 +96,7 @@ different sentences, and only one of the two answers ever joins them.
 ## Retrieval {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/bg-retrieval.jpg){fig-alt="An abstract dark navy field. Slender vertical bands crowd the left and right edges and thin toward the centre, like a corridor opening up; two carry a warm sand accent. The middle of the frame is empty."}
+![](2026-trec-rag-talk/art-retrieval.jpg){fig-alt="A vast night library. Tall bookshelves rise along the left and right edges of the frame. At the foot of the left-hand shelves a small figure seen from behind holds up an amber lantern, lighting a handful of volumes. The aisle down the middle is dark and empty."}
 :::
 
 ::: {.cap}
@@ -133,7 +133,7 @@ The example · 8 subnarratives created for this one request
 The example · two of the eight — the other six look the same
 :::
 
-::: {.qgrid}
+::: {.qgrid .qpair}
 <details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -8H-7M-3 -8H11M-11 0H-7M-3 0H11M-11 8H-7M-3 8H6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What options exist?</summary>
 <code>furnished temporary housing New York City family three six weeks</code>
 <code>short term furnished rental NYC family child</code>
@@ -185,7 +185,7 @@ real passages, which stay private. Survivors are then spread by MMR.)
 ## Answer Generation {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/bg-generation.jpg){fig-alt="An abstract dark navy field. Two broad soft-edged planes enter from the lower left and lower right and overlap near the bottom centre, one steel blue and one warm sand. The middle of the frame is empty."}
+![](2026-trec-rag-talk/art-generation.jpg){fig-alt="A dark studio at night. On the left one figure sits alone at a desk under a warm pool of lamplight, writing on a blank sheet. On the right two figures at another desk pass a blank sheet between them. The space down the middle is dark and empty."}
 :::
 
 ::: {.cap}
@@ -199,11 +199,6 @@ The same sealed evidence, written twice — once alone, once with a second model
 ![](2026-trec-rag-talk/03a-single-pass.svg){fig-alt="A two-lane strip. Sol, marked with a sun, writes the answer in one call. Local code, marked with angle brackets, then validates it against three things: the output schema, that every citation names a document the topic may cite, and a limit of 1,024 words. A dashed arrow runs back to Sol for one retry, used on two of the 119 requests. The result is 119 validated answers, one model call each."}
 :::
 
-::: {.cap}
-The two that failed were **re-asked, not patched** — the model never sees its
-failed attempt.
-:::
-
 ## Multi-stage: the work changes hands
 
 ::: {.diagram}
@@ -211,54 +206,13 @@ failed attempt.
 :::
 
 ::: {.cap}
-**No conversation runs through this.** Every box is its own call — one system
-prompt, one user prompt, nothing carried over. Luna never sees Sol's
-reasoning, only what local code hands it, which is what makes "Luna only
-judges" a fact about the wiring rather than a promise.
+**No conversation runs through this.** Every box is its own call.
 :::
 
 ## The two places Luna is used
 
-::: {.eyebrow}
-Multi-stage
-:::
-
-::: {.grid-2}
-::: {.card .card-gen}
-[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>1 · It writes the plan]{.card-label}
-Not a prompt — a list of **3 to 8 obligations**. One of them, in plain words:
-
-<div class="record">
-<span class="f-key">what to cover</span><span class="f-val">legality and reliability</span>
-<span class="f-key">which words of the request</span><span class="f-val">"avoid illegal listings"</span>
-<span class="f-key">how long</span><span class="f-val">140 words</span>
-<span class="f-key">which evidence</span><span class="f-val">c003 · c011 · c014</span>
-</div>
-
-[Spans must appear in the request character-for-character, or local code
-replaces them. **No prose** — Luna never writes a sentence of the answer.]{.foot}
-:::
-
-::: {.card .card-gen}
-[<svg class="glyph g-moon" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M9 0.9A9.8 9.8 0 1 1 -0.9 -9A7.6 7.6 0 0 0 9 0.9Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>2 · It screens each edit]{.card-label}
-Five true-or-false questions. **All five must pass**, or the edit is dropped:
-
-<div class="gatelist">
-<span class="gl-k">support</span><span class="gl-v">the evidence actually says it</span>
-<span class="gl-k">atomicity</span><span class="gl-v">one fact, not three</span>
-<span class="gl-k">materiality</span><span class="gl-v">it changes the answer</span>
-<span class="gl-k">redundancy</span><span class="gl-v">not already said</span>
-<span class="gl-k">replacement safety</span><span class="gl-v">nothing lost by swapping</span>
-</div>
-
-[On development topic `499`, four of five edits passed. The one that failed
-would have replaced a sentence carrying its own argument.]{.foot}
-:::
-:::
-
-::: {.cap}
-Luna answers; **local code does the editing**. Across the 119, on every topic
-whose checkpoint recorded fully, it audited every evidence group, no sampling.
+::: {.diagram}
+![](2026-trec-rag-talk/16-luna.svg){fig-alt="Two columns. Left, step one: Luna writes the plan, 3 to 8 obligations, one shown in plain words — cover legality and reliability, in about 140 words, using evidence c003, c011 and c014 — with an arrow down to the sentence Sol wrote from it in the submitted answer, about verifying whether the host is registered with the city or qualifies for Class B status. Right, step two: Luna screens each edit against five true-or-false checks — support, atomicity, materiality, redundancy, replacement safety — each with a plain-words gloss, and all five must pass or the edit is dropped. Notes say Luna never writes a sentence of the answer and local code does the editing."}
 :::
 
 ## Two writers: this request
@@ -307,7 +261,7 @@ never appears in the single-pass answer.
 ## Overall score {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/bg-score.jpg){fig-alt="An abstract dark navy field. A wide shallow arc sweeps across the lower third, echoed by fainter arcs above it that dissolve before the middle; the lowest edge is picked out in warm sand."}
+![](2026-trec-rag-talk/art-score.jpg){fig-alt="A dark hall. A tall board of small panels fills the left edge and a matching board the right, most panels dim and a scattered few glowing warm. Two small figures stand at the lower left looking up at them. The space down the middle is dark and empty."}
 :::
 
 ::: {.cap}
@@ -369,7 +323,7 @@ Multi-stage costs several extra model calls per topic for this. Nothing here is
 ## Cost {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/bg-cost.jpg){fig-alt="An abstract dark navy field. Broad horizontal bands stack in the lower half, each taller than the one below, the topmost in warm sand, fading out well below the centre."}
+![](2026-trec-rag-talk/art-cost.jpg){fig-alt="A dark workshop at night. On the left a single lamp hangs low over an empty bench, lighting a small circle. On the right a tall rack of many lit lamps throws a much larger pool of warm light. The space down the middle is dark and empty."}
 :::
 
 ::: {.cap}
@@ -395,12 +349,6 @@ is paid once and feeds both, so the comparison is clean.
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/00-architecture.svg){fig-alt="The same five components as the opening slide, left to right: Plan with deepseek-v4-flash, Search with Pyserini BM25 over ClimbMix, Rerank with mxbai-rerank-base-v2, Select with all-MiniLM-L6-v2, and Write with gpt-5.6-sol and gpt-5.6-luna. The chain forks at the end into three ranked retrieval files and two answer files."}
-:::
-
-::: {.boundary}
-One box ran twice. It covered more of what the assessors wanted and cost about
-ten times the calls — and a separate citation-support check favoured
-**single-pass**, 0.757 to 0.653. Coverage and grounding are not the same question.
 :::
 
 ## Everything here is public

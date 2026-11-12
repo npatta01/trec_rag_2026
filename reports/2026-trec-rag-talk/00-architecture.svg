@@ -6,11 +6,11 @@
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
     .ar-step{font-size:27px;font-weight:740}
-    .ar-model{font-size:17px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .ar-num{font-size:16px;font-weight:800}
-    .ar-out{font-size:23px;font-weight:720}
-    .ar-tick{font-size:19px;fill:var(--muted)}
-    .ar-kick{font-size:23px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
+    .ar-model{font-size:24px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .ar-num{font-size:24px;font-weight:800}
+    .ar-out{font-size:24px;font-weight:720}
+    .ar-tick{font-size:24px;fill:var(--muted)}
+    .ar-kick{font-size:24px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
     .ar-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#arar)}
     .ar-ico{fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
   </style>
@@ -36,7 +36,6 @@
   <circle cx="280" cy="118" r="13" fill="var(--s1)"/>
   <text class="ar-num"   x="280" y="124" text-anchor="middle" style="fill:var(--s1-soft)">1</text>
   <text class="ar-model" x="64" y="180">deepseek-v4-flash</text>
-  <text class="ar-tick"  x="64" y="206">one call, never repeated</text>
 
   <path class="ar-flow" d="M306 160 H344"/>
 
@@ -48,7 +47,6 @@
   <circle cx="588" cy="118" r="13" fill="var(--s2)"/>
   <text class="ar-num"   x="588" y="124" text-anchor="middle" style="fill:var(--s2-soft)">2</text>
   <text class="ar-model" x="372" y="180">Pyserini BM25</text>
-  <text class="ar-tick"  x="372" y="206">the ClimbMix collection</text>
 
   <path class="ar-flow" d="M614 160 H652"/>
 
@@ -59,8 +57,7 @@
   <text class="ar-step"  x="722" y="140">Rerank</text>
   <circle cx="896" cy="118" r="13" fill="var(--s3)"/>
   <text class="ar-num"   x="896" y="124" text-anchor="middle" style="fill:var(--s3-soft)">3</text>
-  <text class="ar-model" x="680" y="180">mxbai-rerank-base-v2</text>
-  <text class="ar-tick"  x="680" y="206">chunk, then score</text>
+  <text class="ar-model" x="672" y="180" textLength="238" lengthAdjust="spacingAndGlyphs">mxbai-rerank-base-v2</text>
 
   <path class="ar-flow" d="M922 160 H960"/>
 
@@ -72,7 +69,6 @@
   <circle cx="1204" cy="118" r="13" fill="var(--s4)"/>
   <text class="ar-num"   x="1204" y="124" text-anchor="middle" style="fill:var(--s4-soft)">4</text>
   <text class="ar-model" x="988" y="180">all-MiniLM-L6-v2</text>
-  <text class="ar-tick"  x="988" y="206">drop duplicates, spread</text>
 
   <path class="ar-flow" d="M1230 160 H1268"/>
 
@@ -92,16 +88,12 @@
 
   <rect x="964" y="300" width="266" height="110" rx="12" fill="var(--s4-soft)" stroke="var(--s4)" stroke-width="3"/>
   <text class="ar-out"  x="988" y="338">Retrieval run</text>
-  <text class="ar-tick" x="988" y="370">3 ranked TSVs</text>
-  <text class="ar-tick" x="988" y="394">ordered three ways</text>
+  <text class="ar-tick" x="988" y="376">3 ranked TSVs</text>
 
   <rect x="1272" y="300" width="288" height="110" rx="12" fill="var(--s5-soft)" stroke="var(--s5)" stroke-width="3"/>
   <text class="ar-out"  x="1296" y="338">Written answers</text>
-  <text class="ar-tick" x="1296" y="370">2 JSONL files</text>
-  <text class="ar-tick" x="1296" y="394">one per strategy</text>
+  <text class="ar-tick" x="1296" y="376">2 JSONL files</text>
 
-  <text class="ar-tick" x="40" y="320">Steps 2–4 never see the request's wording again —</text>
-  <text class="ar-tick" x="40" y="346">they work from the plan's queries alone.</text>
-  <text class="ar-tick" x="40" y="398">Step 5 never opens the retrieval files, the corpus, or any</text>
-  <text class="ar-tick" x="40" y="424">score. It gets one sealed evidence package.</text>
+  <text class="ar-tick" x="40" y="340">Steps 2–4 work from the plan's queries alone.</text>
+  <text class="ar-tick" x="40" y="400">Step 5 gets one sealed evidence package.</text>
 </svg>

@@ -8,9 +8,9 @@
     .ev-hd{font-size:33px;font-weight:760}
     .ev-role{font-size:23px;font-weight:800;letter-spacing:.07em}
     .ev-sm{font-size:24px;fill:var(--muted)}
-    .ev-tiny{font-size:21px;fill:var(--muted)}
-    .ev-mech{font-size:22px;font-weight:700;fill:var(--ret)}
-    .ev-mechsm{font-size:21px;fill:var(--ret)}
+    .ev-tiny{font-size:23px;fill:var(--muted)}
+    .ev-mech{font-size:23px;font-weight:700;fill:var(--ret)}
+    .ev-mechsm{font-size:23px;fill:var(--ret)}
     .ev-eq{font-size:30px;font-weight:800;fill:var(--ret)}
     .ev-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#evar)}
     .ev-brk{fill:none;stroke:var(--ret);stroke-width:3}
@@ -79,8 +79,7 @@
     <rect x="540" y="411" width="84"  height="5" rx="2.5"/><rect x="540" y="426" width="150" height="5" rx="2.5"/>
   </g>
   <text class="ev-sm"   x="524" y="480">nine passages, five survive</text>
-  <text class="ev-tiny" x="524" y="508">original wording, exact citation IDs</text>
-  <text class="ev-tiny" x="524" y="532">≤40 selected per subnarrative</text>
+  <text class="ev-tiny" x="524" y="514">≤40 selected per subnarrative</text>
 
   <path class="ev-flow" d="M962 312 H1002" stroke="var(--adv)" stroke-dasharray="8 6"/>
 
@@ -95,6 +94,5 @@
     <rect x="1034" y="346" width="412" height="44" rx="7"/>
   </g>
   <text class="ev-sm"   x="1034" y="480">≤20 short claims</text>
-  <text class="ev-tiny" x="1034" y="508">written from the evidence</text>
-  <text class="ev-tiny" x="1034" y="532">cite the passage, never these</text>
+  <text class="ev-tiny" x="1034" y="514">cite the passage, never these</text>
 </svg>

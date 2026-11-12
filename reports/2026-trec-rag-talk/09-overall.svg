@@ -5,10 +5,10 @@
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-    .ov-kick{font-size:21px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+    .ov-kick{font-size:24px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
     .ov-n{font-size:46px;font-weight:800;font-variant-numeric:tabular-nums}
-    .ov-lab{font-size:21px;font-weight:700}
-    .ov-sub{font-size:19px;fill:var(--muted)}
+    .ov-lab{font-size:24px;font-weight:700}
+    .ov-sub{font-size:24px;fill:var(--muted)}
     .ov-pct{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums}
   </style>
   <rect width="1600" height="560" fill="var(--bg)"/>

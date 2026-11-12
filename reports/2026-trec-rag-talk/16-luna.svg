@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 520" role="img" aria-labelledby="lu-title lu-desc">
+  <title id="lu-title">The two places Luna is used: it writes the plan, and it screens each edit</title>
+  <desc id="lu-desc">Two columns. On the left, step one: Luna writes the plan, which is a list of three to eight obligations. One of them is shown in plain words — cover legality and reliability, in about 140 words, using evidence c003, c011 and c014 — and an arrow runs down from it to the sentence Sol actually wrote from it in the submitted answer: for any platform listing, verify whether the host is registered with the city or qualifies for the applicable Class B status before paying. On the right, step two: Luna screens each proposed edit against five checks, each answered true or false — support, meaning the evidence actually says it; atomicity, one fact and not three; materiality, it changes the answer; redundancy, it is not already said; and replacement safety, nothing is lost by swapping. All five must pass or local code drops the edit. A note says Luna never writes a sentence of the answer.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .lu-kick{font-size:23px;font-weight:800;letter-spacing:.05em}
+    .lu-body{font-size:26px}
+    .lu-quote{font-size:25px}
+    .lu-check{font-size:25px;font-weight:720}
+    .lu-gloss{font-size:22px;fill:var(--muted)}
+    .lu-note{font-size:22px;fill:var(--muted)}
+    .lu-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#lua)}
+    .lu-ico{fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+  </style>
+  <defs>
+    <marker id="lua" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+    <g id="lu-tick" class="lu-ico"><path d="M-7 0L-2 5L7 -5"/></g>
+  </defs>
+  <rect width="1240" height="520" fill="var(--bg)"/>
+
+  <!-- 1. the plan, and what Sol made of it -->
+  <text class="lu-kick" x="24" y="36" style="fill:var(--gen)">1 · LUNA WRITES THE PLAN — 3 TO 8 OBLIGATIONS</text>
+
+  <rect x="24" y="56" width="580" height="150" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <text class="lu-body" x="48" y="96">cover <tspan font-weight="800">legality and reliability</tspan></text>
+  <text class="lu-body" x="48" y="134">in about <tspan font-weight="800">140 words</tspan></text>
+  <text class="lu-body" x="48" y="172">using evidence <tspan font-weight="800">c003 · c011 · c014</tspan></text>
+
+  <path class="lu-flow" d="M314 206 V244"/>
+  <text class="lu-kick" x="24" y="278" style="fill:var(--ret)">SOL WRITES FROM IT</text>
+
+  <rect x="24" y="296" width="580" height="162" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="lu-quote" x="48" y="336">“For any platform listing, verify</text>
+  <text class="lu-quote" x="48" y="372">whether the host is registered with</text>
+  <text class="lu-quote" x="48" y="408">the city or qualifies for the</text>
+  <text class="lu-quote" x="48" y="444">applicable Class B status.”</text>
+
+  <text class="lu-note" x="24" y="492">Luna never writes a sentence of the answer.</text>
+
+  <!-- 2. the screen -->
+  <text class="lu-kick" x="650" y="36" style="fill:var(--gen)">2 · LUNA SCREENS EACH EDIT — TRUE OR FALSE</text>
+
+  <rect x="650" y="56" width="566" height="330" rx="12" fill="var(--panel)" stroke="var(--gen)" stroke-width="3"/>
+  <g style="color:var(--ok)">
+    <g transform="translate(686,104)"><use href="#lu-tick"/></g>
+    <g transform="translate(686,166)"><use href="#lu-tick"/></g>
+    <g transform="translate(686,228)"><use href="#lu-tick"/></g>
+    <g transform="translate(686,290)"><use href="#lu-tick"/></g>
+    <g transform="translate(686,352)"><use href="#lu-tick"/></g>
+  </g>
+  <text class="lu-check" x="716" y="100">support</text>
+  <text class="lu-gloss" x="716" y="126">the evidence actually says it</text>
+  <text class="lu-check" x="716" y="162">atomicity</text>
+  <text class="lu-gloss" x="716" y="188">one fact, not three</text>
+  <text class="lu-check" x="716" y="224">materiality</text>
+  <text class="lu-gloss" x="716" y="250">it changes the answer</text>
+  <text class="lu-check" x="716" y="286">redundancy</text>
+  <text class="lu-gloss" x="716" y="312">not already said</text>
+  <text class="lu-check" x="716" y="348">replacement safety</text>
+  <text class="lu-gloss" x="716" y="374">nothing lost by swapping</text>
+
+  <rect x="650" y="402" width="566" height="56" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
+  <text class="lu-check" x="674" y="437" style="fill:var(--ok)">All five must pass, or it is dropped.</text>
+
+  <text class="lu-note" x="650" y="492">Luna answers; local code does the editing.</text>
+</svg>

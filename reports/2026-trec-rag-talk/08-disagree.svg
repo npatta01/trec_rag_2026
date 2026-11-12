@@ -6,10 +6,10 @@
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
     .dg-head{font-size:27px;font-weight:780}
-    .dg-who{font-size:21px;fill:var(--muted)}
+    .dg-who{font-size:24px;fill:var(--muted)}
     .dg-val{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
-    .dg-win{font-size:21px;font-weight:800;letter-spacing:.05em}
-    .dg-sub{font-size:19px;fill:var(--muted)}
+    .dg-win{font-size:24px;font-weight:800;letter-spacing:.05em}
+    .dg-sub{font-size:24px;fill:var(--muted)}
   </style>
   <rect width="1600" height="480" fill="var(--bg)"/>
 

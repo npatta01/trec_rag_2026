@@ -6,11 +6,11 @@
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--adv:#f0c46f;--adv-soft:#433616;--s1:#23a7d6;--s1-soft:#17353f;--s2:#8c75e8;--s2-soft:#1f173f;--s3:#e456cc;--s3-soft:#3f1739;--s4:#db8624;--s4-soft:#3f2d17}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
     .ln-q{font-size:28px;font-weight:700}
-    .ln-kick{font-size:21px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+    .ln-kick{font-size:24px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
     .ln-num{font-size:32px;font-weight:800}
-    .ln-unit{font-size:20px;fill:var(--muted)}
+    .ln-unit{font-size:24px;fill:var(--muted)}
     .ln-row{font-size:25px;font-weight:720}
-    .ln-sub{font-size:19px;fill:var(--muted)}
+    .ln-sub{font-size:24px;fill:var(--muted)}
     .ln-base{stroke:var(--line);stroke-width:2}
     .ln-ico{fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
   </style>
@@ -35,15 +35,15 @@
   <line class="ln-base" x1="40" y1="452" x2="740" y2="452"/>
 
   <text class="ln-num"  x="198" y="492" text-anchor="middle" style="fill:var(--s1)">≤1,000</text>
-  <text class="ln-unit" x="198" y="518" text-anchor="middle">documents</text>
+  <text class="ln-unit" x="198" y="528" text-anchor="middle">documents</text>
   <text class="ln-num"  x="443" y="492" text-anchor="middle" style="fill:var(--s2)">≤100</text>
-  <text class="ln-unit" x="443" y="518" text-anchor="middle">passages</text>
+  <text class="ln-unit" x="443" y="528" text-anchor="middle">passages</text>
   <text class="ln-num"  x="569" y="492" text-anchor="middle" style="fill:var(--s3)">≤40</text>
-  <text class="ln-unit" x="569" y="518" text-anchor="middle">selected</text>
+  <text class="ln-unit" x="569" y="528" text-anchor="middle">selected</text>
   <text class="ln-num"  x="668" y="492" text-anchor="middle" style="fill:var(--adv)">≤20</text>
-  <text class="ln-unit" x="668" y="518" text-anchor="middle">nuggets</text>
+  <text class="ln-unit" x="668" y="528" text-anchor="middle">nuggets</text>
 
-  <text class="ln-sub" x="40" y="556">Every figure is a per-query ceiling — that is what the ≤ means.</text>
+  <text class="ln-sub" x="40" y="562">Every figure is a per-query ceiling — that is what the ≤ means.</text>
 
   <!-- the same four stages, named -->
   <g transform="translate(856,172)" style="color:var(--s1)"><circle r="23" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="2.6"/><use href="#ln-g-search"/></g>
