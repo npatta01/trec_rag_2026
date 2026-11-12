@@ -30,6 +30,7 @@ format:
 <span class="leg"><span class="leg-n">2</span>Retrieval</span>
 <span class="leg"><span class="leg-n">3</span>Answer Generation</span>
 <span class="leg"><span class="leg-n">4</span>Overall score</span>
+<span class="leg"><span class="leg-n">5</span>Cost</span>
 </div>
 
 ::: {.cap}
@@ -48,10 +49,6 @@ Two submissions out of one pipeline, traced through a single request.
 :::
 
 ## The architecture
-
-::: {.eyebrow}
-Five pieces, left to right
-:::
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/00-architecture.svg){fig-alt="Five components left to right. Plan, with deepseek-v4-flash, one call never repeated. Search, Pyserini BM25 over the ClimbMix collection. Rerank, mxbai-rerank-base-v2, chunk then score. Select, all-MiniLM-L6-v2, dropping duplicates and spreading what is left. Write, gpt-5.6-sol and gpt-5.6-luna. The chain forks at the end: the selection step emits three ranked retrieval files, and the writing step emits two answer files."}
@@ -99,7 +96,7 @@ different sentences, and only one of the two answers ever joins them.
 ## Retrieval {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/img-sec-retrieval.jpg){fig-alt="A single small figure stands at the foot of a vast library of towering shelves receding into darkness, holding up a lantern whose warm light falls on only a handful of volumes on the nearest shelf. Everything else stays in cool blue shadow."}
+![](2026-trec-rag-talk/sec-retrieval.jpg){fig-alt="A row of seven plain rectangles of slightly different heights standing on a thin line in the lower third of a dark field, like books on a shelf. Six are deep blue; one is warm sand."}
 :::
 
 ::: {.cap}
@@ -109,19 +106,12 @@ One vague request becomes 17 searches, then about a page of text.
 
 ## Planning: how it works
 
-::: {.eyebrow}
-One DeepSeek call, never repeated
-:::
-
 ::: {.diagram}
 ![](2026-trec-rag-talk/04-plan.svg){fig-alt="The request goes into a single DeepSeek call, which returns up to eight subnarratives, each carrying one to three plain BM25 queries shown as dots. The untouched request is kept as its own search lane. The planner never sees a document and is never called again."}
 :::
 
 ::: {.cap}
 The instruction's own words: **"Do not answer the topic."**
-
-It proposes searches, never findings, and is never called again.
-**At most 25 searches** per topic.
 :::
 
 ## Planning: this request
@@ -185,7 +175,7 @@ The example · 8 subnarratives × 2 queries = 16 searches, plus the untouched re
 ## Searching: how it works
 
 ::: {.eyebrow}
-One lane of 17 · drawn to scale
+One lane of 17
 :::
 
 ::: {.diagram}
@@ -193,31 +183,15 @@ One lane of 17 · drawn to scale
 :::
 
 ::: {.cap}
-Each of the 17 lanes runs this on its own. The numbers are **per-query
-ceilings**, not totals — and the unit changes at step two, which is the next
-slide.
+Every number is a **per-query ceiling**, not a total.
 :::
 ## Reranking: a document becomes passages
-
-::: {.eyebrow}
-Where the unit changes
-:::
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/02b-rerank.svg){fig-alt="One retrieved document, drawn with two more stacked behind it because BM25 returned up to a thousand, is cut into four overlapping windows of 3,500 characters with 350 of overlap, drawn as cards that overlap each other. The reranker mxbai-rerank-base-v2 then scores each window against this lane's query: window two scores 0.81 and window one 0.74 and both are kept, while window three at 0.22 and window four at 0.09 are dropped. A note says what moves on is windows, not documents, at most 100 per query."}
 :::
 
-::: {.cap}
-**A document is never scored as a document.** It is cut into overlapping
-windows and the reranker scores each window against this lane's query — so a
-40-page document can contribute one passage, several, or none at all.
-:::
-
 ## Selecting the evidence
-
-::: {.eyebrow}
-Drop the duplicates, spread the rest
-:::
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/05-evidence.svg){fig-alt="Nine retrieved passages are drawn as cards, where cards saying the same thing carry the same line pattern and brackets mark the three sets of near-duplicates. An all-MiniLM-L6-v2 embedding treats any pair above cosine 0.92 as a duplicate, so each set collapses to one survivor in its original wording, and maximal marginal relevance with lambda 0.7 keeps the survivors spread. Nine passages become five selected, capped at forty per subnarrative, and these are the authority the answer must cite. They are passed separately to a nugget generator returning up to twenty short claims, drawn in amber with a dashed edge because the answer may use them but must cite the passage, never the claim."}
@@ -233,47 +207,15 @@ survives in its original wording; the other is dropped.]{.dupe-verdict}
 :::
 
 ::: {.cap}
-This is the handoff. Both writers get one frozen package — the request, these
-exact passages, and the citation IDs — and **nothing else.** (The pair above
-is my wording, standing in for the real passages, which stay private.)
-:::
-
-## How deep each lane goes
-
-::: {.eyebrow}
-The Retrieval submission · where the cut falls
-:::
-
-::: {.diagram}
-![](2026-trec-rag-talk/11a-retrieval-cutoff.svg){fig-alt="Four horizontal lanes for one narrative, each plotting its documents by score. The top is the untouched narrative, the three below are facet lanes. Each lane carries its own dashed cutoff line and the four sit at four different places, because each is the median plus 2.5 times 1.4826 times that lane's median absolute deviation. Documents right of a line are filled and admitted, those left are hollow and dropped, admitting 6, 4, 9 and 3. A band below says the union is the candidate core, and that depth runs from 1 to 121 documents over 61 distinct depths, averaging about 36, for 4,246 rows per run."}
-:::
-
-::: {.cap}
-**Every lane sets its own bar** from its own scores. Because the bar is a
-score and not a position, the evidence decides the depth — so one narrative
-keeps 121 documents and another keeps 1.
-:::
-
-## The same documents, ordered three ways
-
-::: {.eyebrow}
-The Retrieval submission · three files
-:::
-
-::: {.diagram}
-![](2026-trec-rag-talk/11b-retrieval-orderings.svg){fig-alt="Three boxes side by side, one per submitted run, each with a priority badge. Priority one, narrative plus subnarrative, sorts by half the narrative percentile plus half the facet score. Priority two, evidence breadth, sorts by subnarratives supported then strong passages. Priority three, narrative only, sorts by narrative percentile then rank then document id. The same four lettered documents appear in each box in a different order. A band at the foot says all three runs hold the identical document set for a narrative."}
-:::
-
-::: {.cap}
-I hashed every `(topic, document)` pair across the three submitted files: for
-a narrative they hold the **identical set**. Only the order differs — which is
-why all three score the same per topic.
+Both writers get the same frozen package — these exact passages and the
+citation IDs, and **nothing else**. (My wording above, standing in for the
+real passages, which stay private. Survivors are then spread by MMR.)
 :::
 
 ## Answer Generation {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/img-sec-generation.jpg){fig-alt="A dark interior. On the left one figure sits alone at a desk under a single warm pool of lamplight, writing on a blank sheet. On the right two figures at a longer desk pass a blank sheet between them under two overlapping pools of light."}
+![](2026-trec-rag-talk/sec-generation.jpg){fig-alt="Two plain rectangles lying side by side in the lower third of a dark field, like two sheets of paper. The left one is blank; the right one carries three short warm marks across it."}
 :::
 
 ::: {.cap}
@@ -283,24 +225,16 @@ The same sealed evidence, written twice — once alone, once with a second model
 
 ## Single-pass: Sol alone
 
-::: {.eyebrow}
-One model call, then a validator
-:::
-
 ::: {.diagram}
 ![](2026-trec-rag-talk/03a-single-pass.svg){fig-alt="A two-lane strip. Sol, marked with a sun, writes the answer in one call. Local code, marked with angle brackets, then validates it against three things: the output schema, that every citation names a document the topic may cite, and a limit of 1,024 words. A dashed arrow runs back to Sol for one retry, used on two of the 119 requests. The result is 119 validated answers, one model call each."}
 :::
 
 ::: {.cap}
-The two that failed were **re-asked, not patched** — the retry asks for a
-fresh answer, and the model never sees its failed attempt.
+The two that failed were **re-asked, not patched** — the model never sees its
+failed attempt.
 :::
 
 ## Multi-stage: the work changes hands
-
-::: {.eyebrow}
-Seven steps, three pairs of hands
-:::
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/03b-multi-stage.svg){fig-alt="A three-lane strip fed by the same sealed evidence. Luna is a crescent moon, Sol a sun, local code a pair of angle brackets. The path zigzags between lanes seven times: Luna plans, Sol writes the draft, Luna audits each evidence group returning at most six cards per group, local code merges them, Sol proposes at most three edits, Luna screens each against five booleans that must all pass, and local code applies only what passed. One pass through the stages, not a repeating loop; if revision fails the already validated draft stands."}
@@ -316,7 +250,7 @@ judges" a fact about the wiring rather than a promise.
 ## The two places Luna is used
 
 ::: {.eyebrow}
-Multi-stage · Luna decides, Sol writes
+Multi-stage
 :::
 
 ::: {.grid-2}
@@ -360,7 +294,7 @@ whose checkpoint recorded fully, it audited every evidence group, no sampling.
 ## Two writers: this request
 
 ::: {.trace-step}
-The example · same sealed evidence, two strategies
+The example · rag2026-18
 :::
 
 ::: {.grid-2}
@@ -390,52 +324,22 @@ establish* whether a particular six-week sublet is lawful.
 ## The difference you can see
 
 ::: {.trace-step}
-The example · what the second pass added to rag2026-18
+The example · rag2026-18
 :::
 
-::: {.adds}
-::: {.add}
-[“If the apartment repairs involve **lead hazards**, ask whether the temporary
-unit is appropriate for a child and has been made lead-safe.”]{.add-q}
-[Joins the two facts that sat in different sentences — *repairs*, and *a
-child*. The word “lead” never appears in the single-pass answer.]{.add-v}
-:::
-
-::: {.add}
-[“Suspected illegal charges can be reported to the **NY State Division of
-Housing and Community Renewal** or the **NYC Department of Consumer
-Affairs**.”]{.add-q}
-[Tells them what to actually do about it. Single-pass names no authority to
-report anything to.]{.add-v}
-:::
-
-::: {.add}
-[“Remote-working parents should plan **childcare** explicitly, because
-balancing work and parenting is a significant practical challenge.”]{.add-q}
-[The request said *with a child* and *remote work*. Single-pass never uses the
-word childcare.]{.add-v}
-:::
-
-::: {.add}
-[“A final **comparison table** should score each property on legality, all-in
-cost, safety, cancellation terms, sleeping and work separation, location,
-kitchen, laundry, Wi-Fi, and child suitability.”]{.add-q}
-[The request asked *how should we compare*. Single-pass compares in prose and
-never hands over a table.]{.add-v}
-:::
+::: {.diagram}
+![](2026-trec-rag-talk/14-lead.svg){fig-alt="Two quoted fragments of the request on the left, drawn as separate cards because they sit in different sentences: while our apartment is repaired, and especially with a child. Two arrows converge on a card headed multi-stage joined them, holding the sentence it wrote about lead hazards and whether the temporary unit has been made lead-safe. A dimmed card below, headed single-pass left them apart, notes that across all 22 of its statements the word lead never appears."}
 :::
 
 ::: {.cap}
-Every quote is from the submitted multi-stage file; every absence is checked
-against the submitted single-pass file for the same topic. Both answers caught
-the 30-day trap — but only multi-stage added that the definition *alone does
-not establish* whether a six-week sublet is lawful.
+Three more like it, all absent from the single-pass answer: **where to report
+an illegal charge**, **childcare**, and a **final comparison table**.
 :::
 
 ## Overall score {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/img-sec-score.jpg){fig-alt="A small figure seen from behind stands looking up at a tall dark wall filled with a regular grid of small rectangular panels, most of them dim blue and a scattered minority glowing warm amber, with no readable text on any of them."}
+![](2026-trec-rag-talk/sec-score.jpg){fig-alt="A flat grid of small squares, seven across and three down, in the lower third of a dark field. Most are deep blue; five scattered ones are warm sand."}
 :::
 
 ::: {.cap}
@@ -473,10 +377,6 @@ cannot say what was credited — only that **the two measures disagree here**.
 
 ## How often they disagree
 
-::: {.eyebrow}
-Across all 42 scored topics
-:::
-
 ::: {.diagram}
 ![](2026-trec-rag-talk/12-disagree-all.svg){fig-alt="Across the 42 scored topics the two measures agree on 20, all of them favouring multi-stage; they disagree on 5; and on 17 one measure is exactly tied. The five disagreements are listed with the run each measure puts ahead: rag2026-13, rubric single-pass 1.000 against 0.857 while assessors favour multi-stage 67 per cent against 50; rag2026-59, rubric multi-stage 1.000 against 0.800 while assessors favour single-pass 67 against 58; rag2026-97, rubric multi-stage 1.000 against 0.714, assessors single-pass 55 against 50; rag2026-2, rubric multi-stage 0.833 against 0.667, assessors single-pass 40 against 38; and rag2026-109, rubric multi-stage 0.667 against 0.611 while assessors favour single-pass 69 against 29, the widest gap on the list."}
 :::
@@ -489,10 +389,6 @@ way every time. The 17 left over had one measure exactly tied.
 
 ## Overall: 42 scored topics
 
-::: {.eyebrow}
-Across everything NIST scored
-:::
-
 ::: {.diagram}
 ![](2026-trec-rag-talk/09-overall.svg){fig-alt="A grid of 42 squares, one per scored topic: 26 filled in the multi-stage colour where multi-stage supported more nuggets, 15 outlined where the two tied exactly, and 1 filled in the single-pass colour where single-pass did better. Below, each run's assessor record as a share of its own battles: multi-stage won 62.9 per cent of 399, single-pass 45.0 per cent of 422."}
 :::
@@ -502,57 +398,44 @@ Every number here is the organizers' own, from the score files they released.
 Multi-stage costs several extra model calls per topic for this. Nothing here is
 **a claim that it is novel** — only that the extra passes did something visible.
 :::
-## A word on the retrieval side
+## Cost {.divider .divider-img}
 
-::: {.eyebrow}
-The Retrieval submission · how it scored
-:::
-
-::: {.diagram}
-![](2026-trec-rag-talk/06-retrieval.svg){fig-alt="Three paired bars comparing our retrieval run with the field median. Precision: ours 0.4116 against 0.3499. Recall: ours 0.0897 against 0.1002. Documents returned per topic: ours 38.6 against 100.0, roughly a third as many. Each pair is scaled to its own larger value."}
+::: {.secshot}
+![](2026-trec-rag-talk/sec-cost.jpg){fig-alt="Two plain vertical bars standing on a thin baseline in the lower third of a dark field: a short pale one on the left and a much taller warm one on the right."}
 :::
 
 ::: {.cap}
-Because the three runs hold the same documents, they scored identically per
-topic — so this measures **what the cutoff selected**, not how it was ordered.
-We return about a third as many documents as the field median and are more
-precise for it; recall is the price.
+What the second pass cost, in the only unit I actually counted.
 :::
-## Where that leaves the architecture
+
+## What the second pass cost
 
 ::: {.eyebrow}
-The same five pieces, now with what they did
+Model calls across all 119 requests
 :::
+
+::: {.diagram}
+![](2026-trec-rag-talk/13-cost.svg){fig-alt="Two panels. Paid once: one planner call per request, 119 in all, plus one nuggetizer call per subnarrative, 691 in all, giving 810 shared model calls; beneath, 1,787 BM25 searches and the local-GPU reranking, which cost no model calls. Paid once per strategy: single-pass 121 calls drawn as a short bar, multi-stage 1,167 drawn as a bar about ten times longer, which is 9.6 times the calls for the same evidence, or 1 against 7 to 12 per request. A note says this counts calls and not money, because tokens were never metered."}
+:::
+
+::: {.cap}
+The extra passes buy coverage and **cost about ten times the calls**. Retrieval
+is paid once and feeds both, so the comparison is clean.
+:::
+
+## Where that leaves the architecture
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/00-architecture.svg){fig-alt="The same five components as the opening slide, left to right: Plan with deepseek-v4-flash, Search with Pyserini BM25 over ClimbMix, Rerank with mxbai-rerank-base-v2, Select with all-MiniLM-L6-v2, and Write with gpt-5.6-sol and gpt-5.6-luna. The chain forks at the end into three ranked retrieval files and two answer files."}
 :::
 
-::: {.grid-3}
-::: {.card .card-ret}
-[The first four boxes]{.card-label}
-Returned about **a third as many documents** as the field median, and were
-more precise for it. Recall is the price.
-:::
-
-::: {.card .card-gen}
-[The last box, run twice]{.card-label}
-Same evidence in. Multi-stage supported more nuggets on **26 of 42** topics,
-tied on 15, lost 1.
-:::
-
-::: {.card .card-source}
-[The one that points the other way]{.card-label}
-A separate citation-support check favoured **single-pass**, 0.757 to 0.653.
-Coverage and grounding are not the same question.
-:::
+::: {.boundary}
+One box ran twice. It covered more of what the assessors wanted and cost about
+ten times the calls — and a separate citation-support check favoured
+**single-pass**, 0.757 to 0.653. Coverage and grounding are not the same question.
 :::
 
 ## Everything here is public
-
-::: {.eyebrow}
-If any of this is worth a second look
-:::
 
 ::: {.grid-2}
 ::: {.card .card-ret}
@@ -588,4 +471,36 @@ Per-citation support judgments.
 ::: {.cap}
 Happy to walk through any of it — rag2026-18 and rag2026-13 are in the coverage
 report and both RAGDoll reports, so the whole path is checkable.
+:::
+
+## Appendix {.divider}
+
+::: {.cap}
+The Retrieval submission — a separate, weaker run, kept back here for questions.
+:::
+
+## The Retrieval submission
+
+::: {.diagram}
+![](2026-trec-rag-talk/11a-retrieval-cutoff.svg){fig-alt="Four horizontal lanes for one narrative, each plotting its documents by score. The top is the untouched narrative, the three below are facet lanes. Each lane carries its own dashed cutoff line and the four sit at four different places, because each is the median plus 2.5 times 1.4826 times that lane's median absolute deviation. Documents right of a line are filled and admitted, those left are hollow and dropped, admitting 6, 4, 9 and 3. A band below says the union is the candidate core, and that depth runs from 1 to 121 documents over 61 distinct depths, averaging about 36, for 4,246 rows per run."}
+:::
+
+::: {.cap}
+That identical set went out three times — ordered by narrative-plus-subnarrative,
+by evidence breadth, and by narrative alone. I hashed every `(topic, document)`
+pair across the three files: same set, different order, so all three scored the
+same per topic.
+:::
+
+## How the Retrieval run scored
+
+::: {.diagram}
+![](2026-trec-rag-talk/06-retrieval.svg){fig-alt="Three paired bars comparing our retrieval run with the field median. Precision: ours 0.4116 against 0.3499. Recall: ours 0.0897 against 0.1002. Documents returned per topic: ours 38.6 against 100.0, roughly a third as many. Each pair is scaled to its own larger value."}
+:::
+
+::: {.cap}
+Because the three runs hold the same documents, they scored identically per
+topic — so this measures **what the cutoff selected**, not how it was ordered.
+We return about a third as many documents as the field median and are more
+precise for it; recall is the price.
 :::

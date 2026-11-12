@@ -1356,7 +1356,65 @@ body.reveal-viewport,
   }
 }
 
-.reveal .slides > section.divider-img { justify-content: flex-start; }
+// The section art is a backdrop, not an exhibit: the title sits over the
+// middle of it. The art is always dark navy, so the section carries that as
+// its own background and the text on it is light in BOTH themes - otherwise
+// light mode puts dark ink on a dark picture.
+.reveal .slides > section.divider-img {
+  position: relative;
+  background: #0b1220;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.divider-img > .secshot {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  margin: 0;
+}
+
+.divider-img > .secshot img {
+  border: 0;
+  border-radius: 0;
+}
+
+// A scrim between the art and the words, so a title is legible wherever the
+// picture happens to be busiest.
+.reveal .slides > section.divider-img::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(6, 10, 18, 0.42),
+    rgba(6, 10, 18, 0.12) 55%,
+    rgba(6, 10, 18, 0.55)
+  );
+}
+
+// Both auto top margins split the free height, which lands the title near the
+// middle and keeps the line of context on the bottom edge.
+.reveal .slides > section.divider-img > h2 {
+  position: relative;
+  z-index: 2;
+  margin: auto 0 0;
+  width: 100%;
+  text-align: center;
+  color: #f2f6f9;
+}
+
+.reveal .slides > section.divider-img > .cap {
+  position: relative;
+  z-index: 2;
+  margin-top: auto;
+  padding-bottom: 0.3em;
+  text-align: center;
+  color: #d4dde6;
+  border: 0;
+}
 
 // ------------------------------------------- what the second pass added
 // Four quotes from the submitted answer, each with the absence it is checked

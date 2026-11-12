@@ -24,7 +24,7 @@
 
   <text class="rr-col" x="40"  y="108">ONE DOCUMENT</text>
   <text class="rr-col" x="420" y="108">CUT INTO OVERLAPPING WINDOWS</text>
-  <text class="rr-col" x="980" y="108">EVERY WINDOW SCORED</text>
+  <text class="rr-col" x="980" y="108">EVERY WINDOW SCORED · ≤100 KEPT PER QUERY</text>
 
   <!-- A. one document, with the other 999 stacked behind -->
   <rect x="96" y="134" width="210" height="300" rx="10" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="2" opacity=".5"/>
@@ -93,6 +93,4 @@
   <text class="rr-sub" x="960" y="520">never whole documents — so a long</text>
   <text class="rr-sub" x="960" y="544">document can land in both columns</text>
 
-  <rect x="40" y="566" width="1520" height="30" rx="8" fill="var(--panel)" stroke="var(--s2)" stroke-width="2.4"/>
-  <text class="rr-note" x="64" y="588" style="font-size:19px">The unit changes here: what moves on is <tspan font-weight="800">windows, not documents</tspan> — at most 100 per query.</text>
 </svg>

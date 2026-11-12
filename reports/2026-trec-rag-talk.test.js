@@ -28,7 +28,8 @@ for (const asset of [
   "2026-trec-rag-talk/09-overall.svg",
   "2026-trec-rag-talk/02b-rerank.svg",
   "2026-trec-rag-talk/11a-retrieval-cutoff.svg",
-  "2026-trec-rag-talk/11b-retrieval-orderings.svg",
+  "2026-trec-rag-talk/13-cost.svg",
+  "2026-trec-rag-talk/14-lead.svg",
   "2026-trec-rag-talk/04-plan.svg",
   "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
@@ -51,7 +52,7 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 20, `expected 20 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 22, `expected 22 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -152,25 +153,25 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 27,
-  `expected 27 content slides, found ${sections.length}`);
+assert(sections.length === 29,
+  `expected 29 content slides, found ${sections.length}`);
 
 // Four sections, named the way the work is actually divided. The contents are
 // shown once, at the top; the three breaks after it carry a picture instead,
 // because the same list four times taught the room nothing new.
 const dividers = (html.match(/class="[^"]*\bdivider\b/g) || []).length;
-assert(dividers === 4, `expected 4 section dividers, found ${dividers}`);
+assert(dividers === 6, `expected 6 dividers (contents, 4 sections, appendix), found ${dividers}`);
 assert((qmd.match(/class="roadmap"/g) || []).length === 1,
   "the roadmap belongs on the opening contents slide only");
 const legs = (qmd.match(/<span class="leg[ "]/g) || []).length;
-assert(legs === 4, `the contents slide should list the four sections, found ${legs}`);
+assert(legs === 5, `the contents slide should list the five sections, found ${legs}`);
 assert((qmd.match(/class="leg leg-now"/g) || []).length === 1,
   "the contents slide lights the section it opens");
-for (const sec of ["Architecture", "Retrieval", "Answer Generation", "Overall score"]) {
+for (const sec of ["Architecture", "Retrieval", "Answer Generation", "Overall score", "Cost"]) {
   assert(qmd.includes(`</span>${sec}</span>`), `the contents should name: ${sec}`);
 }
-const shots = (qmd.match(/class="secshot"|\{\.secshot\}/g) || []).length;
-assert(shots === 3, `each of the three later breaks carries one image, found ${shots}`);
+const shots = (qmd.match(/\{\.secshot\}/g) || []).length;
+assert(shots === 4, `each of the four section breaks carries one image, found ${shots}`);
 assert(!/01-approach/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/01-approach.svg")),
   "the funnel figure was cut; nothing should still point at it");
 
@@ -229,10 +230,16 @@ assert(!/evidence groups/.test(qmd),
 
 // Near-duplicate detection is a named model at a named threshold.
 const evidence = fs.readFileSync(path.join(root, "2026-trec-rag-talk/05-evidence.svg"), "utf8");
-for (const mech of ["all-MiniLM-L6-v2", "0.92", "MMR"]) {
+for (const mech of ["all-MiniLM-L6-v2", "0.92"]) {
   assert(evidence.includes(mech),
     `the evidence figure should name the dedup mechanism: ${mech}`);
 }
+// MMR came off the figure as clutter, but the step is real: it stays named in
+// the caption, where it costs one word instead of four lines.
+assert(flat.includes("spread by MMR"),
+  "the selection step is dedup AND spread; MMR must still be named somewhere");
+assert(!/each next pick/.test(evidence),
+  "the four-line MMR gloss was cut from the figure");
 
 // Per-topic audit counts are published, so the deck must not claim otherwise;
 // only the kept/rejected decisions are private.
@@ -342,6 +349,12 @@ for (const [fig, tok, want] of [["00-architecture", "ar", 5], ["02-one-lane", "l
 const qicons = (qmd.match(/class="glyph qico"/g) || []).length;
 assert(qicons === 16,
   `expected one symbol per subnarrative on both planning slides, found ${qicons}`);
+// The art is a dark backdrop with the title printed over it, so the words on
+// a break must be light in BOTH themes - the theme's own ink would vanish.
+assert(/section\.divider-img \{[^}]*background: #0b1220/.test(theme),
+  "an image break carries its own dark ground, so the contrast check is honest");
+assert(/section\.divider-img > h2 \{[\s\S]*?color: #f2f6f9/.test(theme),
+  "a title over the art must be light in both themes");
 assert(/nth-child\(3n \+ 1\)/.test(theme),
   "the subnarrative cards should cycle through accents");
 assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
@@ -357,7 +370,7 @@ assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
 const figures = ["00-task", "00-architecture", "02-one-lane", "02b-rerank",
                  "03a-single-pass", "03b-multi-stage", "04-plan", "05-evidence",
                  "06-retrieval", "07-topic18", "08-disagree", "09-overall",
-                 "11a-retrieval-cutoff", "11b-retrieval-orderings"];
+                 "11a-retrieval-cutoff", "13-cost", "14-lead"];
 for (const f of figures) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
   assert(!/<text\b[^>]*\sfill="var\(/.test(svg),
@@ -403,12 +416,14 @@ assert(flat.includes("nothing else") && flat.includes("these exact passages"),
 // ---- reranking is its own slide --------------------------------------------
 // "it is not clear how document goes to passage and score" - the unit change
 // was a caption under a figure about something else. It gets the slide now.
+// The slide is the title and the figure, nothing else: its eyebrow, its
+// caption and the figure's own foot bar all said the same thing three times.
 const rerank = fs.readFileSync(path.join(root, "2026-trec-rag-talk/02b-rerank.svg"), "utf8");
-for (const fact of ["3,500", "350", "windows, not documents", "0.81", "dropped"]) {
+for (const fact of ["3,500", "350", "≤100 KEPT PER QUERY", "0.81", "dropped"]) {
   assert(rerank.includes(fact), `the rerank figure should show: ${fact}`);
 }
-assert(flat.includes("never scored as a document"),
-  "the rerank slide must state what is actually scored");
+assert(!/The unit changes here/.test(rerank),
+  "the figure's foot bar repeated its own column heads");
 
 // The disagreement slide now reports the whole distribution, not one case.
 // 42 scored topics = 20 agreeing + 5 disagreeing + 17 with one measure tied,
@@ -428,17 +443,53 @@ const cutoff = fs.readFileSync(path.join(root, "2026-trec-rag-talk/11a-retrieval
 for (const fact of ["1 – 121", "61", "4,246", "1.4826"]) {
   assert(cutoff.includes(fact), `the cutoff figure should state: ${fact}`);
 }
-const orderings = fs.readFileSync(path.join(root, "2026-trec-rag-talk/11b-retrieval-orderings.svg"), "utf8");
-for (const fact of ["PRIORITY 1", "PRIORITY 2", "PRIORITY 3", "identical document set"]) {
-  assert(orderings.includes(fact), `the orderings figure should state: ${fact}`);
+// The three orderings are a sentence now, not a second figure.
+assert(flat.includes("same set, different order"),
+  "the appendix must still state what the three files have in common");
+assert(!/11-retrieval-submission/.test(qmd) && !/11b-retrieval-orderings/.test(qmd),
+  "the retrieval figures were reworked; nothing should point at the retired ones");
+// Retrieval was the weaker of the two submissions, so its mechanics sit after
+// the close, where they answer a question instead of spending the room's time.
+const appendixAt = qmd.indexOf("## Appendix {.divider}");
+assert(appendixAt > 0, "the retrieval detail belongs in an appendix");
+assert(qmd.indexOf("## The Retrieval submission") > appendixAt &&
+       qmd.indexOf("## How the Retrieval run scored") > appendixAt,
+  "both retrieval slides belong after the appendix divider");
+// ---- the three-layer problem ----------------------------------------------
+// Title, then a kicker, then a caption: three places saying one thing. Every
+// kicker that only restated its own title or its own figure came out, so the
+// ones left have to earn it - a topic id, a unit, a scope.
+const slides = qmd.split(/\n## /).slice(1);
+const threeLayer = slides.filter((b) =>
+  /\{\.eyebrow\}|\{\.trace-step\}/.test(b) && /\{\.cap\}|\{\.boundary\}/.test(b));
+assert(threeLayer.length <= 9,
+  `at most 9 slides may carry title + kicker + caption, found ${threeLayer.length}`);
+for (const dead of ["Drop the duplicates, spread the rest", "One model call, then a validator",
+                    "Seven steps, three pairs of hands", "Across everything NIST scored",
+                    "If any of this is worth a second look"]) {
+  assert(!qmd.includes(dead), `this kicker only restated its slide: ${dead}`);
 }
-// Same set, different order: the same four letters appear in every box.
-for (const letter of ["A", "B", "C", "D"]) {
-  assert((orderings.match(new RegExp(`>${letter}</text>`, "g")) || []).length === 3,
-    `document ${letter} should appear once in each of the three orderings`);
+
+assert(qmd.indexOf("## Everything here is public") < appendixAt,
+  "the talk should end before the appendix starts");
+
+// ---- cost, counted in the only unit that was actually counted -------------
+// 119 planner calls + 691 nuggetizer calls (one per subnarrative) = 810 shared.
+// Generation: single-pass 119 + 2 retries = 121; multi-stage 4 per request
+// (plan, draft, revise, screen) x 119 = 476, + 691 audits = 1,167.
+// The subnarrative and query totals are counted from the published coverage
+// report, which carries every topic's plan: 3-8 subnarratives, 691 in all.
+const cost = fs.readFileSync(path.join(root, "2026-trec-rag-talk/13-cost.svg"), "utf8");
+for (const fact of ["119", "691", "810", "121", "1,167", "9.6", "1,787", "3 – 8"]) {
+  assert(cost.includes(fact), `the cost figure should state: ${fact}`);
 }
-assert(!/11-retrieval-submission/.test(qmd),
-  "the combined retrieval figure was split; nothing should still point at it");
+assert(476 + 691 === 1167 && 119 + 2 === 121,
+  "the cost arithmetic on the figure must still add up");
+// Tokens were never metered, so the deck must not imply a price.
+assert(/THIS COUNTS CALLS, NOT MONEY/.test(cost) && /never metered/.test(cost),
+  "the cost slide must say plainly that it counts calls, not money");
+assert(!/\$|USD|dollars? spent|per 1M tokens/.test(cost),
+  "no figure may put a price on a run that was never metered");
 
 // ---- the hedging budget ----------------------------------------------------
 // A warning box on every slide teaches the room to skip them, so only the
@@ -495,7 +546,7 @@ assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> ele
 
 // Each figure keeps its own accessible name once inlined.
 for (const id of ["tk", "ar", "ln", "rr", "sp", "ms", "pl", "ev", "rt", "t18",
-                  "dg", "ov", "rc", "ro", "da"]) {
+                  "dg", "ov", "rc", "co", "ld", "da"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
 }
@@ -506,7 +557,8 @@ for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
                           ["08-disagree", "dg"], ["09-overall", "ov"],
                           ["02b-rerank", "rr"],
                           ["11a-retrieval-cutoff", "rc"],
-                          ["11b-retrieval-orderings", "ro"],
+                          ["13-cost", "co"],
+                          ["14-lead", "ld"],
                           ["04-plan", "pl"],
                           ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");

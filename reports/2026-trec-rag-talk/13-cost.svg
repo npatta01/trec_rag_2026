@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="co-title co-desc">
+  <title id="co-title">What the two strategies cost, counted in model calls across all 119 requests</title>
+  <desc id="co-desc">Two panels. On the left, the work paid for once because both runs read the same sealed evidence: one planner call per request, 119 in all, plus one nuggetizer call per subnarrative, 691 in all because the planner wrote between 3 and 8 subnarratives per request, giving 810 shared model calls. Beneath that, two things that cost no model calls at all: 1,787 BM25 searches against the hosted index, and the reranking, which ran on a local GPU. On the right, the only part that differs between the two runs, drawn as two bars on the same scale. Single-pass generation made 121 calls, one per request plus two retries. Multi-stage generation made 1,167, which is four fixed calls per request — Luna plans, Sol drafts, Sol revises, Luna screens — plus one Luna audit for every subnarrative. That is about 9.6 times as many calls for the same evidence. A note at the foot says this counts calls and not money, because tokens were never metered, and gives the per-request figure: one call against seven to twelve.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .co-kick{font-size:22px;font-weight:800;letter-spacing:.05em;fill:var(--muted)}
+    .co-hd{font-size:26px;font-weight:800}
+    .co-row{font-size:22px}
+    .co-sub{font-size:19px;fill:var(--muted)}
+    .co-n{font-size:26px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .co-big{font-size:40px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .co-note{font-size:21px}
+  </style>
+  <rect width="1600" height="620" fill="var(--bg)"/>
+
+  <!-- A. paid once -->
+  <rect x="40" y="34" width="640" height="300" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="co-kick" x="66" y="70" style="fill:var(--ret)">PAID ONCE</text>
+  <text class="co-hd"   x="66" y="106">The evidence both runs read</text>
+
+  <text class="co-row" x="66"  y="152">one planner call per request</text>
+  <text class="co-n"   x="560" y="152">119</text>
+  <text class="co-row" x="66"  y="192">one nuggetizer call per subnarrative</text>
+  <text class="co-n"   x="560" y="192">691</text>
+  <text class="co-sub" x="66"  y="218">the planner wrote 3 – 8 of them per request</text>
+
+  <line x1="66" y1="242" x2="654" y2="242" stroke="var(--ret)" stroke-width="1.5" opacity=".5"/>
+  <text class="co-hd" x="66"  y="282" style="font-size:23px">shared model calls</text>
+  <text class="co-big" x="500" y="286" style="fill:var(--ret)">810</text>
+  <text class="co-sub" x="66" y="314">neither run paid for this twice</text>
+
+  <!-- A2. what cost no model calls -->
+  <rect x="40" y="348" width="640" height="118" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4" stroke-dasharray="6 5"/>
+  <text class="co-kick" x="66" y="382" style="fill:var(--muted)">NO MODEL CALLS AT ALL</text>
+  <text class="co-row"  x="66" y="416">1,787 BM25 searches</text>
+  <text class="co-sub"  x="400" y="416">hosted index, not a model</text>
+  <text class="co-row"  x="66" y="448">reranking every window</text>
+  <text class="co-sub"  x="400" y="448">local GPU, no API</text>
+
+  <!-- B. paid twice -->
+  <rect x="716" y="34" width="844" height="432" rx="14" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3.5"/>
+  <text class="co-kick" x="744" y="70" style="fill:var(--gen)">PAID ONCE PER STRATEGY</text>
+  <text class="co-hd"   x="744" y="106">Generation — the only part that differs</text>
+
+  <text class="co-row" x="744"  y="178">Single-pass</text>
+  <rect  x="940" y="150" width="52" height="52" rx="6" fill="var(--ret)"/>
+  <text class="co-n"   x="1018" y="188" style="fill:var(--ret)">121</text>
+  <text class="co-sub" x="744"  y="230">one call each, plus 2 retries</text>
+
+  <text class="co-row" x="744"  y="296">Multi-stage</text>
+  <rect  x="940" y="268" width="500" height="52" rx="6" fill="var(--gen)"/>
+  <text class="co-n"   x="1452" y="306" style="fill:var(--gen)">1,167</text>
+  <text class="co-sub" x="744"  y="348">4 fixed calls each, plus one audit per subnarrative</text>
+
+  <line x1="744" y1="378" x2="1532" y2="378" stroke="var(--gen)" stroke-width="1.5" opacity=".5"/>
+  <text class="co-big" x="744"  y="430" style="fill:var(--gen)">9.6×</text>
+  <text class="co-row" x="884"  y="418">the calls, for the same evidence</text>
+  <text class="co-sub" x="884"  y="446">per request: 1 call against 7 to 12</text>
+
+  <!-- the honest footing -->
+  <rect x="40" y="488" width="1520" height="100" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
+  <text class="co-note" x="66" y="524" style="font-weight:800;fill:var(--adv)">THIS COUNTS CALLS, NOT MONEY</text>
+  <text class="co-note" x="66" y="556">Tokens were never metered, so I cannot give you a bill. Call counts come from the code's bounds and the published plan —</text>
+  <text class="co-note" x="66" y="582">119 requests, 691 subnarratives — and the multi-stage figure is the budget the code allows, not a meter reading.</text>
+</svg>

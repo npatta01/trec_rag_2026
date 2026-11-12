@@ -59,10 +59,6 @@
   <text class="ev-mech"   x="386" y="250" text-anchor="middle">all-MiniLM-L6-v2</text>
   <text class="ev-mechsm" x="386" y="278" text-anchor="middle">cosine ≥ 0.92</text>
   <path class="ev-flow" d="M282 312 H478"/>
-  <text class="ev-tiny" x="386" y="348" text-anchor="middle">then MMR λ 0.7</text>
-  <text class="ev-tiny" x="386" y="374" text-anchor="middle">each next pick:</text>
-  <text class="ev-tiny" x="386" y="400" text-anchor="middle">relevant, and</text>
-  <text class="ev-tiny" x="386" y="426" text-anchor="middle">unlike the rest</text>
 
   <!-- C. selected evidence: one survivor per set, patterns preserved -->
   <rect x="500" y="76" width="450" height="464" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3.5"/>

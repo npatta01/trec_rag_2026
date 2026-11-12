@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 540" role="img" aria-labelledby="ld-title ld-desc">
+  <title id="ld-title">Two facts from different sentences of the request, joined by only one of the two answers</title>
+  <desc id="ld-desc">On the left, two quoted fragments of the request drawn as separate cards, because they sit in different sentences: "while our apartment is repaired" and "especially with a child". Two arrows run from them and converge on the right, into a single card headed multi-stage joined them, holding the sentence it actually wrote: if the apartment repairs involve lead hazards, ask whether the temporary unit is appropriate for a child and has been made lead-safe. Below, a dimmed card headed single-pass with the same two fragments left apart, noting that across its 22 statements the word lead never appears.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .ld-kick{font-size:20px;font-weight:800;letter-spacing:.06em}
+    .ld-q{font-size:27px;font-weight:700}
+    .ld-body{font-size:27px}
+    .ld-sub{font-size:20px;fill:var(--muted)}
+    .ld-flow{fill:none;stroke:var(--gen);stroke-width:3.5;marker-end:url(#lda)}
+  </style>
+  <defs>
+    <marker id="lda" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="1600" height="540" fill="var(--bg)"/>
+
+  <text class="ld-kick" x="40" y="40" style="fill:var(--muted)">THE REQUEST SAID BOTH — IN TWO DIFFERENT SENTENCES</text>
+
+  <rect x="40" y="64" width="470" height="92" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
+  <text class="ld-q" x="66" y="120">“while our apartment is repaired”</text>
+
+  <rect x="40" y="196" width="470" height="92" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
+  <text class="ld-q" x="66" y="252">“especially with a child”</text>
+
+  <path class="ld-flow" d="M510 110 H576 V168 H634"/>
+  <path class="ld-flow" d="M510 242 H576 V184 H634"/>
+
+  <rect x="640" y="64" width="920" height="224" rx="14" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3.5"/>
+  <text class="ld-kick" x="666" y="104" style="fill:var(--gen)">MULTI-STAGE JOINED THEM</text>
+  <text class="ld-body" x="666" y="156">“If the apartment repairs involve <tspan font-weight="800">lead hazards</tspan>,</text>
+  <text class="ld-body" x="666" y="194">ask whether the temporary unit is appropriate</text>
+  <text class="ld-body" x="666" y="232">for a child and has been made lead-safe.”</text>
+  <text class="ld-sub"  x="666" y="268">one of its 38 statements</text>
+
+  <rect x="40" y="340" width="1520" height="150" rx="14" fill="var(--panel)" stroke="var(--line)" stroke-width="2.6" stroke-dasharray="7 6"/>
+  <text class="ld-kick" x="68" y="380" style="fill:var(--muted)">SINGLE-PASS LEFT THEM APART</text>
+  <text class="ld-body" x="68" y="428">Across all <tspan font-weight="800">22 statements</tspan>, the word “lead” never appears.</text>
+  <text class="ld-sub"  x="68" y="464">Same evidence, same request, same word limit — it simply never put the two together.</text>
+</svg>

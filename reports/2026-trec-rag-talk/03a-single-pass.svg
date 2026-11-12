@@ -7,7 +7,7 @@
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
     .sp-head{font-size:27px;font-weight:760}
     .sp-who{font-size:27px;font-weight:780}
-    .sp-model{font-size:16px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .sp-model{font-size:14px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .sp-label{font-size:25px;font-weight:700}
     .sp-sub{font-size:19px;fill:var(--muted)}
     .sp-chip{font-size:19px;font-weight:700;fill:var(--adv)}
@@ -29,8 +29,8 @@
   <text class="sp-head" x="870" y="46" text-anchor="middle">One sealed evidence handoff</text>
   <text class="sp-sub"  x="870" y="70" text-anchor="middle">exact passages · nugget hints · allowed citation IDs — Sol never searches</text>
 
-  <rect class="sp-lane" x="280" y="118" width="1180" height="116" rx="10"/>
-  <rect class="sp-lane" x="280" y="256" width="1180" height="152" rx="10"/>
+  <rect class="sp-lane" x="292" y="118" width="1168" height="116" rx="10"/>
+  <rect class="sp-lane" x="292" y="256" width="1168" height="152" rx="10"/>
 
   <g transform="translate(90,176)" style="color:var(--ret)"><circle r="24" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="2.6"/><use href="#sp-g-sun"/></g>
   <text class="sp-who"   x="126" y="172" style="fill:var(--ret)">Sol</text>
