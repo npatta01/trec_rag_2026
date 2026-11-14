@@ -132,7 +132,7 @@ for (const fact of requiredFacts) {
 const requiredBoundaries = [
   // The framing lives with the aggregate numbers now, not on the task slide.
   "a claim that it is novel",
-  "the organizers' own, from the score files",
+  "The organizers' own numbers",
   "42 scored topics",
   // "The rubric items were not released" came off both the slide and the
   // figure as too much copy. The claim it guarded - that the deck never says

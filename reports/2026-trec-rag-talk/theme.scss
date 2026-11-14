@@ -867,10 +867,11 @@ body.reveal-viewport,
 
 .nargrid .qcard {
   justify-content: center;
+  text-align: center;
   counter-increment: q;
   display: flex;
   gap: 0.55em;
-  align-items: baseline;
+  align-items: center;
   background: var(--q-soft);
   border: 1px solid var(--hairline);
   border-left: 5px solid var(--q);
@@ -1497,7 +1498,7 @@ body.reveal-viewport,
 .qpair details {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .qpair details {
@@ -1505,15 +1506,17 @@ body.reveal-viewport,
   border-left-width: 8px;
 }
 
+.qpair details { padding: 0.8em 1em; }
+
 .qpair summary {
-  font-size: 0.92em;
-  gap: 0.5em;
+  font-size: 1.08em;
+  gap: 0.55em;
 }
 
 .qpair code {
-  font-size: 0.62em;
-  margin-top: 0.34em;
-  padding: 0.3em 0.55em;
+  font-size: 0.8em;
+  margin-top: 0.5em;
+  padding: 0.4em 0.7em;
 }
 
 // ------------------------------------------------- the reference list

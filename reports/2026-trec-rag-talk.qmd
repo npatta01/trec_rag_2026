@@ -261,9 +261,8 @@ Not a one-off, and not typical either.
 :::
 
 ::: {.boundary}
-Every number here is the organizers' own, from the score files they released.
-Multi-stage costs several extra model calls per topic for this. Nothing here is
-**a claim that it is novel** — only that the extra passes did something visible.
+The organizers' own numbers. **Not a claim that it is novel** — only that the
+extra passes did something visible.
 :::
 ## Cost {.divider .divider-img}
 
