@@ -1544,9 +1544,9 @@ body.reveal-viewport,
 .reflist > p { display: contents; }
 
 // ------------------------------------------------- the title slide
-// "the middle feels so empty". Reveal paints the art behind the slide via
-// data-background-image, so this only has to spread the text down the frame
-// and keep it light — the picture under it is dark whatever the palette.
+// "the middle feels so empty". The art rides on a ::before layer the script
+// points at the right twin, so this only has to spread the text down the
+// frame and keep it readable over whichever picture is showing.
 .reveal .slides > section.quarto-title-block {
   display: flex !important;
   flex-direction: column;
@@ -1555,6 +1555,20 @@ body.reveal-viewport,
   box-sizing: border-box;
   padding: 1.6em 0 1.2em;
   text-align: center;
+
+  // The picture gets a layer of its own rather than the section's own
+  // background: a filter on the section would dull the type with it.
+  // The script sets --title-art to whichever twin the theme calls for.
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image: var(--title-art, none);
+    background-size: cover;
+    background-position: center;
+  }
 
   &::after {
     content: "";
@@ -1653,6 +1667,14 @@ body.reveal-viewport,
 :root[data-theme="dark"] .reveal section img.art-dark { display: block; }
 :root[data-theme="dark"] .reveal section img.art-light { display: none; }
 
+// Same cure, gentler dose. Measured raw warmth (mean R-B) of the four
+// daylight scenes: Retrieval +1, Overall score +1, Answer Generation +10,
+// Cost +16 — nowhere near the title art's +32. saturate(0.6) brings the two
+// warm ones to +9 and +6 and leaves the neutral pair untouched, while
+// keeping the slate blues in the illustrations. No brightness lift here:
+// these already sit at mean L 216-231 and would only go chalky.
+.reveal section img.art-light { filter: saturate(0.6); }
+
 // The plate itself, and the words on it, flip with the picture.
 @mixin break-daylight {
   background: #f1f4f8;
@@ -1660,9 +1682,9 @@ body.reveal-viewport,
   &::after {
     background: linear-gradient(
       to bottom,
-      rgb(241 245 250 / 0.5),
-      rgb(241 245 250 / 0.34) 55%,
-      rgb(241 245 250 / 0.55)
+      rgb(238 243 251 / 0.46),
+      rgb(238 243 251 / 0.38) 55%,
+      rgb(238 243 251 / 0.5)
     );
   }
 
@@ -1688,12 +1710,17 @@ body.reveal-viewport,
 @mixin title-daylight {
   background-color: #f1f4f8;
 
+  // The daylight art is warm enough that a translucent wash cannot cool it
+  // without covering it: measured rgb(253 240 221), R-B +32. So the picture
+  // itself loses its saturation, on its own layer, leaving the type alone.
+  &::before { filter: saturate(0.5) brightness(1.02); }
+
   &::after {
     background: linear-gradient(
       to bottom,
-      rgb(241 245 250 / 0.5),
-      rgb(241 245 250 / 0.34) 50%,
-      rgb(241 245 250 / 0.55)
+      rgb(238 243 251 / 0.46),
+      rgb(238 243 251 / 0.38) 50%,
+      rgb(238 243 251 / 0.5)
     );
   }
 

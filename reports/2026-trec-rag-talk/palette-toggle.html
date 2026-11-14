@@ -51,9 +51,9 @@
           && window.matchMedia("(prefers-color-scheme: light)").matches);
     var img = document.getElementById(light ? "title-art-light" : "title-art-dark");
     if (!img || !img.src) { return; }
-    slide.style.backgroundImage = "url(" + JSON.stringify(img.src) + ")";
-    slide.style.backgroundSize = "cover";
-    slide.style.backgroundPosition = "center";
+    // set on a custom property, not the background: the picture rides on a
+    // layer of its own so light mode can filter it without touching the type
+    slide.style.setProperty("--title-art", "url(" + JSON.stringify(img.src) + ")");
   }
 
   function applyTheme(value) {
