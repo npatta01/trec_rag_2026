@@ -64,7 +64,8 @@ Six weeks of housing for a family of three — without booking
 
 ::: {.grid-2}
 ::: {.scene}
-![](2026-trec-rag-talk/img-request.png){fig-alt="Two adults and a small child stand on a pavement with two wheeled suitcases at night, looking up at an apartment building wrapped in construction scaffolding and safety netting — the apartment being repaired while they need somewhere else to stay. A street lamp and a few windows glow warm."}
+![](2026-trec-rag-talk/img-request.png){.plain fig-alt="Two adults and a small child stand on a pavement with two wheeled suitcases at night, looking up at an apartment building wrapped in construction scaffolding and safety netting — the apartment being repaired while they need somewhere else to stay. A street lamp and a few windows glow warm."}
+![](2026-trec-rag-talk/story-request.jpg){.story fig-alt="A family of three standing with a suitcase, holding a small fan of blank cards and choosing between them. A thought bubble above shows four worries as icons — a coin, a shield, a calendar and a bed. Behind them their own apartment building stands wrapped in scaffolding and netting."}
 :::
 
 ::: {.redact}
@@ -84,6 +85,10 @@ location, and day-to-day practicality,
 Eight things asked at once, in one paragraph.
 :::
 ## Retrieval {.divider}
+
+::: {.secshot}
+![](2026-trec-rag-talk/story-retrieval.jpg){.story fig-alt="A library bay: three shelves packed with books of every height and colour. On the table in front, three of them taken down and lying face up, each cover carrying its own emblem — a circle, a triangle, a flower — beside a magnifying glass."}
+:::
 
 
 
@@ -142,6 +147,10 @@ Two of the eight — the other six look the same, and all of them are in the app
 :::
 
 ## Answer Generation {.divider}
+
+::: {.secshot}
+![](2026-trec-rag-talk/story-generation.jpg){.story fig-alt="A table split down the middle by a wooden post, the two halves headed SINGLE-PASS and MULTI-STAGE. On the left, a blank page, one arrow, a finished page: a single hop. On the right, the same page at the same size passing through several separate steps — a draft, a check under a magnifying glass, a finish. One pass against several."}
+:::
 
 
 
@@ -205,6 +214,10 @@ The request said *repairs* and *a child* in different sentences.
 :::
 
 ## Results {.divider}
+
+::: {.secshot}
+![](2026-trec-rag-talk/story-score.jpg){.story fig-alt="Two answer cards side by side on a table, labelled SINGLE-PASS and MULTI-STAGE. The left card carries a sun for Sol, which wrote it alone; the right carries a moon and a sun, for Luna and Sol together. Along the bottom of each, six circles for the facts it was checked for having: three filled gold on the left card, five on the right. The same question, and one answer covered more of it."}
+:::
 
 
 ## What the organizers said about rag2026-18

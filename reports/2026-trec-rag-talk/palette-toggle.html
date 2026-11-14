@@ -6,13 +6,13 @@
 </div>
 <script>
 (function () {
-  // One choice, remembered: light, dark, or follow the system. There used to
-  // be a second button here for a Slate/Forest palette; it doubled every
-  // colour definition in the theme and the deck was not improved by being
-  // green. "Auto" follows the system; Light and Dark pin it, because the
-  // machine a talk is given on is often not the one it was written on.
-  var THEMES = ["auto", "dark", "light"];
-  var THEME_LABEL = { auto: "Auto", dark: "Dark", light: "Light" };
+  // One button, four looks. "Auto" follows the system; Light and Dark pin it,
+  // because the machine a talk is given on is often not the one it was
+  // written on. "Storybook" is the sibling deck's cream palette and its four
+  // illustrations — a whole look rather than a brightness, which is why it
+  // sits on the same cycle instead of a second button beside it.
+  var THEMES = ["auto", "dark", "light", "story"];
+  var THEME_LABEL = { auto: "Auto", dark: "Dark", light: "Light", story: "Storybook" };
   var THEME_KEY = "trec-talk-theme";
 
   var root = document.documentElement;
@@ -39,7 +39,7 @@
     themeName.textContent = THEME_LABEL[value];
     themeButton.setAttribute(
       "aria-label",
-      "Brightness: " + THEME_LABEL[value] + (value === "auto" ? " (follows your system)" : "") + ". Click to change."
+      "Look: " + THEME_LABEL[value] + (value === "auto" ? " (follows your system)" : "") + ". Click to change."
     );
     save(THEME_KEY, value);
   }

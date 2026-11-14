@@ -128,6 +128,59 @@ $code-block-font-size: 0.6em !default;
   @include deck-dark;
 }
 
+
+// Storybook: the palette and the illustrations from the sibling deck, offered
+// here as a third look rather than a second deck. One mood, always light —
+// it is a painted cream page, so it has no dark twin and does not follow the
+// system. Values taken from 2026-trec-rag-talk-cute/theme.scss.
+@mixin deck-story {
+  --bg: #fbf3df;
+  --panel: #fffaf0;
+  --ink: #07394a;
+  --muted: #345c68;
+  --line: #9a8a68;
+  --hairline: rgb(7 57 74 / 0.22);
+
+  // Structural furniture is a deep teal here, not the blue of the plain deck:
+  // a cold blue on a cream page reads as a foreign element.
+  --deck: #0d6f84;
+
+  --ret: #00676e;
+  --ret-soft: #dbeee7;
+  // #b4541c in the sibling deck. As a card label on its own tint that is
+  // 4.02:1, under AA; #9c4514 is 5.19:1 and still unmistakably the warmer
+  // half of the pair.
+  --gen: #9c4514;
+  --gen-soft: #fbe3cf;
+  --ok: #3f7a35;
+  --ok-soft: #e2f0d8;
+  // #9a6a07 in the sibling deck, where it is what the eyebrows are set in.
+  // On this deck's cream it measured 4.28:1 against the page and 4.10:1 on
+  // its own tint — under AA on eight slides. #855a06 is 5.48 and 5.26.
+  --adv: #855a06;
+  --adv-soft: #fdeec4;
+
+  // Five stage hues, warm-side versions of the originals.
+  --s1: #0d6f84;
+  --s1-soft: #d9eef3;
+  --s2: #6b4bb8;
+  --s2-soft: #e8e0f7;
+  --s3: #a8336f;
+  --s3-soft: #f8dfea;
+  --s4: #855a06;
+  --s4-soft: #fdeec4;
+  --s5: #3f7a35;
+  --s5-soft: #e2f0d8;
+
+  color-scheme: light;
+}
+
+// Written last so it beats the light base, the dark media query and the
+// pinned-dark rule on equal specificity.
+:root[data-theme="story"] {
+  @include deck-story;
+}
+
 // Keep scrollbars, form controls and the browser's own canvas in step with a
 // pinned choice rather than the system's.
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -1425,6 +1478,63 @@ body.reveal-viewport,
   line-height: 1.5;
 }
 
+
+// ------------------------------------------------- the storybook pictures
+// Four illustrations from the sibling deck. They are painted on cream, so
+// they only appear in Storybook: on the plain deck's dark or light ground
+// they would read as lit rectangles pasted onto the slide.
+//
+// The sibling session learned the same lesson the expensive way and wrote it
+// down: Reveal letterboxes each slide inside the window, so any slide with a
+// background of its own becomes a rectangle with page showing above and
+// below. In Storybook the plate therefore IS the page — one cream, no band.
+.reveal section img.story,
+.reveal .slides > section > .secshot { display: none; }
+
+:root[data-theme="story"] {
+  .reveal section img.story { display: block; }
+
+  .reveal .slides > section > .secshot {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0.4em 0 0.2em;
+
+    p, figure, .quarto-figure {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      min-height: 0;
+    }
+
+    img {
+      width: 100%;
+      height: 100%;
+      max-height: none;
+      object-fit: contain;
+    }
+  }
+
+  // The night scene on the request slide belongs to the dark deck; the
+  // storybook has its own drawing of the same family.
+  .reveal section img.plain { display: none; }
+
+  // No plate, so no band: the break is the page with a name on it.
+  .reveal .slides > section.divider,
+  .reveal .slides > section.quarto-title-block {
+    background: var(--bg);
+  }
+
+  // A break that carries a picture puts its name above it rather than
+  // floating it in the middle of the drawing.
+  .reveal .slides > section.divider:has(.secshot) > h2 {
+    margin: 0 0 0.16em;
+  }
+}
+
 // ------------------------------------------------- the reference list
 // Citations belong in an appendix, not under a diagram. Two columns so the
 // role reads first and the work second, at a size that survives a projector.
@@ -1554,4 +1664,17 @@ body.reveal-viewport,
 
 :root[data-theme="light"] .reveal .slides > section.quarto-title-block {
   @include title-daylight;
+}
+
+// Storybook is a light look too, and the title words were written to sit on
+// a dark plate — without this they are pale grey on cream. It takes the
+// deck's own ink rather than the daylight mixin's near-black, because the
+// storybook ink is a deep teal and the slide should be of a piece with it.
+:root[data-theme="story"] .reveal .slides > section.quarto-title-block {
+  .title { color: var(--ink); }
+  .subtitle { color: var(--ink); font-weight: 600; }
+  .quarto-title-authors,
+  .author,
+  .quarto-title-author-name { color: var(--ink); font-weight: 600; }
+  .date { color: var(--muted); font-weight: 500; }
 }

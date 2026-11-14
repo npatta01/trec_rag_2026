@@ -50,10 +50,17 @@ assert(fetched.length === 0,
   `deck must not load external resources, found: ${fetched.slice(0, 3).join(", ")}`);
 
 // Diagrams carry alt text for screen readers and must not print a caption.
-// 17 since the four section-break photographs came off; the figures that
-// remain are the diagrams, and every one of them is described.
+// 17 diagrams plus the 4 storybook illustrations. Every one is described;
+// the pair on the request slide is fine because only one of the two is ever
+// displayed, and display:none takes the other out of the a11y tree too.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 17, `expected 17 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 21, `expected 21 fig-alt figures, found ${figAlts.length}`);
+const storyArt = (qmd.match(/\{\.story /g) || []).length;
+assert(storyArt === 4, `expected the 4 storybook illustrations, found ${storyArt}`);
+for (const n of ["request", "retrieval", "generation", "score"]) {
+  assert(fs.existsSync(path.join(root, `2026-trec-rag-talk/story-${n}.jpg`)),
+    `missing storybook illustration: story-${n}.jpg`);
+}
 const undescribed = (qmd.match(/!\[\]\([^\n]*/g) || [])
   .filter((l) => !/fig-alt=/.test(l) && !/aria-hidden="true"/.test(l));
 assert(undescribed.length === 0,
@@ -185,13 +192,20 @@ for (const sec of ["Architecture", "Retrieval", "Answer Generation", "Results", 
   assert(qmd.includes(`</span>${sec}</span>`), `the contents should name: ${sec}`);
 }
 assert(!/Overall score/.test(qmd), "the section is called Results now");
-// Every section break is a plate of the deck's own colour with the section
-// name on it. The photo-illustrations came off all five: decoration none of
-// them needed, and on the title slide it was crowding the words.
-assert(!/\{\.secshot\}/.test(qmd) && !/divider-img/.test(qmd),
-  "a section break is a plate, not a picture");
-assert(!/\{\.art-(dark|light|warm)/.test(qmd),
-  "no break should carry a picture pair again");
+// A section break is a plate with the section name on it. Three of them also
+// carry a storybook illustration, which shows only in that mode; in light and
+// dark the plate is bare, as it was before.
+assert(!/divider-img/.test(qmd) && !/\{\.art-(dark|light|warm)/.test(qmd),
+  "the old photo-illustration machinery should not come back");
+assert((qmd.match(/\{\.secshot\}/g) || []).length === 3,
+  "three section breaks carry a storybook picture");
+// `theme` is read further down; this block runs before it.
+const themeEarly = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
+assert(/img\.story,\s*\n\.reveal \.slides > section > \.secshot \{ display: none; \}/.test(themeEarly),
+  "the storybook art is hidden unless Storybook is on");
+assert(/:root\[data-theme="story"\]/.test(themeEarly),
+  "Storybook needs its own pinned rule");
+assert(/@mixin deck-story/.test(themeEarly), "the storybook palette should be defined");
 assert(!/01-approach/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/01-approach.svg")),
   "the funnel figure was cut; nothing should still point at it");
 
@@ -389,9 +403,11 @@ for (const [name, pattern] of [[".reveal .progress", "\\.reveal \\.progress"],
     `${name} is furniture and must not wear a content accent`);
 }
 // The structural token is blue in both brightnesses.
+// Three looks, three values: light, dark, and the storybook's deep teal,
+// because a cold blue on a cream page reads as a foreign element.
 const deck = [...theme.matchAll(/--deck:\s*(#[0-9a-f]{6})/gi)].map((m) => m[1].toLowerCase());
-assert(deck.length === 2 && new Set(deck).size === 2,
-  `--deck needs one light and one dark value, found ${deck.length}`);
+assert(deck.length === 3 && new Set(deck).size === 3,
+  `--deck needs its own value in each look, found ${deck.length}`);
 assert(/nth-child\(3n \+ 1\)/.test(theme),
   "the subnarrative cards should cycle through accents");
 assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
