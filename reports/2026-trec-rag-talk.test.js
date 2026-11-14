@@ -838,6 +838,18 @@ for (const stage of ["Search", "Rerank", "Select", "Nuggets"]) {
   assert(lane.includes(`>${stage}</text>`), `the lane figure should keep the stage: ${stage}`);
 }
 
+// --------------------------------------------- only the warm art is cooled
+// Measured raw warmth (mean R-B) of the four daylight scenes: Retrieval +1,
+// Overall score +1, Answer Generation +10, Cost +16. A filter on all four
+// drained the neutral pair for no gain, so it rides on .art-warm.
+assert(!/img\.art-light\s*\{[^}]*filter/.test(theme),
+  "do not desaturate every daylight scene — only the warm ones need it");
+assert(/img\.art-warm\s*\{[^}]*filter:\s*saturate/.test(theme),
+  "the warm daylight scenes should carry the saturation correction");
+const warmArt = (qmd.match(/\.art-light \.art-warm/g) || []).length;
+assert(warmArt === 2,
+  `exactly the two warm scenes take the filter, found ${warmArt}`);
+
 // ------------------------------------------------------ one kind of header
 // A `.divider { border-top: 2px }` rule drew a line across the top of all
 // six section-break slides and none of the other 25, so the deck looked like

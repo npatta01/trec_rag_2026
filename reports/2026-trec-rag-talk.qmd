@@ -150,7 +150,7 @@ Two of the eight — the other six look the same, and all of them are in the app
 
 ::: {.secshot}
 ![](2026-trec-rag-talk/art-generation.jpg){.art-dark fig-alt="A quiet study at night. On the left a desk and chair under a warm pool of lamplight, with a blank cream sheet and a few loose pages on it. On the right a tall window with warm light falling through, and a low bookshelf beneath. The space down the middle is dark and empty."}
-![](2026-trec-rag-talk/art-generation-light.jpg){.art-light aria-hidden="true"}
+![](2026-trec-rag-talk/art-generation-light.jpg){.art-light .art-warm aria-hidden="true"}
 :::
 
 
@@ -178,7 +178,7 @@ Two of the eight — the other six look the same, and all of them are in the app
 The example · rag2026-18
 :::
 
-::: {.grid-2}
+::: {.grid-2 .roomy}
 ::: {.card .card-ret}
 [<svg class="glyph g-sun" viewBox="-16 -16 32 32" aria-hidden="true"><circle cx="0" cy="0" r="4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 -11.5V-8.4M0 8.4V11.5M-11.5 0H-8.4M8.4 0H11.5M-8.1 -8.1L-5.9 -5.9M5.9 5.9L8.1 8.1M8.1 -8.1L5.9 -5.9M-5.9 5.9L-8.1 8.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Single-pass · Sol alone]{.card-label}
 **22 statements · 504 words**
@@ -258,7 +258,7 @@ A different topic · rag2026-13, a founder scaling a startup
 
 ::: {.secshot}
 ![](2026-trec-rag-talk/art-cost.jpg){.art-dark fig-alt="A dark workshop at night. On the left a single lamp hangs low over an empty bench, lighting a small circle. On the right a tall rack of many lit lamps throws a much larger pool of warm light. The space down the middle is dark and empty."}
-![](2026-trec-rag-talk/art-cost-light.jpg){.art-light aria-hidden="true"}
+![](2026-trec-rag-talk/art-cost-light.jpg){.art-light .art-warm aria-hidden="true"}
 :::
 
 ## What the second pass cost

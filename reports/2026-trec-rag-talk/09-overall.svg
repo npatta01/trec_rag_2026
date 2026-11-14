@@ -81,6 +81,6 @@
   <text class="ov-lab" x="64"  y="450" style="fill:var(--bg)">Single-pass</text>
   <text class="ov-sub" x="1320" y="453">of 422 battles</text>
 
-  <text class="ov-sub" x="40" y="520">The bar length is each run's own win rate. A longer bar is not a win over the other run — they never met.</text>
-  <text class="ov-sub" x="40" y="560">Not a claim that it is novel — only that the extra passes did something visible.</text>
+  <text class="ov-sub" x="40" y="520">Each run's own win rate — the two never met.</text>
+  <text class="ov-sub" x="40" y="556">Not a claim that it is novel, only that the extra passes did something visible.</text>
 </svg>

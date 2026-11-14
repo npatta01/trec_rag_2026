@@ -609,19 +609,30 @@ body.reveal-viewport,
   align-content: space-evenly;
 }
 
-// Grids used to keep their cards at natural height and sit centred, which
-// left a dead band under the title on every card slide. The rows claim the
-// height; each card centres its own content so a two-line card still reads as
-// deliberate rather than stretched.
+// These rows used to stretch to fill the slide, which turned a card holding
+// four lines into a tall box three-quarters empty. Height is for making the
+// content less cramped, not for filling on its own account: the rows keep
+// their natural size, sit in the middle of whatever height is going, and the
+// room left over goes into the padding and the gap below.
 .reveal .slides > section > .grid-2,
 .reveal .slides > section > .grid-3,
 .reveal .slides > section > .grid-2-1,
 .reveal .slides > section > .nargrid {
-  align-content: stretch;
-  grid-auto-rows: 1fr;
-  // the base grids set align-items:start, which pins each card to the top of
-  // a row that is now full height — the cards have to stretch with it
-  align-items: stretch;
+  align-content: center;
+}
+
+// .roomy is the other half of that: a slide whose cards hold only a few lines
+// has height to spare, and it goes into the lines rather than into an empty
+// box below them. Opt in per slide, so a card that is already full is left
+// at the size that fits it.
+.reveal .slides > section > .grid-2.roomy > .card {
+  padding: 1.15em 1.25em;
+  gap: 0.5em;
+
+  strong { font-size: 1.22em; }
+  .meter { margin-top: 0.15em; }
+  .meter-bar { height: 0.72em; }
+  .relay { line-height: 2.1; }
 }
 
 .reveal .slides > section > .grid-2 > .card,
@@ -865,7 +876,14 @@ body.reveal-viewport,
   align-content: center;
 }
 
+// The number and the glyph sat in the flow with the question, so what got
+// centred was the three of them together and every question read as shifted
+// right. They move out to the left edge and the question centres on the card
+// itself; the symmetric padding keeps a long one from reaching the badge.
+// The eight questions are the whole slide and were set smaller than the
+// prose around them -- there is height to spare here, so they take it.
 .nargrid .qcard {
+  position: relative;
   justify-content: center;
   text-align: center;
   counter-increment: q;
@@ -876,19 +894,25 @@ body.reveal-viewport,
   border: 1px solid var(--hairline);
   border-left: 5px solid var(--q);
   border-radius: 8px;
-  padding: 0.42em 0.6em;
+  padding: 0.62em 3.4em;
   box-shadow: 0 1px 0 rgb(0 0 0 / 0.16);
   color: var(--ink);
-  font-size: 0.72em;
+  font-size: 1.04em;
   font-weight: 700;
   line-height: 1.24;
 }
 
 .nargrid .qcard::before {
   content: counter(q);
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0.7em;
   color: var(--q);
   font-weight: 800;
+}
+
+.nargrid .qcard > .qico {
+  position: absolute;
+  left: 2.1em;
 }
 
 .nargrid .qcard:nth-child(3n + 1) { --q: var(--ret); --q-soft: var(--ret-soft); }
@@ -1495,28 +1519,29 @@ body.reveal-viewport,
   grid-auto-rows: 1fr;
 }
 
+// The card is full height on this slide by design, so its contents spread
+// through it rather than huddling at the top with two thirds of the box
+// empty under them. The queries are the point of the slide and were set
+// smaller than the prose around them; they carry it now.
 .qpair details {
   display: flex;
   flex-direction: column;
-  justify-content: flex-start;
-}
-
-.qpair details {
-  padding: 0.55em 0.85em;
+  justify-content: space-evenly;
+  padding: 0.95em 1.1em;
   border-left-width: 8px;
 }
 
-.qpair details { padding: 0.8em 1em; }
-
 .qpair summary {
-  font-size: 1.08em;
-  gap: 0.55em;
+  font-size: 1.2em;
+  gap: 0.6em;
+  margin-bottom: 0.2em;
 }
 
 .qpair code {
-  font-size: 0.8em;
-  margin-top: 0.5em;
-  padding: 0.4em 0.7em;
+  font-size: 0.98em;
+  margin-top: 0.75em;
+  padding: 0.6em 0.8em;
+  line-height: 1.5;
 }
 
 // ------------------------------------------------- the reference list
@@ -1687,13 +1712,14 @@ body.reveal-viewport,
 :root[data-theme="dark"] .reveal section img.art-dark { display: block; }
 :root[data-theme="dark"] .reveal section img.art-light { display: none; }
 
-// Same cure, gentler dose. Measured raw warmth (mean R-B) of the four
-// daylight scenes: Retrieval +1, Overall score +1, Answer Generation +10,
-// Cost +16 — nowhere near the title art's +32. saturate(0.6) brings the two
-// warm ones to +9 and +6 and leaves the neutral pair untouched, while
-// keeping the slate blues in the illustrations. No brightness lift here:
-// these already sit at mean L 216-231 and would only go chalky.
-.reveal section img.art-light { filter: saturate(0.6); }
+// Same cure, and only where there is something to cure. Measured raw warmth
+// (mean R-B) of the four daylight scenes: Retrieval +1, Overall score +1,
+// Answer Generation +10, Cost +16 — nowhere near the title art's +32. A
+// filter on all four cost the neutral pair their colour for no gain, so it
+// is carried by .art-warm on the two that are actually warm, which it brings
+// to +6 and +9. No brightness lift: these already sit at mean L 216-231 and
+// would only go chalky.
+.reveal section img.art-warm { filter: saturate(0.62); }
 
 // The plate itself, and the words on it, flip with the picture.
 @mixin break-daylight {
