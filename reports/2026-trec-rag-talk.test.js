@@ -604,6 +604,38 @@ assert(/An absolute section is already the containing block/.test(theme),
 assert(/section\.quarto-title-block \{[^}]*box-sizing: border-box/.test(theme),
   "a slide with height:100% and padding must be border-box");
 
+// ---- the art follows the brightness control -------------------------------
+// A dark plate on a light page was a deliberate chapter card, but the author
+// wanted daylight versions. Each break ships both and the deck's own
+// brightness control picks one; the title slide's pair is carried as hidden
+// images because Quarto owns that slide and it cannot hold two of its own.
+const darkArt = (qmd.match(/\{\.art-dark/g) || []).length;
+const lightArt = (qmd.match(/\{\.art-light/g) || []).length;
+assert(darkArt === 4 && lightArt === 4,
+  `each of the 4 section breaks needs both pictures, found ${darkArt} dark / ${lightArt} light`);
+for (const name of ["retrieval", "generation", "score", "cost"]) {
+  for (const half of ["", "-light"]) {
+    const f = `2026-trec-rag-talk/art-${name}${half}.jpg`;
+    assert(fs.existsSync(path.join(root, f)), `missing section art: ${f}`);
+  }
+}
+assert(fs.existsSync(path.join(root, "2026-trec-rag-talk/art-title.jpg")) &&
+       fs.existsSync(path.join(root, "2026-trec-rag-talk/art-title-light.jpg")),
+  "the title slide needs both of its pictures");
+// Quarto inlines these; nothing should start referencing them by path again.
+assert(!/title-slide-attributes/.test(qmd),
+  "the title art is painted from the hidden pair, not a background attribute");
+const toggle = fs.readFileSync(path.join(root, "2026-trec-rag-talk/palette-toggle.html"), "utf8");
+assert(/title-art-dark/.test(toggle) && /title-art-light/.test(toggle) &&
+       /prefers-color-scheme: light/.test(toggle),
+  "the toggle must carry both title pictures and honour the system setting");
+// A light plate needs dark words on it, and the reverse, in both the pinned
+// themes and in auto.
+for (const sel of ["section.divider-img", "section.quarto-title-block"]) {
+  assert(new RegExp(`\\[data-theme="light"\\][^{]*${sel.replace(".", "\\.")}`).test(theme),
+    `${sel} needs a light-mode rule`);
+}
+
 // ---- the type floor ------------------------------------------------------
 // "the copy might be small to see". A figure drawn in a 1600-unit viewBox is
 // scaled to about 1150px of slide width, so an 18px label lands near 13px on

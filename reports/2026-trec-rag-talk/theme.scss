@@ -1630,3 +1630,84 @@ body.reveal-viewport,
 :root[data-theme="light"] .divider-img > .secshot img {
   border: 0;
 }
+
+// ------------------------------------------------- day and night art
+// Each section break ships two pictures: the night one and its daylight twin.
+// Which shows follows the deck's own brightness control — data-theme on the
+// root, with no attribute meaning "follow the system". Reveal's
+// `section img { display: block }` outranks a bare class, so these selectors
+// carry its weight, the same way the scene images do.
+.reveal section img.art-light { display: none; }
+.reveal section img.art-dark { display: block; }
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .reveal section img.art-dark { display: none; }
+  :root:not([data-theme="dark"]) .reveal section img.art-light { display: block; }
+}
+
+:root[data-theme="light"] .reveal section img.art-dark { display: none; }
+:root[data-theme="light"] .reveal section img.art-light { display: block; }
+:root[data-theme="dark"] .reveal section img.art-dark { display: block; }
+:root[data-theme="dark"] .reveal section img.art-light { display: none; }
+
+// The plate itself, and the words on it, flip with the picture.
+@mixin break-daylight {
+  background: #f3f0e9;
+
+  &::after {
+    background: linear-gradient(
+      to bottom,
+      rgb(255 253 248 / 0.3),
+      rgb(255 253 248 / 0.05) 55%,
+      rgb(255 253 248 / 0.4)
+    );
+  }
+
+  > h2 { color: #14212e; }
+  > .cap { color: #3c4c5a; }
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .reveal .slides > section.divider-img {
+    @include break-daylight;
+  }
+}
+
+:root[data-theme="light"] .reveal .slides > section.divider-img {
+  @include break-daylight;
+}
+
+// The two title pictures ride in the page only so Quarto inlines them; the
+// script reads their src and paints the slide with the right one.
+#title-art { display: none !important; }
+
+// The title plate flips with its picture, like the section breaks do.
+@mixin title-daylight {
+  background-color: #f3f0e9;
+
+  &::after {
+    background: linear-gradient(
+      to bottom,
+      rgb(255 253 248 / 0.32),
+      rgb(255 253 248 / 0.06) 50%,
+      rgb(255 253 248 / 0.42)
+    );
+  }
+
+  .title { color: #14212e; }
+  .subtitle { color: #38485a; }
+  .quarto-title-authors,
+  .author,
+  .quarto-title-author-name { color: #243445; }
+  .date { color: #4d5f70; }
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .reveal .slides > section.quarto-title-block {
+    @include title-daylight;
+  }
+}
+
+:root[data-theme="light"] .reveal .slides > section.quarto-title-block {
+  @include title-daylight;
+}
