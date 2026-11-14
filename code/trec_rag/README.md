@@ -2578,3 +2578,34 @@ exports narrative, combo, and breadth orderings over that same core. The
 all-topic worker and collector are the supported production entrypoints; do not
 bypass their canary, publication, fresh-replay, or cache-merge checks with a
 manual `score-topic` invocation.
+
+## Organizer score explorer
+
+`organizer_score_explorer.py` renders a standalone, filterable HTML view of the
+scores the TREC RAG 2026 organizers released for our runs.
+
+**Inputs** (all tracked; nothing private is read):
+
+- `submissions/trec-rag-2026/organizer-results/rag/*.tsv`
+- `submissions/trec-rag-2026/organizer-results/retrieval/*.tsv`
+- `submissions/trec-rag-2026/rag/selected-evidence-sol-v1/*/rag_output_trec_rag_2026.jsonl`
+  — read only for narrative text, which our other published reports already show.
+
+**Output:** `reports/2026-organizer-score-explorer.html`, a single self-contained
+file with no external runtime dependencies, light/dark aware, keyboard operable,
+and readable at phone width.
+
+```bash
+python code/trec_rag/organizer_score_explorer.py .
+```
+
+The module reshapes the organizers' released numbers and computes no metric of
+its own. "Above field median" uses the organizers' own `*_median` columns, which
+summarise all 114 evaluated runs across 27 teams — not our team alone. The six
+collections are kept separate throughout, because they cover different narrative
+sets with different items and are not comparable to each other.
+
+**Validation:** regenerate and confirm the row count is 530 (RAG 17×2 + 25×2 +
+25×2 = 134; Retrieval 82×3 + 25×3 + 25×3 = 396), that the six collection
+summaries reproduce the `all` rows in each TSV, and that the paper's two results
+tables still match those summaries.

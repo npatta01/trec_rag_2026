@@ -1,0 +1,67 @@
+
+<div id="deck-controls">
+  <button id="theme-toggle" type="button" data-state="auto">
+    <span class="dot" aria-hidden="true"></span><span id="theme-name">Auto</span>
+  </button>
+</div>
+<script>
+(function () {
+  // One button, four looks. "Auto" follows the system; Light and Dark pin it,
+  // because the machine a talk is given on is often not the one it was
+  // written on. "Storybook" is the sibling deck's cream palette and its four
+  // illustrations — a whole look rather than a brightness, which is why it
+  // sits on the same cycle instead of a second button beside it.
+  var THEMES = ["auto", "dark", "light", "story"];
+  var THEME_LABEL = { auto: "Auto", dark: "Dark", light: "Light", story: "Storybook" };
+  var THEME_KEY = "trec-talk-theme";
+
+  var root = document.documentElement;
+  var themeButton = document.getElementById("theme-toggle");
+  var themeName = document.getElementById("theme-name");
+
+  function save(key, value) {
+    try { localStorage.setItem(key, value); } catch (err) { /* private window */ }
+  }
+
+  function load(key, allowed) {
+    var value = null;
+    try { value = localStorage.getItem(key); } catch (err) { value = null; }
+    return allowed.indexOf(value) >= 0 ? value : allowed[0];
+  }
+
+  function applyTheme(value) {
+    if (value === "auto") {
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", value);
+    }
+    themeButton.setAttribute("data-state", value);
+    themeName.textContent = THEME_LABEL[value];
+    themeButton.setAttribute(
+      "aria-label",
+      "Look: " + THEME_LABEL[value] + (value === "auto" ? " (follows your system)" : "") + ". Click to change."
+    );
+    save(THEME_KEY, value);
+  }
+
+  applyTheme(load(THEME_KEY, THEMES));
+
+  function cycle(list, current) {
+    return list[(list.indexOf(current) + 1) % list.length];
+  }
+
+  themeButton.addEventListener("click", function () {
+    applyTheme(cycle(THEMES, themeButton.getAttribute("data-state")));
+  });
+
+  // "d" for brightness — but not over Reveal's own overlays, and not while
+  // something is being typed into.
+  document.addEventListener("keydown", function (event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) { return; }
+    var target = event.target;
+    if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) { return; }
+    if (document.querySelector(".reveal.overview, .slide-menu-wrapper.active")) { return; }
+    if (event.key === "d") { themeButton.click(); }
+  });
+})();
+</script>

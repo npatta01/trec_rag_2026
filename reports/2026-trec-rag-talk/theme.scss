@@ -1,0 +1,1799 @@
+/*-- scss:defaults --*/
+
+// Figures are inlined by inline-svg.lua with their own :root colour blocks
+// stripped, so the variables below are the single source of colour for both
+// the slide chrome and every diagram. A palette switches the chrome only.
+
+$font-family-sans-serif: Inter, ui-sans-serif, system-ui, -apple-system,
+  BlinkMacSystemFont, "Segoe UI", sans-serif !default;
+$presentation-font-size-root: 32px !default;
+$presentation-heading-font-weight: 680 !default;
+$presentation-heading-line-height: 1.12 !default;
+$presentation-line-height: 1.38 !default;
+
+$body-bg: #f7f8fa !default;
+$body-color: #151a21 !default;
+$link-color: #087c72 !default;
+$presentation-heading-color: #151a21 !default;
+$code-block-font-size: 0.6em !default;
+
+/*-- scss:rules --*/
+
+// ---- palettes --------------------------------------------------------------
+// Two palettes, switched by the control at the top right (or the "p" key).
+//
+// Slate is the default: neutral chrome, and a cyan/violet accent pair. Forest
+// is the original — green-tinted chrome with teal/indigo — kept because the
+// repository's other diagrams use it.
+//
+// What stays put in both: amber always means advisory, green always means
+// validated, and the retrieval accent is always the cooler of the pair while
+// generation is always the warmer. Colour is never the only cue — cards carry
+// a left bar and a text label too — so the pair only has to be telling apart,
+// not memorised.
+//
+// Figures are inlined by inline-svg.lua with their own :root blocks stripped,
+// so these variables repaint the diagrams as well as the slides.
+
+@mixin deck-light {
+  // Structural, not semantic. The title plate, the section breaks, the
+  // progress bar and the menu icon are not about retrieval, and painting
+  // them with --ret both spent the retrieval accent on furniture and turned
+  // the "blue" transitions teal whenever Forest was on. --deck is the same
+  // blue in both palettes for exactly that reason.
+  --deck: #1f5fa8;
+
+  // Warm off-white, not cool grey. The illustrations are painted on cream
+  // and show in every look now; a blue-grey page made them read as pasted on
+  // rather than printed with the deck. Luminance is within a point of the
+  // old #f7f8fa, so the measured contrasts hold.
+  // The drawings' own cream, and the page is it. Measured at 1024x768: the
+  // slide box is 963x572, so 98px of page shows above and below it. Any
+  // slide whose background differs from the page draws a hard seam across
+  // the window there — the plate did exactly that. One cream, no band.
+  --bg: #fdf1da;
+  --panel: #fffdf8;
+  --ink: #151a21;
+  --muted: #515a67;
+  --line: #646d7a;
+  --hairline: rgb(100 109 122 / 0.28);
+  --ret: #0a6d8a;
+  --ret-soft: #d7eef7;
+  --gen: #6a46c9;
+  --gen-soft: #ebe5ff;
+  --ok: #277a45;
+  --ok-soft: #ddf2e3;
+  --adv: #91610d;
+  --adv-soft: #faecc7;
+
+  // Five stage hues, so a pipeline figure can tell its steps apart.
+  --s1: #106f92;
+  --s1-soft: #d6edf5;
+  --s2: #5530e8;
+  --s2-soft: #dcd6f5;
+  --s3: #b01496;
+  --s3-soft: #f5d6f0;
+  --s4: #965811;
+  --s4-soft: #f5e7d6;
+  --s5: #0e7a3d;
+  --s5-soft: #d6f5e3;
+}
+
+@mixin deck-dark {
+  --deck: #7ab3f5;
+
+  // The whole dark page is the blue the transitions used to be plated in.
+  // A plate of any colour bands at the letterbox — 98px of page shows above
+  // and below each slide — so the way to keep blue transitions is to make
+  // the page blue and drop the plate. #354454 is exactly the colour the
+  // plate was mixing to.
+  --bg: #354454;
+  // The panel is recessed, not raised. Lifting it to #415467 made cards the
+  // brightest surface on the slide and broke 22 pieces of text: the
+  // retrieval accent fell to 3.97:1, muted to 4.16, --deck to 3.57. At
+  // #2c3947 the same three are 5.99, 6.28 and 5.38, and the soft tints are
+  // already darker than the page so they agree with it.
+  --panel: #2c3947;
+  --ink: #eef1f6;
+  --muted: #b6bec9;
+  --line: #8d96a3;
+  --hairline: rgb(141 150 163 / 0.34);
+  --ret: #5fc6e4;
+  --ret-soft: #11323f;
+  --gen: #b9a3ff;
+  --gen-soft: #2b2452;
+  --ok: #82dda0;
+  --ok-soft: #173c25;
+  --adv: #f0c46f;
+  --adv-soft: #433616;
+
+  // Five stage hues, so a pipeline figure can tell its steps apart. These
+  // were set against the old near-black page and all five fell under AA on
+  // it when the page became blue — s1 3.59, s2 2.77, s3 3.09, s4 3.54,
+  // s5 4.39 — while still passing on their own tints, which is why a DOM
+  // contrast pass missed it: they live inside the SVG figures. Lightened
+  // until each clears 4.8 on the page and 5.6 on its tint.
+  --s1: #61c0e1;
+  --s1-soft: #17353f;
+  --s2: #baacf1;
+  --s2-soft: #1f173f;
+  --s3: #ef9ae0;
+  --s3-soft: #3f1739;
+  --s4: #e5a861;
+  --s4-soft: #3f2d17;
+  --s5: #3bcc7a;
+  --s5-soft: #173f29;
+}
+
+// Light is the base. Dark arrives two ways: because the system asks for it,
+// or because the reader pinned it with the control. Pinning has to work on a
+// machine whose system says the opposite — a hall laptop in light mode, a
+// presenter who wants dark at 9am — so the media query yields to a pin.
+//
+// There used to be a second palette, Forest, on a toggle beside this one. It
+// doubled every definition here and every rule that referenced one, and the
+// deck is not improved by being green. One palette, two brightnesses.
+:root {
+  color-scheme: light dark;
+  @include deck-light;
+}
+
+// Dark by system preference, unless the reader pinned light.
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    @include deck-dark;
+  }
+}
+
+// Dark because the reader pinned it, whatever the system says. Written after
+// the media query so it also beats the light defaults above.
+:root[data-theme="dark"] {
+  @include deck-dark;
+}
+
+
+// Storybook: the palette and the illustrations from the sibling deck, offered
+// here as a third look rather than a second deck. One mood, always light —
+// it is a painted cream page, so it has no dark twin and does not follow the
+// system. Values taken from 2026-trec-rag-talk-cute/theme.scss.
+@mixin deck-story {
+  --bg: #fbf3df;
+  --panel: #fffaf0;
+  --ink: #07394a;
+  --muted: #345c68;
+  --line: #9a8a68;
+  --hairline: rgb(7 57 74 / 0.22);
+
+  // Structural furniture is a deep teal here, not the blue of the plain deck:
+  // a cold blue on a cream page reads as a foreign element.
+  --deck: #0d6f84;
+
+  --ret: #00676e;
+  --ret-soft: #dbeee7;
+  // #b4541c in the sibling deck. As a card label on its own tint that is
+  // 4.02:1, under AA; #9c4514 is 5.19:1 and still unmistakably the warmer
+  // half of the pair.
+  --gen: #9c4514;
+  --gen-soft: #fbe3cf;
+  // #3f7a35 is 4.69 on the page but 4.37 on its own tint — under AA, which
+  // the sibling session found and I reproduced. #39702f is 5.37 / 5.01.
+  --ok: #39702f;
+  --ok-soft: #e2f0d8;
+  // #9a6a07 in the sibling deck, where it is what the eyebrows are set in.
+  // On this deck's cream it measured 4.28:1 against the page and 4.10:1 on
+  // its own tint — under AA on eight slides. #855a06 is 5.48 and 5.26.
+  --adv: #855a06;
+  --adv-soft: #fdeec4;
+
+  // Five stage hues, warm-side versions of the originals.
+  --s1: #0d6f84;
+  --s1-soft: #d9eef3;
+  --s2: #6b4bb8;
+  --s2-soft: #e8e0f7;
+  --s3: #a8336f;
+  --s3-soft: #f8dfea;
+  --s4: #855a06;
+  --s4-soft: #fdeec4;
+  --s5: #39702f;
+  --s5-soft: #e2f0d8;
+
+  color-scheme: light;
+}
+
+// Written last so it beats the light base, the dark media query and the
+// pinned-dark rule on equal specificity.
+:root[data-theme="story"] {
+  @include deck-story;
+}
+
+// No plate in dark either, now that the page is the plate's colour.
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="story"]) {
+    .reveal .slides > section.divider,
+    .reveal .slides > section.quarto-title-block { background: var(--bg); }
+  }
+}
+
+:root[data-theme="dark"] {
+  .reveal .slides > section.divider,
+  .reveal .slides > section.quarto-title-block { background: var(--bg); }
+}
+
+// Keep scrollbars, form controls and the browser's own canvas in step with a
+// pinned choice rather than the system's.
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+
+html.reveal-full-page,
+body.reveal-viewport,
+.reveal {
+  background: var(--bg) !important;
+  color: var(--ink);
+}
+
+.reveal .slides section {
+  text-align: left;
+}
+
+.reveal h1,
+.reveal h2,
+.reveal h3,
+.reveal h4 {
+  color: var(--ink);
+  letter-spacing: -0.012em;
+  text-transform: none;
+}
+
+.reveal h2 {
+  font-size: 1.22em;
+  margin-bottom: 0.5em;
+}
+
+.reveal h3 {
+  font-size: 1.02em;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.reveal a {
+  color: var(--deck);
+  text-underline-offset: 3px;
+}
+
+.reveal a:hover {
+  color: var(--ink);
+}
+
+// Progress bar and controls are deck furniture, so they take the structural
+// token rather than the retrieval accent they used to borrow.
+.reveal .progress {
+  color: var(--deck);
+  height: 4px;
+}
+
+.reveal .controls {
+  color: var(--deck);
+}
+
+.reveal .slide-number {
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.42em;
+}
+
+// ---------------------------------------------------------------- figures
+
+.reveal section img,
+.reveal section svg {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  margin: 0 auto;
+  display: block;
+}
+
+.reveal figure figcaption,
+.reveal .figure-caption {
+  color: var(--muted);
+  font-size: 0.55em;
+  line-height: 1.34;
+  text-align: left;
+  margin-top: 0.5em;
+}
+
+// Keeps a wide diagram inside the slide box on any viewport.
+.diagram {
+  width: 100%;
+  margin: 0 auto;
+
+  img,
+  svg {
+    width: 100%;
+    max-height: 62vh;
+    height: auto;
+  }
+}
+
+.diagram-tall img,
+.diagram-tall svg {
+  max-height: 72vh;
+  width: auto;
+  max-width: 100%;
+}
+
+// ---------------------------------------------------------------- eyebrow
+
+.eyebrow {
+  color: var(--ret);
+  font-size: 0.55em;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin: 0 0 0.35em;
+}
+
+.trace-step {
+  color: var(--adv);
+  font-size: 0.55em;
+  font-weight: 760;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 0 0 0.3em;
+}
+
+// ---------------------------------------------------------------- cards
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 0.7em 0.85em;
+  font-size: 0.82em;
+  line-height: 1.4;
+
+  p {
+    margin: 0 0 0.45em;
+  }
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+
+  // Nested content is already scaled by the card.
+  ul,
+  ol {
+    margin: 0.2em 0 0.3em;
+    font-size: 1em;
+  }
+}
+
+.card-label {
+  display: block;
+  font-size: 0.74em;
+  font-weight: 760;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 0.4em;
+  color: var(--muted);
+}
+
+// Role-coded cards. Each carries a left bar so colour is never the only cue,
+// and each label states the role in words.
+.card-source {
+  border-left: 5px solid var(--adv);
+  background: var(--adv-soft);
+}
+.card-source .card-label {
+  color: var(--adv);
+}
+
+.card-ret {
+  border-left: 5px solid var(--ret);
+  background: var(--ret-soft);
+}
+.card-ret .card-label {
+  color: var(--ret);
+}
+
+.card-gen {
+  border-left: 5px solid var(--gen);
+  background: var(--gen-soft);
+}
+.card-gen .card-label {
+  color: var(--gen);
+}
+
+.card-ok {
+  border-left: 5px solid var(--ok);
+  background: var(--ok-soft);
+}
+.card-ok .card-label {
+  color: var(--ok);
+}
+
+.card-plain {
+  border-left: 5px solid var(--line);
+}
+
+// Verbatim corpus or model text.
+.quote {
+  font-size: 0.84em;
+  line-height: 1.45;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-left: 5px solid var(--line);
+  border-radius: 10px;
+  padding: 0.6em 0.8em;
+
+  p {
+    margin: 0 0 0.4em;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.quote cite,
+.src {
+  display: block;
+  font-style: normal;
+  color: var(--muted);
+  font-size: 0.82em;
+  margin-top: 0.4em;
+}
+
+// ---------------------------------------------------------------- grids
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6em;
+  align-items: start;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.55em;
+  align-items: start;
+}
+
+.grid-2-1 {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 0.7em;
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .grid-2,
+  .grid-3,
+  .grid-2-1 {
+    grid-template-columns: 1fr;
+  }
+}
+
+// ---------------------------------------------------------------- tables
+
+.reveal table {
+  font-size: 0.74em;
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.2em 0 0.3em;
+  font-variant-numeric: tabular-nums;
+}
+
+.reveal table th {
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 740;
+  font-size: 0.92em;
+  text-align: left;
+  border-bottom: 2px solid var(--line);
+  padding: 0.34em 0.5em;
+}
+
+.reveal table td {
+  border-bottom: 1px solid var(--hairline);
+  padding: 0.32em 0.5em;
+  color: var(--ink);
+}
+
+.reveal table td:not(:first-child),
+.reveal table th:not(:first-child) {
+  text-align: right;
+}
+
+.reveal table tr.sep td {
+  border-bottom-width: 2px;
+  border-bottom-color: var(--line);
+}
+
+// ---------------------------------------------------------------- notes
+
+.boundary {
+  font-size: 0.62em;
+  line-height: 1.4;
+  color: var(--muted);
+  margin-top: 0.5em;
+}
+
+// An evidence-boundary note: what the number on this slide does NOT show.
+.boundary {
+  border-left: 4px solid var(--adv);
+  background: var(--adv-soft);
+  color: var(--ink);
+  border-radius: 0 8px 8px 0;
+  padding: 0.5em 0.7em;
+}
+
+.boundary strong {
+  color: var(--adv);
+}
+
+// ---------------------------------------------------------------- misc
+
+.reveal code {
+  color: var(--ret);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 0.05em 0.3em;
+  font-size: 0.92em;
+}
+
+.reveal pre code {
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 0.7em 0.9em;
+  background: var(--panel);
+  color: var(--ink);
+  line-height: 1.42;
+}
+
+.reveal ul,
+.reveal ol {
+  font-size: 0.84em;
+  line-height: 1.42;
+}
+
+.reveal li {
+  margin-bottom: 0.3em;
+}
+
+.reveal .small,
+.small {
+  font-size: 0.58em;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.reveal section.title-slide h1 {
+  font-size: 1.62em;
+  margin-bottom: 0.3em;
+}
+
+// No rule above a section break. This used to draw a 2px line across the top
+// of every .divider slide -- the contents slide, the Appendix break and the
+// four picture breaks -- while the other 25 slides had nothing, so the deck
+// looked like it had two kinds of header. The picture breaks keep their own
+// edge from the plate's colour and radius; the plain ones need none.
+
+// Respect reduced-motion preferences.
+@media (prefers-reduced-motion: reduce) {
+  .reveal .slides section,
+  .reveal .fragment {
+    transition: none !important;
+  }
+}
+
+// Diagrams carry fig-alt for screen readers, never a printed caption.
+.reveal figure > figcaption:empty { display: none; }
+.reveal .quarto-figure { margin: 0; }
+.reveal .quarto-figure figure { margin: 0; }
+
+// Keep a slide's content inside the frame rather than scrolling it.
+.reveal .slides section { overflow: visible; }
+
+// ---------------------------------------------------------------- layout
+// Quarto pins reveal's own `center` to false, so the slide box is laid out
+// here instead: a fixed header, a body that grows to fill whatever is left,
+// and a caption pinned to the bottom edge. Without this every slide was a
+// centred stack, so short slides floated in a band and tall ones overflowed.
+// Scoped to .present so hidden sections keep reveal's display:none.
+
+.reveal .slides > section.present {
+  display: flex !important;
+  flex-direction: column;
+  height: 100%;
+  padding: 0.2em 0 0;
+}
+
+// Header: title and its kicker, natural height.
+.reveal .slides > section > h2,
+.reveal .slides > section > .eyebrow,
+.reveal .slides > section > .trace-step {
+  flex: 0 0 auto;
+}
+
+.reveal .slides > section > h2 {
+  margin: 0 0 0.16em;
+}
+
+// Body: everything that should expand into the free space.
+// Only the forms that genuinely read better when larger. A bordered text
+// block or a table stretched to fill just draws a long empty rule.
+.reveal .slides > section > .diagram,
+.reveal .slides > section > .nargrid,
+.reveal .slides > section > .reflist,
+.reveal .slides > section > .roadmap,
+.reveal .slides > section > .adds,
+.reveal .slides > section > .grid-2,
+.reveal .slides > section > .grid-3,
+.reveal .slides > section > .grid-2-1,
+.reveal .slides > section > .qgrid {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+// The query grid claims the free height and spreads its rows through it, so
+// the slide is not half empty and opening one entry barely moves the others.
+.reveal .slides > section > .qgrid {
+  align-content: space-evenly;
+}
+
+// These rows used to stretch to fill the slide, which turned a card holding
+// four lines into a tall box three-quarters empty. Height is for making the
+// content less cramped, not for filling on its own account: the rows keep
+// their natural size, sit in the middle of whatever height is going, and the
+// room left over goes into the padding and the gap below.
+.reveal .slides > section > .grid-2,
+.reveal .slides > section > .grid-3,
+.reveal .slides > section > .grid-2-1,
+.reveal .slides > section > .nargrid {
+  align-content: center;
+}
+
+// .roomy is the other half of that: a slide whose cards hold only a few lines
+// has height to spare, and it goes into the lines rather than into an empty
+// box below them. Opt in per slide, so a card that is already full is left
+// at the size that fits it.
+.reveal .slides > section > .grid-2.roomy > .card {
+  padding: 1.15em 1.25em;
+  gap: 0.5em;
+
+  strong { font-size: 1.22em; }
+  .meter { margin-top: 0.15em; }
+  .meter-bar { height: 0.72em; }
+  .relay { line-height: 2.1; }
+}
+
+.reveal .slides > section > .grid-2 > .card,
+.reveal .slides > section > .grid-3 > .card,
+.reveal .slides > section > .grid-2-1 > .card {
+  display: flex;
+  flex-direction: column;
+  // top-aligned, not centred: two cards of different content length have to
+  // line up with each other, and a card with room under it reads as a card
+  justify-content: flex-start;
+}
+
+// Footer: the caption sits on the bottom edge, which is what makes the body
+// above it actually use the height.
+.reveal .slides > section > .cap,
+.reveal .slides > section > .boundary {
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+
+// A diagram fills its box in both axes and keeps its aspect ratio, instead of
+// being capped at a fraction of the viewport and leaving the rest empty.
+.diagram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 0;
+
+  p,
+  figure,
+  .quarto-figure {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+
+  img,
+  svg {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    object-fit: contain;
+  }
+}
+
+.diagram-tall img,
+.diagram-tall svg {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+// ------------------------------------------------- highlight over disclosure
+// Long source text stays on the slide for provenance, but dimmed, so the eye
+// lands on the operative clause instead of reading ninety-five words of prose.
+
+.pull {
+  font-size: 1.42em;
+  font-weight: 760;
+  line-height: 1.18;
+  color: var(--ink);
+  margin: 0.1em 0 0.5em;
+}
+
+.hl {
+  background: var(--adv-soft);
+  color: var(--ink);
+  padding: 0.04em 0.2em;
+  border-radius: 5px;
+  box-shadow: inset 0 -0.14em 0 var(--adv);
+}
+
+.redact {
+  font-size: 0.62em;
+  line-height: 1.5;
+  color: var(--muted);
+  border-left: 3px solid var(--hairline);
+  padding-left: 0.8em;
+  margin-top: 0.2em;
+}
+
+.redact strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+// One short caption under a figure, pinned to the bottom edge by the layout.
+.cap {
+  font-size: 0.6em;
+  line-height: 1.4;
+  color: var(--muted);
+  margin-top: 0.5em;
+}
+
+// The one line somebody in the back row might write down, so the URL is the
+// biggest thing on the strip and nothing shares the row with it. The repo
+// belongs to the whole talk rather than to a stage of it, so this takes
+// --deck, the structural token, and none of the four semantic roles.
+.repo {
+  display: grid;
+  justify-items: center;
+  gap: 0.14em;
+  margin-top: 0.6em;
+  padding: 0.52em 1em 0.6em;
+  text-align: center;
+  background: var(--panel);
+  border: 2px solid color-mix(in oklab, var(--deck) 42%, var(--panel));
+  border-radius: 12px;
+}
+
+.repo-k {
+  color: var(--muted);
+  font-size: 0.55em;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.reveal .repo .repo-url-row { line-height: 1; }
+
+.reveal .repo a.repo-url {
+  font-size: 1.12em;
+  font-weight: 780;
+  line-height: 1.2;
+  text-decoration: none;
+  border-bottom: 2px solid color-mix(in oklab, var(--deck) 45%, var(--panel));
+}
+
+.repo-v {
+  color: var(--muted);
+  font-size: 0.6em;
+  line-height: 1.35;
+  max-width: 46em;
+}
+
+// A short numbered stack naming the parts of something without explaining
+// each one. Markdown nests a <ul> inside the div, so the reset targets that.
+.facets {
+  font-size: 1.02em;
+  margin: 0;
+
+  ul {
+    counter-reset: facet;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 1em;
+  }
+
+  li {
+    counter-increment: facet;
+    position: relative;
+    padding-left: 1.75em;
+    margin-bottom: 0.72em;
+    font-weight: 680;
+    line-height: 1.22;
+  }
+
+  li::marker {
+    content: "";
+  }
+
+  li::before {
+    content: counter(facet);
+    position: absolute;
+    left: 0;
+    top: -0.04em;
+    width: 1.3em;
+    height: 1.3em;
+    border-radius: 50%;
+    background: var(--ret-soft);
+    color: var(--ret);
+    border: 2px solid var(--ret);
+    font-size: 0.68em;
+    font-weight: 800;
+    display: grid;
+    place-items: center;
+    line-height: 1;
+  }
+}
+
+// Query strings as chips rather than one run-on code line.
+.chips code {
+  display: block;
+  margin: 0 0 0.4em;
+  font-size: 0.82em;
+  padding: 0.32em 0.55em;
+}
+
+// ------------------------------------------------- expandable query list
+// Each subnarrative collapses to its question; clicking reveals the actual
+// BM25 queries sent for it. Keyboard operable for free via <details>.
+
+.qgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.28em 0.6em;
+  counter-reset: q;
+  align-content: start;
+}
+
+.qgrid details {
+  counter-increment: q;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-left: 5px solid var(--ret);
+  border-radius: 8px;
+  padding: 0.24em 0.5em;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.16);
+}
+
+.qgrid summary {
+  // Quarto styles bare <summary> a slate blue, which is readable on white and
+  // washed out on a dark panel (2.74:1). These are the clickable questions, so
+  // they take the deck's own ink.
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.62em;
+  font-weight: 700;
+  line-height: 1.24;
+  list-style: none;
+  display: flex;
+  gap: 0.55em;
+  align-items: baseline;
+}
+
+.qgrid summary::-webkit-details-marker {
+  display: none;
+}
+
+.qgrid summary::before {
+  content: counter(q);
+  flex: 0 0 auto;
+  color: var(--ret);
+  font-weight: 800;
+}
+
+.qgrid summary::after {
+  content: "+";
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.qgrid details[open] summary::after {
+  content: "−";
+}
+
+.qgrid details[open] {
+  background: var(--ret-soft);
+}
+
+.qgrid code {
+  display: block;
+  font-size: 0.55em;  // 17.6 slide px: the deck's floor, not under it
+  margin: 0.16em 0 0;
+  padding: 0.18em 0.4em;
+  line-height: 1.26;
+}
+
+@media (max-width: 820px) {
+  .qgrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+// The eight angles on their own, before the queries they became. Same cards,
+// same numbering, same accent cycle as .qgrid, so a question keeps its colour
+// across the two slides; without the queries underneath they can be set large
+// enough to read from the back of a room, which is the point of the split.
+.nargrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.34em 0.6em;
+  counter-reset: q;
+  align-content: center;
+}
+
+// The number and the glyph sat in the flow with the question, so what got
+// centred was the three of them together and every question read as shifted
+// right. They move out to the left edge and the question centres on the card
+// itself; the symmetric padding keeps a long one from reaching the badge.
+// The eight questions are the whole slide and were set smaller than the
+// prose around them -- there is height to spare here, so they take it.
+.nargrid .qcard {
+  position: relative;
+  justify-content: center;
+  text-align: center;
+  counter-increment: q;
+  display: flex;
+  gap: 0.55em;
+  align-items: center;
+  background: var(--q-soft);
+  border: 1px solid var(--hairline);
+  border-left: 5px solid var(--q);
+  border-radius: 8px;
+  padding: 0.62em 3.4em;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.16);
+  color: var(--ink);
+  font-size: 1.04em;
+  font-weight: 700;
+  line-height: 1.24;
+}
+
+.nargrid .qcard::before {
+  content: counter(q);
+  position: absolute;
+  left: 0.7em;
+  color: var(--q);
+  font-weight: 800;
+}
+
+.nargrid .qcard > .qico {
+  position: absolute;
+  left: 2.1em;
+}
+
+.nargrid .qcard:nth-child(3n + 1) { --q: var(--ret); --q-soft: var(--ret-soft); }
+.nargrid .qcard:nth-child(3n + 2) { --q: var(--gen); --q-soft: var(--gen-soft); }
+.nargrid .qcard:nth-child(3n + 3) { --q: var(--adv); --q-soft: var(--adv-soft); }
+
+.reveal .slides > section > .nargrid {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (max-width: 820px) {
+  .nargrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+// An illustration rather than a diagram: fills its grid cell, no border.
+// An illustration rather than a diagram. The art carries its own dark ground,
+// so it is framed as a panel: that reads as deliberate in light mode too,
+// where a raster cannot repaint itself the way the SVG figures do.
+.scene {
+  display: flex;
+  align-items: center;
+  min-height: 0;
+
+  p, figure, .quarto-figure { margin: 0; width: 100%; }
+
+  img, svg {
+    width: 100%;
+    height: auto;
+    max-height: 46vh;
+    object-fit: contain;
+    border-radius: 12px;
+    border: 1px solid var(--hairline);
+  }
+}
+
+// The planner's instruction, quoted. It is the artefact, so it keeps the
+// typewriter face and the rule down its left edge, but it is one sentence set
+// large rather than a screenful of code: the three numbered rules that follow
+// it are broken out into cards of their own.
+.promptlead {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.66em;
+  line-height: 1.5;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-left: 5px solid var(--gen);
+  border-radius: 0 10px 10px 0;
+  padding: 0.6em 0.8em;
+  margin: 0 0 0.6em;
+}
+
+// The five handoffs as a strip: moon, sun, moon, sun, moon. The alternation is
+// the whole point, so it has to survive being read from the back of a room.
+.relay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2em;
+  margin-top: 0.55em;
+  font-size: 0.7em;
+  font-weight: 700;
+
+  > span {
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink);
+    gap: 0.22em;
+    padding: 0.1em 0.45em;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  i {
+    color: var(--muted);
+    font-style: normal;
+    font-weight: 600;
+  }
+}
+
+// The tint and the symbol carry which writer it is; the words take the deck's
+// ink, because an accent on its own soft tint only just clears 4.5:1 in one of
+// the four palette-and-theme combinations.
+.relay-l {
+  background: var(--gen-soft);
+
+  .glyph { color: var(--gen); }
+}
+
+.relay-s {
+  background: var(--ret-soft);
+
+  .glyph { color: var(--ret); }
+}
+
+// Sol is the sun and Luna the moon wherever they are named, including inside a
+// label whose own colour would otherwise paint both of them the same.
+.g-sun {
+  color: var(--ret);
+}
+
+.g-moon {
+  color: var(--gen);
+}
+
+// Role glyphs: the same pen nib (Sol writes) and magnifier (Luna judges) used
+// in the two-writers figure, so the two stay recognisable away from it.
+// Reveal's own `.reveal section svg { display: block; margin: 0 auto }` is more
+// specific than a bare .glyph, so match its weight or the glyph lands centred
+// on a line of its own.
+.reveal section svg.glyph {
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  margin: 0 0.16em 0 0;
+  vertical-align: -0.17em;
+  overflow: visible;
+}
+
+// The deck controls: light/dark, and palette. Faint until wanted, never
+// printed, and out of the way of every slide's content.
+#deck-controls {
+  position: fixed;
+  top: 0.75rem;
+  right: 1rem;
+  z-index: 50;
+  display: flex;
+  gap: 0.4rem;
+}
+
+#deck-controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.32em 0.7em 0.32em 0.5em;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+#deck-controls button:hover,
+#deck-controls button:focus-visible {
+  opacity: 1;
+  color: var(--ink);
+}
+
+#deck-controls .dot {
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+}
+
+// The dot says which of the three states is on without needing the word.
+#theme-toggle .dot {
+  border-color: currentColor;
+}
+
+#theme-toggle[data-state="dark"] .dot {
+  background: currentColor;
+}
+
+#theme-toggle[data-state="light"] .dot {
+  background: transparent;
+}
+
+#theme-toggle[data-state="auto"] .dot {
+  background: linear-gradient(90deg, transparent 0 50%, currentColor 50% 100%);
+}
+
+@media print {
+  #deck-controls { display: none; }
+}
+
+// The query numbers read as a chip rather than a loose digit, so eight open
+// cards still scan as a numbered list.
+.qgrid summary::before {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.45em;
+  height: 1.45em;
+  border-radius: 50%;
+  background: var(--ret);
+  color: var(--panel);
+  font-size: 0.82em;
+}
+
+// An open card is tinted, so open and folded are tellable apart at a glance.
+.qgrid details[open] {
+  border-left-color: var(--gen);
+}
+
+.qgrid details[open] summary::before {
+  background: var(--gen);
+}
+
+// One pair of near-duplicate sentences, and the verdict on them. This is the
+// step the evidence figure can only gesture at.
+.dupe {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.9em;
+  margin: 0.25em 0 0;
+}
+
+.dupe-pair {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22em;
+  min-width: 0;
+}
+
+.dupe-a,
+.dupe-b {
+  display: block;
+  font-size: 0.56em;
+  line-height: 1.32;
+  padding: 0.3em 0.6em;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-left: 4px solid var(--ret);
+}
+
+.dupe-verdict {
+  flex: 0 0 34%;
+  font-size: 0.54em;
+  line-height: 1.34;
+  color: var(--muted);
+  padding-left: 0.9em;
+  border-left: 2px solid var(--ret);
+}
+
+// Each subnarrative gets a colour and a symbol of its own, cycling through
+// three accents, so eight open cards read as eight different questions rather
+// than one wall. The cycle drives the rule, the chip and the symbol together.
+.qgrid details:nth-child(3n + 1) {
+  --q: var(--ret);
+  --q-soft: var(--ret-soft);
+}
+
+.qgrid details:nth-child(3n + 2) {
+  --q: var(--gen);
+  --q-soft: var(--gen-soft);
+}
+
+.qgrid details:nth-child(3n + 3) {
+  --q: var(--adv);
+  --q-soft: var(--adv-soft);
+}
+
+.qgrid details,
+.qgrid details[open] {
+  border-left-color: var(--q);
+}
+
+.qgrid details[open] {
+  background: var(--q-soft);
+}
+
+.qgrid summary::before,
+.qgrid details[open] summary::before {
+  background: var(--q);
+}
+
+.qgrid summary .glyph {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1.2em;
+  height: 1.2em;
+  margin: 0;
+  color: var(--q);
+}
+
+// A schema record: field name on the left in the typewriter face, what goes in
+// it on the right. The point of the slide is that the object is small and
+// every field is checked, so the fields have to be legible as a list.
+.record {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3em 0.8em;
+  align-content: start;
+  font-size: 0.6em;
+  line-height: 1.32;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-left: 5px solid var(--gen);
+  border-radius: 0 10px 10px 0;
+  padding: 0.7em 0.9em;
+}
+
+// One obligation shown filled in, in plain words rather than schema keys: the
+// slide was being read as a prompt dump, which is exactly what a plan is not.
+
+// Luna's screen is an AND of five booleans. Drawn as five chips joined by the
+// operator, that is one glance; written as a sentence it was a paragraph.
+// Five legs of the talk. Each section opens on the same list with its own leg
+// lit, so the roadmap and the section breaks are one component: the audience
+// can always see where they are and what is left, without a contents slide
+// they only ever see once.
+.roadmap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  margin: 0.5em 0 0;
+}
+
+.leg {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75em;
+  font-size: 0.82em;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--muted);
+  padding: 0.3em 0.7em;
+  border-radius: 8px;
+  border-left: 5px solid transparent;
+}
+
+.leg-n {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82em;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.leg-now {
+  color: var(--ink);
+  background: var(--ret-soft);
+  border-left-color: var(--ret);
+}
+
+.leg-now .leg-n { color: var(--ret); }
+
+// A section break is a held pause, so it centres instead of filling.
+.reveal .slides > section.divider > .roadmap { align-content: center; }
+
+// Luna's five booleans read as a checklist, not a chain of chips: the question
+// from the room was "what are the five", so each one now carries its own gloss.
+.gatelist {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.34em 0.7em;
+  align-content: start;
+  margin: 0.2em 0 0;
+  font-size: 0.62em;
+  line-height: 1.3;
+}
+
+.gl-k {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  font-weight: 750;
+  color: var(--ink);
+  white-space: nowrap;
+
+  &::before {
+    content: "\2713";
+    font-weight: 800;
+    color: var(--gen);
+  }
+}
+
+.gl-v { color: var(--muted); }
+
+// Pandoc wraps a contiguous run of inline spans in a <p>. That leaves the grid
+// (or flex row) holding a single child, and every pair collapses onto one line.
+// display:contents drops the wrapper out of the box tree so the spans become
+// items of the layout again, however Pandoc decides to wrap them.
+.record > p,
+.gatelist > p,
+.adds > p,
+.reflist > p,
+.roadmap > p {
+  display: contents;
+}
+
+.f-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  color: var(--gen);
+  white-space: nowrap;
+}
+
+.f-val {
+  color: var(--ink);
+}
+
+// The record and the three notes beside it each take the free height.
+.reveal .slides > section > .grid-2 > .record {
+  align-self: stretch;
+}
+
+// An answer's length against the 1,024-word ceiling, so two word counts read
+// as two fractions of the same budget rather than two bare numbers.
+.meter {
+  display: block;
+  margin-top: 0.5em;
+}
+
+.meter-bar {
+  display: block;
+  height: 0.5em;
+  border-radius: 999px;
+  background: var(--hairline);
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.meter-cap {
+  display: block;
+  margin-top: 0.3em;
+  font-size: 0.7em;
+  color: var(--muted);
+}
+
+.fill-ret { color: var(--ret); }
+.fill-gen { color: var(--gen); }
+
+// ------------------------------------------------------------ section breaks
+// A section break is a held pause, and it is a plate of the deck's own
+// colour with the section name on it. It used to carry a photo-illustration;
+// the picture was decoration that none of the five breaks needed, and the
+// title slide's went for the same reason.
+//
+// The plate is mixed from --deck, the structural token, not from the
+// retrieval accent. Mixed from --ret it came out teal under Forest, which is
+// not the blue that was asked for, and it spent a content colour on a slide
+// that carries no content. Both themes mix toward their own background, so
+// it is a deep blue at night and a pale one by day.
+.reveal .slides > section.divider,
+.reveal .slides > section.quarto-title-block {
+  // No position here, on these least of all. Reveal lays every section out
+  // absolutely; overriding that drops the slide into normal flow and it
+  // stacks below the whole deck.
+  // An absolute section is already the containing block for anything inside.
+  // 34%: at 16% the plate read grey rather than blue (blueness, B-R, only
+  // 22). 34% gives 42 at night and 37 by day, unmistakably blue, with the
+  // section name still at 8.5:1 and 9.9:1 — both above AAA. 44% would look
+  // better still and drops the night plate to 6.6:1, which is below it.
+  background: color-mix(in oklab, var(--deck) 34%, var(--bg));
+  border-radius: 14px;
+}
+
+.reveal .slides > section.divider > h2 {
+  margin: auto 0;
+  width: 100%;
+  text-align: center;
+}
+
+// A section name on an otherwise empty plate was set at the same size as the
+// heading of a slide carrying a whole figure. It is the only thing on the
+// slide, so it can be read from the back of the room. Not the contents
+// slide, which has its five legs underneath and needs the room for them.
+.reveal .slides > section.divider:not(:has(.roadmap)) > h2 {
+  font-size: 2.1em;
+  line-height: 1.1;
+}
+
+.reveal .slides > section.divider:not(:has(.roadmap)) > .cap {
+  font-size: 1.15em;
+}
+
+.reveal .slides > section.divider > .cap {
+  margin-top: auto;
+  padding-bottom: 0.3em;
+  text-align: center;
+  border: 0;
+}
+
+// ------------------------------------------- what the second pass added
+// Four quotes from the submitted answer, each with the absence it is checked
+// against. Two columns, because four stacked rows pushed the caption off.
+.adds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5em 0.7em;
+  align-content: center;
+  margin: 0.2em 0 0;
+}
+
+.add {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-left: 5px solid var(--gen);
+  border-radius: 0 10px 10px 0;
+  padding: 0.6em 0.8em;
+}
+
+.add-q {
+  display: block;
+  font-size: 0.6em;
+  line-height: 1.34;
+  color: var(--ink);
+}
+
+.add-v {
+  display: block;
+  margin-top: 0.45em;
+  font-size: 0.52em;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+// A note that belongs to one card rather than to the slide.
+.foot {
+  display: block;
+  margin-top: 0.55em;
+  font-size: 0.52em;
+  line-height: 1.32;
+  color: var(--muted);
+}
+
+// ------------------------------------------------- two lanes, set large
+// Eight lanes on one slide was a wall, so six moved to the appendix. The pair
+// that stays is only worth keeping if it can be read from the back of a room,
+// so it gets the whole slide and roughly twice the type.
+.qpair {
+  gap: 0.6em 0.9em;
+  align-content: stretch;
+  align-items: stretch;
+  grid-auto-rows: 1fr;
+}
+
+// The card is full height on this slide by design, so its contents spread
+// through it rather than huddling at the top with two thirds of the box
+// empty under them. The queries are the point of the slide and were set
+// smaller than the prose around them; they carry it now.
+.qpair details {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  padding: 0.95em 1.1em;
+  border-left-width: 8px;
+}
+
+.qpair summary {
+  font-size: 1.2em;
+  gap: 0.6em;
+  margin-bottom: 0.2em;
+}
+
+.qpair code {
+  font-size: 0.98em;
+  margin-top: 0.75em;
+  padding: 0.6em 0.8em;
+  line-height: 1.5;
+}
+
+
+// ------------------------------------------------- the storybook pictures
+// Four illustrations from the sibling deck. They are painted on cream, so
+// they only appear in Storybook: on the plain deck's dark or light ground
+// they would read as lit rectangles pasted onto the slide.
+//
+// The sibling session learned the same lesson the expensive way and wrote it
+// down: Reveal letterboxes each slide inside the window, so any slide with a
+// background of its own becomes a rectangle with page showing above and
+// below. In Storybook the plate therefore IS the page — one cream, no band.
+.reveal .slides > section > .secshot {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0.4em 0 0;
+
+    p, figure, .quarto-figure {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      min-height: 0;
+    }
+
+    img {
+      width: 100%;
+      height: 100%;
+      max-height: none;
+      object-fit: contain;
+    }
+}
+
+// A break that carries a picture puts its name above it rather than floating
+// it in the middle of the drawing.
+.reveal .slides > section.divider:has(.secshot) > h2 {
+  margin: 0 0 0.16em;
+}
+
+// Ready for the night drawings. The sibling session is producing a dark-ground
+// version of each of the four; when they land, each picture becomes a pair
+// marked .art-day / .art-night and these rules pick one. Until then no image
+// carries either class and nothing below does anything.
+.reveal section img.art-night { display: none; }
+
+:root[data-theme="dark"] {
+  .reveal section img.art-day { display: none; }
+  .reveal section img.art-night { display: block; }
+
+  // A night drawing is painted on the deck's own dark ground, so the break
+  // goes back to being the page rather than the cream plate below.
+  .reveal .slides > section.divider:has(.secshot) {
+    background: var(--bg);
+    > h2 { color: var(--ink); }
+  }
+}
+
+// A picture break is the picture. Measured: all four drawings are 1500x844
+// with content running to every edge — 0% margin left, 0.1% right, 0.2%
+// bottom — and their own cream ground, so on any slide colour but that cream
+// they are a hard-edged rectangle pasted on.
+//
+// So the slide takes the drawings' own cream, in every look, and their edges
+// disappear into it. #fdf1da is the top corner of all four (253,241,218 give
+// or take two). The bottom corners are darker — the table and floor, about
+// 234,209,176 — which is why the picture sits flush to the bottom of the
+// slide: a strip of ground under it would show that seam.
+//
+// Full-bleed with the name over the picture was the other option and is out:
+// the darkest pixel in the top sixth of every drawing is near-black (the ink
+// outlines reach the top edge), so a title over it measures 1.5:1.
+.reveal .slides > section.divider:has(.secshot) {
+  background: #fdf1da;  // tracks --bg in daylight and Storybook; pinned so
+                        // the drawings still sit on their own cream in dark,
+                        // until the night versions land
+  padding-bottom: 0;
+
+  // Dark ink on cream whatever the look, since the ground is now fixed.
+  > h2 { color: #07394a; }
+}
+
+:root[data-theme="story"] {
+  // Storybook has no plate anywhere: one cream, no band.
+  .reveal .slides > section.divider,
+  .reveal .slides > section.quarto-title-block {
+    background: var(--bg);
+  }
+}
+
+// ------------------------------------------------- the reference list
+// Citations belong in an appendix, not under a diagram. Two columns so the
+// role reads first and the work second, at a size that survives a projector.
+.reflist {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.4em 0.8em;
+  align-content: start;
+  margin: 0.3em 0 0;
+  font-size: 0.68em;
+  line-height: 1.38;
+}
+
+.rf-k {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  // 0.88em put these mono keys at 15.7 slide px, under the deck's 17 floor
+  // while every other line cleared it.
+  font-size: 0.98em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rf-v { color: var(--ink); }
+
+.reflist > p { display: contents; }
+
+// ------------------------------------------------- the title slide
+// "the middle feels so empty", so the text spreads down the frame rather
+// than huddling in the middle. The background picture came off: it was
+// fighting the words for the same space and adding nothing the words did
+// not already say.
+.reveal .slides > section.quarto-title-block {
+  display: flex !important;
+  flex-direction: column;
+  height: 100%;
+  // height:100% plus padding overflows unless the padding is inside the box
+  box-sizing: border-box;
+  justify-content: center;
+  gap: 0.1em;
+  padding: 1.6em 0 1.2em;
+  text-align: center;
+
+  .title {
+    color: #f2f6f9;
+    margin: 0 0 0.16em;
+  }
+
+  .subtitle {
+    color: #d3dde7;
+    margin: 0 0 1.4em;
+  }
+
+  .quarto-title-authors,
+  .author,
+  .quarto-title-author-name {
+    color: #e6edf3;
+    margin-top: 0;
+  }
+
+  .date {
+    color: #aebdcb;
+    margin-top: 0.3em;
+  }
+
+  // Room to breathe at the sides without running the full 1280: the title
+  // picture is gone, so this is a measure, not a band kept clear of artwork.
+  .title,
+  .subtitle,
+  .quarto-title-authors,
+  .author,
+  .date {
+    max-width: 82%;
+    margin-inline: auto;
+  }
+}
+
+// ------------------------------------------------- the contents slide
+// Five legs sitting in a huddle in the middle left the slide half empty.
+// They spread through the free height instead, and set larger with it.
+.reveal .slides > section.divider > .roadmap {
+  justify-content: space-evenly;
+  gap: 0.2em;
+}
+
+.reveal .slides > section.divider > .roadmap .leg {
+  font-size: 1.05em;
+  padding: 0.5em 0.9em;
+}
+
+// A plate that lifts off a dark page has to sit down on a light one. At 34%
+// in daylight it measured 39 luminance points below the page — a slab, not a
+// plate, and muddy under Forest. 14% is 18 points below: a tint the big type
+// still sits on comfortably, at 13.5:1 under Slate and 12.6:1 under Forest.
+// In dark mode 34% stays, because there the same mix lifts rather than weighs.
+// In daylight there is no plate at all: the page is already the cream the
+// drawings are painted on, so a break is the page with a name on it and
+// nothing can seam. A plate here was first a cold blue-grey slab on a warm
+// page, then the right cream but still a rectangle with page showing above
+// and below it.
+@mixin plate-daylight {
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .reveal .slides > section.divider,
+  :root:not([data-theme="dark"]) .reveal .slides > section.quarto-title-block {
+    @include plate-daylight;
+  }
+}
+
+:root[data-theme="light"] .reveal .slides > section.divider,
+:root[data-theme="light"] .reveal .slides > section.quarto-title-block {
+  @include plate-daylight;
+}
+
+// The title words were written to sit on a dark picture, so daylight darkens
+// them to sit on a pale plate instead.
+@mixin title-daylight {
+  .title { color: #0d1821; }
+  // Light grey-blue at 8.9:1 still read as faint: the problem was weight and
+  // temperature, not ratio, so these go darker and heavier rather than larger.
+  .subtitle { color: #22323f; font-weight: 600; }
+  .quarto-title-authors,
+  .author,
+  .quarto-title-author-name { color: #1b2935; font-weight: 600; }
+  .date { color: #33444f; font-weight: 500; }
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .reveal .slides > section.quarto-title-block {
+    @include title-daylight;
+  }
+}
+
+:root[data-theme="light"] .reveal .slides > section.quarto-title-block {
+  @include title-daylight;
+}
+
+// Storybook is a light look too, and the title words were written to sit on
+// a dark plate — without this they are pale grey on cream. It takes the
+// deck's own ink rather than the daylight mixin's near-black, because the
+// storybook ink is a deep teal and the slide should be of a piece with it.
+:root[data-theme="story"] .reveal .slides > section.quarto-title-block {
+  .title { color: var(--ink); }
+  .subtitle { color: var(--ink); font-weight: 600; }
+  .quarto-title-authors,
+  .author,
+  .quarto-title-author-name { color: var(--ink); font-weight: 600; }
+  .date { color: var(--muted); font-weight: 500; }
+}

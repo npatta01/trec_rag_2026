@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 460" role="img" aria-labelledby="ar-title ar-desc">
+  <title id="ar-title">The five components, and the model behind each</title>
+  <desc id="ar-desc">A left to right chain of five components, each marked with its own symbol. One, plan, a branching symbol, with deepseek v4 flash, one call that is never repeated. Two, search, a magnifier, with a Pyserini BM25 endpoint over the ClimbMix collection. Three, rerank, a sorting symbol, with mxbai rerank base v2, chunking then scoring. Four, select, a filter funnel, with all MiniLM L6 v2, dropping duplicates and spreading what is left. Five, write, marked with a sun and a crescent moon, with gpt 5.6 sol and gpt 5.6 luna. The chain then forks: the selection step emits the retrieval submission, three ranked files holding one candidate set ordered three ways, and the writing step emits two answer files, one per strategy. Two notes sit alongside: steps two to four never see the request's wording again, working only from the plan's queries, and step five never opens the retrieval files, the corpus or any score, receiving one sealed evidence package.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .ar-step{font-size:27px;font-weight:740}
+    .ar-model{font-size:24px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .ar-num{font-size:24px;font-weight:800}
+    .ar-out{font-size:24px;font-weight:720}
+    .ar-tick{font-size:24px;fill:var(--muted)}
+    .ar-kick{font-size:24px;font-weight:800;letter-spacing:.06em;fill:var(--adv)}
+    .ar-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#arar)}
+    .ar-ico{fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+  </style>
+  <defs>
+    <marker id="arar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+    <!-- One symbol per component, so each step is recognisable before it is read. -->
+    <g id="ar-g-plan" class="ar-ico"><path d="M-11 0H-5M-5 0V-8H4M-5 0V8H4M-5 0H4"/><circle cx="-12" cy="0" r="2" fill="currentColor" stroke="none"/><circle cx="6" cy="-8" r="2.2"/><circle cx="6" cy="0" r="2.2"/><circle cx="6" cy="8" r="2.2"/></g>
+    <g id="ar-g-search" class="ar-ico"><circle cx="-2" cy="-2" r="7.5"/><path d="M3.6 3.6L10.5 10.5"/></g>
+    <g id="ar-g-rank" class="ar-ico"><path d="M-11 -7H0M-11 0H-3M-11 7H-6M7 -9V9M3.5 5.5L7 9L10.5 5.5"/></g>
+    <g id="ar-g-filter" class="ar-ico"><path d="M-10 -8H10L2.5 1V9.5L-2.5 6.5V1Z"/></g>
+    <g id="ar-g-sun" class="ar-ico"><circle cx="0" cy="0" r="4.6"/><path d="M0 -11V-8M0 8V11M-11 0H-8M8 0H11M-7.8 -7.8L-5.7 -5.7M5.7 5.7L7.8 7.8M7.8 -7.8L5.7 -5.7M-5.7 5.7L-7.8 7.8"/></g>
+    <g id="ar-g-moon" class="ar-ico"><path d="M8.6 0.8A9.4 9.4 0 1 1 -0.8 -8.6A7.3 7.3 0 0 0 8.6 0.8Z"/></g>
+  </defs>
+  <rect width="1600" height="460" fill="var(--bg)"/>
+
+  <text class="ar-kick" x="40" y="48">FIVE COMPONENTS · THE SAME CHAIN FOR ALL 119 REQUESTS</text>
+
+  <!-- 1 plan -->
+  <rect x="40" y="96" width="266" height="128" rx="12" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="3"/>
+  <circle cx="76" cy="130" r="19" fill="var(--panel)" stroke="var(--s1)" stroke-width="2.2"/>
+  <g transform="translate(76,130)" style="color:var(--s1)"><use href="#ar-g-plan"/></g>
+  <text class="ar-step"  x="106" y="140">Plan</text>
+  <circle cx="280" cy="118" r="13" fill="var(--s1)"/>
+  <text class="ar-num"   x="280" y="124" text-anchor="middle" style="fill:var(--s1-soft)">1</text>
+  <text class="ar-model" x="64" y="180">deepseek-v4-flash</text>
+
+  <path class="ar-flow" d="M306 160 H344"/>
+
+  <!-- 2 search -->
+  <rect x="348" y="96" width="266" height="128" rx="12" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="3"/>
+  <circle cx="384" cy="130" r="19" fill="var(--panel)" stroke="var(--s2)" stroke-width="2.2"/>
+  <g transform="translate(384,130)" style="color:var(--s2)"><use href="#ar-g-search"/></g>
+  <text class="ar-step"  x="414" y="140">Search</text>
+  <circle cx="588" cy="118" r="13" fill="var(--s2)"/>
+  <text class="ar-num"   x="588" y="124" text-anchor="middle" style="fill:var(--s2-soft)">2</text>
+  <text class="ar-model" x="372" y="180">Pyserini BM25</text>
+
+  <path class="ar-flow" d="M614 160 H652"/>
+
+  <!-- 3 rerank -->
+  <rect x="656" y="96" width="266" height="128" rx="12" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="3"/>
+  <circle cx="692" cy="130" r="19" fill="var(--panel)" stroke="var(--s3)" stroke-width="2.2"/>
+  <g transform="translate(692,130)" style="color:var(--s3)"><use href="#ar-g-rank"/></g>
+  <text class="ar-step"  x="722" y="140">Rerank</text>
+  <circle cx="896" cy="118" r="13" fill="var(--s3)"/>
+  <text class="ar-num"   x="896" y="124" text-anchor="middle" style="fill:var(--s3-soft)">3</text>
+  <text class="ar-model" x="672" y="180" textLength="238" lengthAdjust="spacingAndGlyphs">mxbai-rerank-base-v2</text>
+
+  <path class="ar-flow" d="M922 160 H960"/>
+
+  <!-- 4 select -->
+  <rect x="964" y="96" width="266" height="128" rx="12" fill="var(--s4-soft)" stroke="var(--s4)" stroke-width="3"/>
+  <circle cx="1000" cy="130" r="19" fill="var(--panel)" stroke="var(--s4)" stroke-width="2.2"/>
+  <g transform="translate(1000,130)" style="color:var(--s4)"><use href="#ar-g-filter"/></g>
+  <text class="ar-step"  x="1030" y="140">Select</text>
+  <circle cx="1204" cy="118" r="13" fill="var(--s4)"/>
+  <text class="ar-num"   x="1204" y="124" text-anchor="middle" style="fill:var(--s4-soft)">4</text>
+  <text class="ar-model" x="988" y="180">all-MiniLM-L6-v2</text>
+
+  <path class="ar-flow" d="M1230 160 H1268"/>
+
+  <!-- 5 write — the two writers get their marks here, and keep them all talk -->
+  <rect x="1272" y="96" width="288" height="128" rx="12" fill="var(--s5-soft)" stroke="var(--s5)" stroke-width="3"/>
+  <text class="ar-step"  x="1296" y="140">Write</text>
+  <circle cx="1512" cy="118" r="13" fill="var(--s5)"/>
+  <text class="ar-num"   x="1512" y="124" text-anchor="middle" style="fill:var(--s5-soft)">5</text>
+  <g transform="translate(1300,174)" style="color:var(--ret)"><use href="#ar-g-sun"/></g>
+  <text class="ar-model" x="1318" y="180">gpt-5.6-sol</text>
+  <g transform="translate(1300,200)" style="color:var(--gen)"><use href="#ar-g-moon"/></g>
+  <text class="ar-model" x="1318" y="206">gpt-5.6-luna</text>
+
+  <!-- what comes out: step 4 emits the retrieval files, step 5 the answers -->
+  <path class="ar-flow" d="M1097 224 V292"/>
+  <path class="ar-flow" d="M1416 224 V292"/>
+
+  <rect x="964" y="300" width="266" height="110" rx="12" fill="var(--s4-soft)" stroke="var(--s4)" stroke-width="3"/>
+  <text class="ar-out"  x="988" y="338">Retrieval run</text>
+  <text class="ar-tick" x="988" y="376">3 ranked TSVs</text>
+
+  <rect x="1272" y="300" width="288" height="110" rx="12" fill="var(--s5-soft)" stroke="var(--s5)" stroke-width="3"/>
+  <text class="ar-out"  x="1296" y="338">Written answers</text>
+  <text class="ar-tick" x="1296" y="376">2 JSONL files</text>
+
+  <text class="ar-tick" x="40" y="340">Steps 2–4 work from the plan's queries alone.</text>
+  <text class="ar-tick" x="40" y="400">Step 5 gets one sealed evidence package.</text>
+</svg>

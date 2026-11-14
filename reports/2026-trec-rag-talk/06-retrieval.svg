@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 574" role="img" aria-labelledby="rt-title rt-desc">
+  <title id="rt-title">Our retrieval run against the field median on three measures</title>
+  <desc id="rt-desc">Three paired bars comparing our submitted retrieval run with the median run across the field. Precision: ours 0.4116 against a median of 0.3499, so ours is higher. Recall: ours 0.0897 against a median of 0.1002, so ours is lower. Documents returned per topic: ours 38.6 against a median of 100.0, roughly a third as many. Each pair is scaled to its own larger value, so bar lengths compare only within a row.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .rt-lab{font-size:30px;font-weight:740}
+    .rt-val{font-size:27px;font-weight:780;font-variant-numeric:tabular-nums}
+    .rt-who{font-size:22px;fill:var(--muted);font-weight:650}
+    .rt-key{font-size:23px;fill:var(--muted)}
+  </style>
+  <rect width="1400" height="520" fill="var(--bg)"/>
+
+  <rect x="30" y="24" width="26" height="26" rx="5" fill="var(--ret)"/>
+  <text class="rt-key" x="68" y="45">our submitted run</text>
+  <rect x="300" y="24" width="26" height="26" rx="5" fill="var(--line)" opacity=".45"/>
+  <text class="rt-key" x="338" y="45">field median</text>
+
+  <!-- Precision -->
+  <text class="rt-lab" x="30" y="130">Precision</text>
+  <rect x="340" y="98"  width="760" height="42" rx="6" fill="var(--ret)"/>
+  <text class="rt-val" x="1116" y="128" style="fill:var(--ret)">0.4116</text>
+  <text class="rt-who" x="346" y="126" style="fill:var(--bg)">ours</text>
+  <rect x="340" y="150" width="646" height="42" rx="6" fill="var(--line)" opacity=".45"/>
+  <text class="rt-val" x="1002" y="180">0.3499</text>
+
+  <!-- Recall -->
+  <text class="rt-lab" x="30" y="268">Recall</text>
+  <rect x="340" y="236" width="680" height="42" rx="6" fill="var(--ret)"/>
+  <text class="rt-val" x="1036" y="266" style="fill:var(--ret)">0.0897</text>
+  <text class="rt-who" x="346" y="264" style="fill:var(--bg)">ours</text>
+  <rect x="340" y="288" width="760" height="42" rx="6" fill="var(--line)" opacity=".45"/>
+  <text class="rt-val" x="1116" y="318">0.1002</text>
+
+  <!-- Documents -->
+  <text class="rt-lab" x="30" y="406">Documents</text>
+  <text class="rt-key" x="30" y="436">returned per topic</text>
+  <rect x="340" y="374" width="293" height="42" rx="6" fill="var(--ret)"/>
+  <text class="rt-val" x="649" y="404" style="fill:var(--ret)">38.6</text>
+  <text class="rt-who" x="346" y="402" style="fill:var(--bg)">ours</text>
+  <rect x="340" y="426" width="760" height="42" rx="6" fill="var(--line)" opacity=".45"/>
+  <text class="rt-val" x="1116" y="456">100.0</text>
+  <text class="rt-key" x="30" y="534">A third as many documents as the field median, and more precise for it. Recall is the price.</text>
+</svg>

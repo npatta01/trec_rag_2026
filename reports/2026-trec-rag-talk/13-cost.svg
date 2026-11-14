@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 550" role="img" aria-labelledby="co-title co-desc">
+  <title id="co-title">Cost per narrative, in model calls: what both runs share, and what only one of them pays</title>
+  <desc id="co-desc">Three figures, read left to right. First, shared by both runs: retrieval costs 4 to 9 model calls per narrative — one planner call plus one nuggetizer call for each of its 3 to 8 subnarratives. Then the part that differs, drawn as two bars on the same scale: single-pass writing costs 1 call per narrative, multi-stage writing costs 7 to 12 — four fixed calls, which are plan, draft, propose and screen, plus one audit call per subnarrative, of which there are 3 to 8. It is one pass, not repeated rounds of editing. Both figures are writing calls per narrative. A band at the foot states the totals across all 119 narratives: 810 shared calls, then 121 against 1,167, about 9.6 times as many.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .co-unit{font-size:25px;fill:var(--muted)}
+    .co-kick{font-size:24px;font-weight:800;letter-spacing:.05em}
+    .co-huge{font-size:56px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .co-name{font-size:28px;font-weight:760}
+    .co-sub{font-size:22px;fill:var(--muted)}
+    .co-foot{font-size:23px}
+  </style>
+  <rect width="1400" height="520" fill="var(--bg)"/>
+
+  <text class="co-kick" x="24" y="40" style="fill:var(--muted)">MODEL CALLS PER NARRATIVE</text>
+
+  <!-- shared -->
+  <rect x="24" y="64" width="420" height="300" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="co-kick" x="52" y="110" style="fill:var(--ret)">BOTH RUNS SHARE</text>
+  <text class="co-name" x="52" y="152">Finding the evidence</text>
+  <text class="co-huge" x="52" y="250" style="fill:var(--ret)">4–9</text>
+  <text class="co-sub"  x="52" y="300">1 planner call, plus</text>
+  <text class="co-sub"  x="52" y="330">1 per subnarrative</text>
+
+  <!-- only one of them pays -->
+  <rect x="480" y="64" width="896" height="300" rx="14" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3.5"/>
+  <text class="co-kick" x="508" y="110" style="fill:var(--gen)">ONLY THE WRITING DIFFERS</text>
+  <text class="co-unit" x="508" y="140">writing calls per narrative</text>
+
+  <text class="co-name" x="508" y="196">Single-pass</text>
+  <rect x="508" y="222" width="60" height="34" rx="6" fill="var(--ret)"/>
+  <text class="co-huge" x="600" y="259" style="fill:var(--ret)">1</text>
+
+  <text class="co-name" x="508" y="300">Multi-stage</text>
+  <rect x="508" y="326" width="600" height="34" rx="6" fill="var(--gen)"/>
+  <text class="co-huge" x="1140" y="363" style="fill:var(--gen)">7–12</text>
+  <text class="co-unit" x="508" y="398">4 fixed calls — plan, draft, propose, screen — plus one audit per subnarrative</text>
+
+  <!-- the totals, once, at the foot -->
+  <rect x="24" y="422" width="1352" height="100" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4"/>
+  <text class="co-kick" x="52" y="458" style="fill:var(--muted)">ACROSS ALL 119 NARRATIVES</text>
+  <text class="co-foot" x="52" y="496">810 shared · then <tspan font-weight="800" style="fill:var(--ret)">121</tspan> against <tspan font-weight="800" style="fill:var(--gen)">1,167</tspan> — about <tspan font-weight="800">9.6×</tspan> the calls, for the same evidence.</text>
+</svg>

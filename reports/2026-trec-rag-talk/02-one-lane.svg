@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 580" role="img" aria-labelledby="ln-title ln-desc">
+  <title id="ln-title">What one BM25 query lane gives up, stage by stage</title>
+  <desc id="ln-desc">On the left, four squares drawn to scale on a common baseline, where the area of each square is its count. The first is at most 1,000 documents and dwarfs the rest. The second is at most 100 passages, a tenth of the area. The third is at most 40 selected passages. The fourth, drawn in amber with a dashed edge, is at most 20 nugget claims and is barely a tile beside the first square. Documents become passages at the second step, so the unit changes there. On the right, the same four stages as a list, each with its own symbol: search with Pyserini BM25, rerank by chunking and scoring with mxbai rerank base v2, select by dropping near duplicates with all MiniLM L6 v2 and spreading the rest with maximal marginal relevance, which picks each next passage for being relevant and unlike the ones already kept, and finally the nuggets, which are short claims the writer may use but never cites. Every figure is a per-query ceiling, which is what the less-than-or-equal sign on it means.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--adv:#91610d;--adv-soft:#faecc7;--s1:#106f92;--s1-soft:#d6edf5;--s2:#5530e8;--s2-soft:#dcd6f5;--s3:#b01496;--s3-soft:#f5d6f0;--s4:#965811;--s4-soft:#f5e7d6}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--adv:#f0c46f;--adv-soft:#433616;--s1:#23a7d6;--s1-soft:#17353f;--s2:#8c75e8;--s2-soft:#1f173f;--s3:#e456cc;--s3-soft:#3f1739;--s4:#db8624;--s4-soft:#3f2d17}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .ln-q{font-size:28px;font-weight:700}
+    .ln-kick{font-size:24px;font-weight:800;letter-spacing:.06em;fill:var(--muted)}
+    .ln-num{font-size:32px;font-weight:800}
+    .ln-unit{font-size:24px;fill:var(--muted)}
+    .ln-row{font-size:25px;font-weight:720}
+    .ln-sub{font-size:24px;fill:var(--muted)}
+    .ln-base{stroke:var(--line);stroke-width:2}
+    .ln-ico{fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+  </style>
+  <defs>
+    <g id="ln-g-search" class="ln-ico"><circle cx="-2" cy="-2" r="8"/><path d="M4 4L11.5 11.5"/></g>
+    <g id="ln-g-rank" class="ln-ico"><path d="M-12 -7.5H0M-12 0H-3M-12 7.5H-6M7.5 -10V9.5M3.5 6L7.5 10L11.5 6"/></g>
+    <g id="ln-g-filter" class="ln-ico"><path d="M-11 -8.5H11L3 1V10.5L-3 7.2V1Z"/></g>
+    <g id="ln-g-hint" class="ln-ico"><path d="M-5 8H5M-3.5 12H3.5"/><path d="M0 -12A8 8 0 0 0-5 2.2V4.6H5V2.2A8 8 0 0 0 0 -12Z"/></g>
+  </defs>
+  <rect width="1600" height="580" fill="var(--bg)"/>
+
+  <rect x="40" y="20" width="1520" height="58" rx="10" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6"/>
+  <text class="ln-q" x="800" y="58" text-anchor="middle">one lane of 17 — “illegal short term rental NYC avoid scams”</text>
+
+
+  <!-- squares on a common baseline; side is proportional to the square root -->
+  <rect x="48"  y="152" width="300" height="300" rx="6" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="3"/>
+  <rect x="396" y="357" width="95"  height="95"  rx="5" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="3"/>
+  <rect x="539" y="392" width="60"  height="60"  rx="4" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="3"/>
+  <rect x="647" y="410" width="42"  height="42"  rx="4" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3" stroke-dasharray="7 5"/>
+  <line class="ln-base" x1="40" y1="452" x2="740" y2="452"/>
+
+  <text class="ln-num"  x="198" y="492" text-anchor="middle" style="fill:var(--s1)">≤1,000</text>
+  <text class="ln-unit" x="198" y="528" text-anchor="middle">documents</text>
+  <text class="ln-num"  x="443" y="492" text-anchor="middle" style="fill:var(--s2)">≤100</text>
+  <text class="ln-unit" x="443" y="528" text-anchor="middle">passages</text>
+  <text class="ln-num"  x="569" y="492" text-anchor="middle" style="fill:var(--s3)">≤40</text>
+  <text class="ln-unit" x="569" y="528" text-anchor="middle">selected</text>
+  <text class="ln-num"  x="668" y="492" text-anchor="middle" style="fill:var(--adv)">≤20</text>
+  <text class="ln-unit" x="668" y="528" text-anchor="middle">nuggets</text>
+
+  <text class="ln-sub" x="40" y="562">Every figure is a per-query ceiling — that is what the ≤ means.</text>
+
+  <!-- the same four stages, named -->
+  <g transform="translate(856,172)" style="color:var(--s1)"><circle r="23" fill="var(--s1-soft)" stroke="var(--s1)" stroke-width="2.6"/><use href="#ln-g-search"/></g>
+  <text class="ln-row" x="896" y="166">Search</text>
+  <text class="ln-sub" x="896" y="192">Pyserini BM25 over ClimbMix</text>
+
+  <g transform="translate(856,266)" style="color:var(--s2)"><circle r="23" fill="var(--s2-soft)" stroke="var(--s2)" stroke-width="2.6"/><use href="#ln-g-rank"/></g>
+  <text class="ln-row" x="896" y="260">Rerank</text>
+  <text class="ln-sub" x="896" y="286">mxbai-rerank-base-v2</text>
+
+  <g transform="translate(856,360)" style="color:var(--s3)"><circle r="23" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="2.6"/><use href="#ln-g-filter"/></g>
+  <text class="ln-row" x="896" y="354">Select</text>
+  <text class="ln-sub" x="896" y="380">drop duplicates, then MMR spread</text>
+
+  <g transform="translate(856,454)" style="color:var(--adv)"><circle r="23" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6" stroke-dasharray="7 5"/><use href="#ln-g-hint"/></g>
+  <text class="ln-row" x="896" y="448">Nuggets</text>
+  <text class="ln-sub" x="896" y="474">hints for the writer, never cited</text>
+</svg>

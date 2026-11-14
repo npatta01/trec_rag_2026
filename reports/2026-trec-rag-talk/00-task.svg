@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 540" role="img" aria-labelledby="tk-title tk-desc">
+  <title id="tk-title">What the track gives you, and what it demands back</title>
+  <desc id="tk-desc">On the left, the two inputs. First, the collection: a stack of documents labelled ClimbMix, reachable only through one hosted BM25 search endpoint. Second, the requests: 119 of them, each a paragraph of context followed by several questions. On the right, the single output: one written answer per request, drawn as lines of prose where every line ends in a small citation marker. Two hard requirements sit under it: at most 1,024 words, and every statement must cite the documents it came from. An uncited sentence is worth nothing however true it is.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .tk-hd{font-size:31px;font-weight:760}
+    .tk-sm{font-size:23px;fill:var(--muted)}
+    .tk-role{font-size:23px;font-weight:800;letter-spacing:.07em}
+    .tk-req{font-size:24px;font-weight:700}
+    .tk-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#tkar)}
+  </style>
+  <defs>
+    <marker id="tkar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+  <rect width="1500" height="540" fill="var(--bg)"/>
+
+  <!-- the collection -->
+  <rect x="34" y="34" width="560" height="200" rx="14" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="tk-role" x="60" y="72" style="fill:var(--ret)">THE COLLECTION</text>
+  <g fill="var(--panel)" stroke="var(--ret)" stroke-width="2.5">
+    <rect x="60" y="96" width="104" height="80" rx="8"/>
+    <rect x="80" y="108" width="104" height="80" rx="8"/>
+    <rect x="100" y="120" width="104" height="80" rx="8"/>
+  </g>
+  <g fill="var(--ret)" opacity=".55">
+    <rect x="116" y="138" width="68" height="5" rx="2.5"/>
+    <rect x="116" y="152" width="52" height="5" rx="2.5"/>
+    <rect x="116" y="166" width="72" height="5" rx="2.5"/>
+  </g>
+  <text class="tk-hd" x="240" y="140">ClimbMix</text>
+  <text class="tk-sm" x="240" y="172">reachable only through one</text>
+  <text class="tk-sm" x="240" y="198">hosted BM25 search endpoint</text>
+
+  <!-- the requests -->
+  <rect x="34" y="266" width="560" height="200" rx="14" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3"/>
+  <text class="tk-role" x="60" y="304" style="fill:var(--adv)">THE REQUESTS</text>
+  <g fill="var(--adv)" opacity=".5">
+    <rect x="60" y="330" width="150" height="6" rx="3"/>
+    <rect x="60" y="348" width="128" height="6" rx="3"/>
+    <rect x="60" y="366" width="158" height="6" rx="3"/>
+    <rect x="60" y="384" width="96"  height="6" rx="3"/>
+  </g>
+  <text class="tk-hd" x="250" y="356">119 of them</text>
+  <text class="tk-sm" x="250" y="388">a paragraph of context,</text>
+  <text class="tk-sm" x="250" y="414">then several questions at once</text>
+
+  <path class="tk-flow" d="M594 134 H680 V250"/>
+  <path class="tk-flow" d="M594 366 H680 V268"/>
+  <path class="tk-flow" d="M680 259 H770"/>
+
+  <!-- the answer -->
+  <rect x="784" y="34" width="682" height="432" rx="14" fill="var(--panel)" stroke="var(--ok)" stroke-width="3.5"/>
+  <text class="tk-role" x="812" y="72" style="fill:var(--ok)">WHAT YOU HAND BACK</text>
+  <text class="tk-hd"   x="812" y="112">One written answer</text>
+
+  <!-- prose, every line ending in a citation marker -->
+  <g>
+    <rect x="812" y="140" width="430" height="7" rx="3.5" fill="var(--ink)" opacity=".42"/>
+    <rect x="1254" y="134" width="46" height="19" rx="9.5" fill="var(--ok)" opacity=".85"/>
+    <rect x="812" y="172" width="368" height="7" rx="3.5" fill="var(--ink)" opacity=".42"/>
+    <rect x="1192" y="166" width="46" height="19" rx="9.5" fill="var(--ok)" opacity=".85"/>
+    <rect x="812" y="204" width="468" height="7" rx="3.5" fill="var(--ink)" opacity=".42"/>
+    <rect x="1292" y="198" width="46" height="19" rx="9.5" fill="var(--ok)" opacity=".85"/>
+    <rect x="812" y="236" width="330" height="7" rx="3.5" fill="var(--ink)" opacity=".42"/>
+    <rect x="1154" y="230" width="46" height="19" rx="9.5" fill="var(--ok)" opacity=".85"/>
+  </g>
+  <text class="tk-sm" x="812" y="288">every line ends in the document it came from</text>
+
+  <line x1="812" y1="312" x2="1438" y2="312" stroke="var(--ok)" stroke-width="1.5" opacity=".5"/>
+
+  <text class="tk-role" x="812" y="348" style="fill:var(--ok)">TWO HARD RULES</text>
+  <text class="tk-req" x="812" y="392">≤ 1,024 words</text>
+  <text class="tk-sm"  x="1010" y="392">— length is the budget you spend</text>
+  <text class="tk-req" x="812" y="436">every statement cited</text>
+  <text class="tk-sm"  x="1104" y="436">— uncited counts for nothing</text>
+</svg>
