@@ -368,14 +368,31 @@ for (const [fig, tok, want] of [["00-architecture", "ar", 5], ["02-one-lane", "l
 const qicons = (qmd.match(/class="glyph qico"/g) || []).length;
 assert(qicons === 18,
   `expected 8 angles + 2 on the slide + 8 in the appendix, found ${qicons}`);
-// The plate is mixed from the palette accent rather than a hard-coded blue,
-// so it is blue under Slate and green under Forest, and it mixes toward each
-// theme's own background: deep at night, pale by day. That is also why the
-// words on it can be the theme's own ink instead of a fixed light grey.
-assert(/section\.divider,\s*\n\.reveal \.slides > section\.quarto-title-block \{[^}]*color-mix\(in oklab, var\(--ret\)/.test(theme),
-  "the breaks and the title share one plate, mixed from the palette accent");
+// ---- furniture does not wear a content colour ----------------------------
+// --ret, --gen, --ok and --adv mean retrieval, generation, a rule and an
+// advisory. The title plate, the section breaks, the progress bar, the nav
+// controls and the links are none of those: they are furniture. Painting
+// them with --ret spent the retrieval accent on chrome AND turned the blue
+// transitions teal under Forest, which is not the blue that was asked for.
+// --deck is structural and the same hue in both palettes.
+assert(/section\.divider,\s*\n\.reveal \.slides > section\.quarto-title-block \{[^}]*color-mix\(in oklab, var\(--deck\)/.test(theme),
+  "the breaks and the title share one plate, mixed from the structural token");
 assert(!/background: #0b1220/.test(theme),
-  "no hard-coded break ground; the plate follows the palette");
+  "no hard-coded break ground; the plate follows the structural token");
+for (const [name, pattern] of [[".reveal .progress", "\\.reveal \\.progress"],
+                               [".reveal .controls", "\\.reveal \\.controls"],
+                               [".reveal a", "\\.reveal a"]]) {
+  const rule = theme.match(new RegExp(`${pattern} \\{([^}]*)\\}`));
+  assert(rule, `expected a rule for ${name}`);
+  assert(!/var\(--(ret|gen|ok|adv)\)/.test(rule[1]),
+    `${name} is furniture and must not wear a content accent`);
+}
+// The structural token must be one hue across both palettes, or the "blue"
+// transitions go teal again the moment Forest is on.
+const deck = [...theme.matchAll(/--deck:\s*(#[0-9a-f]{6})/gi)].map((m) => m[1].toLowerCase());
+assert(deck.length === 4, `every palette needs --deck, found ${deck.length}`);
+assert(new Set(deck).size === 2,
+  `--deck should be one light value and one dark value, found ${new Set(deck).size}`);
 assert(/nth-child\(3n \+ 1\)/.test(theme),
   "the subnarrative cards should cycle through accents");
 assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),

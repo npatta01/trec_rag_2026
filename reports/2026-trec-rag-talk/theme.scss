@@ -36,6 +36,13 @@ $code-block-font-size: 0.6em !default;
 // so these variables repaint the diagrams as well as the slides.
 
 @mixin slate-light {
+  // Structural, not semantic. The title plate, the section breaks, the
+  // progress bar and the menu icon are not about retrieval, and painting
+  // them with --ret both spent the retrieval accent on furniture and turned
+  // the "blue" transitions teal whenever Forest was on. --deck is the same
+  // blue in both palettes for exactly that reason.
+  --deck: #1f5fa8;
+
   --bg: #f7f8fa;
   --panel: #ffffff;
   --ink: #151a21;
@@ -65,6 +72,8 @@ $code-block-font-size: 0.6em !default;
 }
 
 @mixin slate-dark {
+  --deck: #7ab3f5;
+
   --bg: #101318;
   --panel: #1a1f26;
   --ink: #eef1f6;
@@ -94,6 +103,8 @@ $code-block-font-size: 0.6em !default;
 }
 
 @mixin forest-light {
+  --deck: #1f5fa8;
+
   --bg: #f6f8f7;
   --panel: #ffffff;
   --ink: #13231c;
@@ -123,6 +134,8 @@ $code-block-font-size: 0.6em !default;
 }
 
 @mixin forest-dark {
+  --deck: #7ab3f5;
+
   --bg: #0d1411;
   --panel: #17211c;
   --ink: #f0f6f2;
@@ -223,7 +236,7 @@ body.reveal-viewport,
 }
 
 .reveal a {
-  color: var(--ret);
+  color: var(--deck);
   text-underline-offset: 3px;
 }
 
@@ -231,14 +244,15 @@ body.reveal-viewport,
   color: var(--ink);
 }
 
-// Progress bar and controls pick up the retrieval accent.
+// Progress bar and controls are deck furniture, so they take the structural
+// token rather than the retrieval accent they used to borrow.
 .reveal .progress {
-  color: var(--ret);
+  color: var(--deck);
   height: 4px;
 }
 
 .reveal .controls {
-  color: var(--ret);
+  color: var(--deck);
 }
 
 .reveal .slide-number {
@@ -1379,10 +1393,11 @@ body.reveal-viewport,
 // the picture was decoration that none of the five breaks needed, and the
 // title slide's went for the same reason.
 //
-// The plate is mixed from the palette accent, so it is blue under Slate and
-// green under Forest rather than a hard-coded blue that would fight whichever
-// palette is on. Both themes mix toward their own background, so it is a deep
-// blue at night and a pale one by day.
+// The plate is mixed from --deck, the structural token, not from the
+// retrieval accent. Mixed from --ret it came out teal under Forest, which is
+// not the blue that was asked for, and it spent a content colour on a slide
+// that carries no content. Both themes mix toward their own background, so
+// it is a deep blue at night and a pale one by day.
 .reveal .slides > section.divider,
 .reveal .slides > section.quarto-title-block {
   // No position here, on these least of all. Reveal lays every section out
@@ -1393,7 +1408,7 @@ body.reveal-viewport,
   // 22). 34% gives 42 at night and 37 by day, unmistakably blue, with the
   // section name still at 8.5:1 and 9.9:1 — both above AAA. 44% would look
   // better still and drops the night plate to 6.6:1, which is below it.
-  background: color-mix(in oklab, var(--ret) 34%, var(--bg));
+  background: color-mix(in oklab, var(--deck) 34%, var(--bg));
   border-radius: 14px;
 }
 
@@ -1595,7 +1610,7 @@ body.reveal-viewport,
 // still sits on comfortably, at 13.5:1 under Slate and 12.6:1 under Forest.
 // In dark mode 34% stays, because there the same mix lifts rather than weighs.
 @mixin plate-daylight {
-  background: color-mix(in oklab, var(--ret) 14%, var(--bg));
+  background: color-mix(in oklab, var(--deck) 14%, var(--bg));
 }
 
 @media (prefers-color-scheme: light) {
