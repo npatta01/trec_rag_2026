@@ -593,7 +593,6 @@ body.reveal-viewport,
 .reveal .slides > section > .nargrid,
 .reveal .slides > section > .reflist,
 .reveal .slides > section > .roadmap,
-.reveal .slides > section > .secshot,
 .reveal .slides > section > .adds,
 .reveal .slides > section > .grid-2,
 .reveal .slides > section > .grid-3,
@@ -1375,93 +1374,39 @@ body.reveal-viewport,
 .fill-gen { color: var(--gen); }
 
 // ------------------------------------------------------------ section breaks
-// A section break is a held pause. The opening one lists the four parts; the
-// three that follow carry a picture instead, because repeating the same list
-// four times taught the room nothing it did not already know.
-.secshot {
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  min-height: 0;
-  margin: 0.3em 0 0.5em;
-
-  p, figure, .quarto-figure {
-    margin: 0;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    min-height: 0;
-  }
-
-  img {
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    object-fit: cover;
-    border-radius: 14px;
-    border: 1px solid var(--hairline);
-  }
-}
-
-// The section art is a backdrop, not an exhibit: the title sits over the
-// middle of it. The art is always dark navy, so the section carries that as
-// its own background and the text on it is light in BOTH themes - otherwise
-// light mode puts dark ink on a dark picture.
-.reveal .slides > section.divider-img {
-  // No position here. Reveal lays every section out absolutely; overriding
-  // that drops the slide into normal flow and it stacks below the deck.
-  // An absolute section is already the containing block its overlay needs.
-  background: #0b1220;
+// A section break is a held pause, and it is a plate of the deck's own
+// colour with the section name on it. It used to carry a photo-illustration;
+// the picture was decoration that none of the five breaks needed, and the
+// title slide's went for the same reason.
+//
+// The plate is mixed from the palette accent, so it is blue under Slate and
+// green under Forest rather than a hard-coded blue that would fight whichever
+// palette is on. Both themes mix toward their own background, so it is a deep
+// blue at night and a pale one by day.
+.reveal .slides > section.divider,
+.reveal .slides > section.quarto-title-block {
+  // No position here, on these least of all. Reveal lays every section out
+  // absolutely; overriding that drops the slide into normal flow and it
+  // stacks below the whole deck.
+  // An absolute section is already the containing block for anything inside.
+  // 34%: at 16% the plate read grey rather than blue (blueness, B-R, only
+  // 22). 34% gives 42 at night and 37 by day, unmistakably blue, with the
+  // section name still at 8.5:1 and 9.9:1 — both above AAA. 44% would look
+  // better still and drops the night plate to 6.6:1, which is below it.
+  background: color-mix(in oklab, var(--ret) 34%, var(--bg));
   border-radius: 14px;
-  overflow: hidden;
 }
 
-.divider-img > .secshot {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  margin: 0;
-}
-
-.divider-img > .secshot img {
-  border: 0;
-  border-radius: 0;
-}
-
-// A scrim between the art and the words, so a title is legible wherever the
-// picture happens to be busiest.
-.reveal .slides > section.divider-img::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    rgba(6, 10, 18, 0.3),
-    rgba(6, 10, 18, 0.05) 55%,
-    rgba(6, 10, 18, 0.45)
-  );
-}
-
-// Both auto top margins split the free height, which lands the title near the
-// middle and keeps the line of context on the bottom edge.
-.reveal .slides > section.divider-img > h2 {
-  position: relative;
-  z-index: 2;
+.reveal .slides > section.divider > h2 {
   margin: auto 0;
   width: 100%;
   text-align: center;
-  color: #f2f6f9;
 }
 
-.reveal .slides > section.divider-img > .cap {
-  position: relative;
-  z-index: 2;
+.reveal .slides > section.divider > .cap {
   margin-top: auto;
   padding-bottom: 0.3em;
   text-align: center;
-  color: #d4dde6;
   border: 0;
 }
 
@@ -1629,83 +1574,6 @@ body.reveal-viewport,
 .reveal .slides > section.divider > .roadmap .leg {
   font-size: 1.05em;
   padding: 0.5em 0.9em;
-}
-
-// ------------------------------------------------- the plain section break
-// The appendix break has no art, so its title sat at the top with the whole
-// frame empty beneath. Centre it: a pause should look held, not unfinished.
-.reveal .slides > section.divider:not(.divider-img) > h2 {
-  margin: auto 0 0;
-}
-
-.reveal .slides > section.divider:not(.divider-img) > .cap {
-  margin-top: auto;
-}
-
-// A dark section break on a light page is deliberate — a chapter card — but
-// the deck's hairline border around it reads as a leftover rather than a
-// frame. In light mode the plate sits on a soft shadow instead.
-:root[data-theme="light"] .reveal .slides > section.divider-img {
-  box-shadow: 0 2px 18px rgb(16 24 40 / 0.18);
-}
-
-:root[data-theme="light"] .divider-img > .secshot img {
-  border: 0;
-}
-
-// ------------------------------------------------- day and night art
-// Each section break ships two pictures: the night one and its daylight twin.
-// Which shows follows the deck's own brightness control — data-theme on the
-// root, with no attribute meaning "follow the system". Reveal's
-// `section img { display: block }` outranks a bare class, so these selectors
-// carry its weight, the same way the scene images do.
-.reveal section img.art-light { display: none; }
-.reveal section img.art-dark { display: block; }
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .reveal section img.art-dark { display: none; }
-  :root:not([data-theme="dark"]) .reveal section img.art-light { display: block; }
-}
-
-:root[data-theme="light"] .reveal section img.art-dark { display: none; }
-:root[data-theme="light"] .reveal section img.art-light { display: block; }
-:root[data-theme="dark"] .reveal section img.art-dark { display: block; }
-:root[data-theme="dark"] .reveal section img.art-light { display: none; }
-
-// Same cure, and only where there is something to cure. Measured raw warmth
-// (mean R-B) of the four daylight scenes: Retrieval +1, Overall score +1,
-// Answer Generation +10, Cost +16 — nowhere near the title art's +32. A
-// filter on all four cost the neutral pair their colour for no gain, so it
-// is carried by .art-warm on the two that are actually warm, which it brings
-// to +6 and +9. No brightness lift: these already sit at mean L 216-231 and
-// would only go chalky.
-.reveal section img.art-warm { filter: saturate(0.62); }
-
-// The plate itself, and the words on it, flip with the picture.
-@mixin break-daylight {
-  background: #f1f4f8;
-
-  &::after {
-    background: linear-gradient(
-      to bottom,
-      rgb(238 243 251 / 0.46),
-      rgb(238 243 251 / 0.38) 55%,
-      rgb(238 243 251 / 0.5)
-    );
-  }
-
-  > h2 { color: #0f1b26; }
-  > .cap { color: #33444f; font-weight: 600; }
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .reveal .slides > section.divider-img {
-    @include break-daylight;
-  }
-}
-
-:root[data-theme="light"] .reveal .slides > section.divider-img {
-  @include break-daylight;
 }
 
 // The title slide is type on the page now, not a plate, so daylight only has

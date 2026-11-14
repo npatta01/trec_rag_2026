@@ -51,8 +51,16 @@ assert(fetched.length === 0,
   `deck must not load external resources, found: ${fetched.slice(0, 3).join(", ")}`);
 
 // Diagrams carry alt text for screen readers and must not print a caption.
+// 17 since the four section-break photographs came off; the figures that
+// remain are the diagrams, and every one of them is described.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 21, `expected 21 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 17, `expected 17 fig-alt figures, found ${figAlts.length}`);
+// ...except the forest-palette twin of the request scene, which is a
+// duplicate of a described image and is hidden from screen readers instead.
+const undescribed = (qmd.match(/!\[\]\([^\n]*/g) || [])
+  .filter((l) => !/fig-alt=/.test(l) && !/aria-hidden="true"/.test(l));
+assert(undescribed.length === 0,
+  `every image needs fig-alt or aria-hidden: ${undescribed.join(" | ").slice(0, 120)}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -176,8 +184,13 @@ assert((qmd.match(/class="leg leg-now"/g) || []).length === 1,
 for (const sec of ["Architecture", "Retrieval", "Answer Generation", "Overall score", "Cost"]) {
   assert(qmd.includes(`</span>${sec}</span>`), `the contents should name: ${sec}`);
 }
-const shots = (qmd.match(/\{\.secshot\}/g) || []).length;
-assert(shots === 4, `each of the four section breaks carries one image, found ${shots}`);
+// Every section break is a plate of the deck's own colour with the section
+// name on it. The photo-illustrations came off all five: decoration none of
+// them needed, and on the title slide it was crowding the words.
+assert(!/\{\.secshot\}/.test(qmd) && !/divider-img/.test(qmd),
+  "a section break is a plate, not a picture");
+assert(!/\{\.art-(dark|light|warm)/.test(qmd),
+  "no break should carry a picture pair again");
 assert(!/01-approach/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/01-approach.svg")),
   "the funnel figure was cut; nothing should still point at it");
 
@@ -355,12 +368,14 @@ for (const [fig, tok, want] of [["00-architecture", "ar", 5], ["02-one-lane", "l
 const qicons = (qmd.match(/class="glyph qico"/g) || []).length;
 assert(qicons === 18,
   `expected 8 angles + 2 on the slide + 8 in the appendix, found ${qicons}`);
-// The art is a dark backdrop with the title printed over it, so the words on
-// a break must be light in BOTH themes - the theme's own ink would vanish.
-assert(/section\.divider-img \{[^}]*background: #0b1220/.test(theme),
-  "an image break carries its own dark ground, so the contrast check is honest");
-assert(/section\.divider-img > h2 \{[\s\S]*?color: #f2f6f9/.test(theme),
-  "a title over the art must be light in both themes");
+// The plate is mixed from the palette accent rather than a hard-coded blue,
+// so it is blue under Slate and green under Forest, and it mixes toward each
+// theme's own background: deep at night, pale by day. That is also why the
+// words on it can be the theme's own ink instead of a fixed light grey.
+assert(/section\.divider,\s*\n\.reveal \.slides > section\.quarto-title-block \{[^}]*color-mix\(in oklab, var\(--ret\)/.test(theme),
+  "the breaks and the title share one plate, mixed from the palette accent");
+assert(!/background: #0b1220/.test(theme),
+  "no hard-coded break ground; the plate follows the palette");
 assert(/nth-child\(3n \+ 1\)/.test(theme),
   "the subnarrative cards should cycle through accents");
 assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
@@ -604,37 +619,19 @@ for (const body of sectionRules) {
     `a slide section may not override position (found ${pos && pos[1]}) — ` +
     "it falls out of Reveal's stack and renders below the deck");
 }
-// The overlay dividers and the title slide are the two that tempted it, so
-// the reason is written next to them and checked here.
+// The breaks and the title slide are the two that tempted it, so the reason
+// is written next to them and checked here.
 assert(/An absolute section is already the containing block/.test(theme),
-  "keep the note explaining why the image dividers set no position");
+  "keep the note explaining why the break and title slides set no position");
 // height:100% with padding needs the padding inside the box, or the slide
 // overflows its own frame at every aspect ratio.
 assert(/section\.quarto-title-block \{[^}]*box-sizing: border-box/.test(theme),
   "a slide with height:100% and padding must be border-box");
 
-// ---- the art follows the brightness control -------------------------------
-// A dark plate on a light page was a deliberate chapter card, but the author
-// wanted daylight versions. Each break ships both and the deck's own
-// brightness control picks one; the title slide's pair is carried as hidden
-// images because Quarto owns that slide and it cannot hold two of its own.
-const darkArt = (qmd.match(/\{\.art-dark/g) || []).length;
-const lightArt = (qmd.match(/\{\.art-light/g) || []).length;
-assert(darkArt === 4 && lightArt === 4,
-  `each of the 4 section breaks needs both pictures, found ${darkArt} dark / ${lightArt} light`);
-for (const name of ["retrieval", "generation", "score", "cost"]) {
-  for (const half of ["", "-light"]) {
-    const f = `2026-trec-rag-talk/art-${name}${half}.jpg`;
-    assert(fs.existsSync(path.join(root, f)), `missing section art: ${f}`);
-  }
-}
-// The title slide had a picture of its own and lost it: it was fighting the
-// words for the same space and saying nothing the words did not. Nothing
-// should quietly put one back.
-for (const f of ["art-title.jpg", "art-title-light.jpg"]) {
-  assert(!fs.existsSync(path.join(root, `2026-trec-rag-talk/${f}`)),
-    `${f} came off the deck; it should not be back`);
-}
+// ---- no photo-illustration anywhere --------------------------------------
+// The title slide's picture was fighting the words for the same space; the
+// four section breaks' said nothing the section name did not. All five came
+// off, and the breaks are plates of the deck's own colour instead.
 assert(!/title-slide-attributes/.test(qmd) && !/art-title/.test(qmd),
   "the title slide carries no background picture");
 const toggle = fs.readFileSync(path.join(root, "2026-trec-rag-talk/palette-toggle.html"), "utf8");
@@ -648,10 +645,8 @@ assert(/@media \(prefers-color-scheme: light\)/.test(theme),
   "the theme must carry the auto-mode rules the toggle defers to");
 // A light plate needs dark words on it, and the reverse, in both the pinned
 // themes and in auto.
-for (const sel of ["section.divider-img", "section.quarto-title-block"]) {
-  assert(new RegExp(`\\[data-theme="light"\\][^{]*${sel.replace(".", "\\.")}`).test(theme),
-    `${sel} needs a light-mode rule`);
-}
+assert(/\[data-theme="light"\][^{]*section\.quarto-title-block/.test(theme),
+  "the title slide needs a light-mode rule");
 
 // ---- the type floor ------------------------------------------------------
 // "the copy might be small to see". A figure drawn in a 1600-unit viewBox is
@@ -846,17 +841,17 @@ for (const stage of ["Search", "Rerank", "Select", "Nuggets"]) {
   assert(lane.includes(`>${stage}</text>`), `the lane figure should keep the stage: ${stage}`);
 }
 
-// --------------------------------------------- only the warm art is cooled
-// Measured raw warmth (mean R-B) of the four daylight scenes: Retrieval +1,
-// Overall score +1, Answer Generation +10, Cost +16. A filter on all four
-// drained the neutral pair for no gain, so it rides on .art-warm.
-assert(!/img\.art-light\s*\{[^}]*filter/.test(theme),
-  "do not desaturate every daylight scene — only the warm ones need it");
-assert(/img\.art-warm\s*\{[^}]*filter:\s*saturate/.test(theme),
-  "the warm daylight scenes should carry the saturation correction");
-const warmArt = (qmd.match(/\.art-light \.art-warm/g) || []).length;
-assert(warmArt === 2,
-  `exactly the two warm scenes take the filter, found ${warmArt}`);
+// ------------------------------------------------- no pictures to maintain
+// The daylight twins, the saturation correction that cooled the warm ones,
+// and the eight JPEGs behind them all went with the art.
+for (const f of ["art-title", "art-retrieval", "art-generation", "art-score", "art-cost"]) {
+  for (const half of ["", "-light"]) {
+    assert(!fs.existsSync(path.join(root, `2026-trec-rag-talk/${f}${half}.jpg`)),
+      `${f}${half}.jpg came off the deck; it should not be back`);
+  }
+}
+assert(!/art-(dark|light|warm)/.test(theme),
+  "no art-switching rules should remain in the theme");
 
 // ------------------------------------------------------ one kind of header
 // A `.divider { border-top: 2px }` rule drew a line across the top of all
