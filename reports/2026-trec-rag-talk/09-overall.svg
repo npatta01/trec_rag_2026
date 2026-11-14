@@ -61,11 +61,11 @@
   </g>
 
   <text class="ov-n"   x="40"  y="212" style="fill:var(--gen)">26</text>
-  <text class="ov-lab" x="40"  y="242">multi-stage supported more</text>
+  <text class="ov-lab" x="40"  y="252">multi-stage supported more</text>
   <text class="ov-n"   x="600" y="212" style="fill:var(--muted)">15</text>
-  <text class="ov-lab" x="600" y="242">tied exactly</text>
+  <text class="ov-lab" x="600" y="252">tied exactly</text>
   <text class="ov-n"   x="1000" y="212" style="fill:var(--ret)">1</text>
-  <text class="ov-lab" x="1000" y="242">single-pass did better</text>
+  <text class="ov-lab" x="1000" y="252">single-pass did better</text>
 
   <text class="ov-kick" x="40" y="314">ASSESSOR BATTLES WON — EACH RUN AGAINST THE FIELD, NOT AGAINST EACH OTHER</text>
 

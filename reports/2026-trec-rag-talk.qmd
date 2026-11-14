@@ -48,17 +48,6 @@ Two submissions out of one pipeline, traced through a single request.
 ![](2026-trec-rag-talk/00-task.svg){fig-alt="Two inputs on the left: the ClimbMix collection, drawn as a stack of documents reachable only through one hosted BM25 search endpoint, and the 119 requests, each a paragraph of context followed by several questions. One output on the right: a single written answer, drawn as lines of prose where every line ends in a citation marker, under two hard rules — at most 1,024 words, and every statement cited."}
 :::
 
-## The architecture
-
-::: {.diagram}
-![](2026-trec-rag-talk/00-architecture.svg){fig-alt="Five components left to right. Plan, with deepseek-v4-flash, one call never repeated. Search, Pyserini BM25 over the ClimbMix collection. Rerank, mxbai-rerank-base-v2, chunk then score. Select, all-MiniLM-L6-v2, dropping duplicates and spreading what is left. Write, gpt-5.6-sol and gpt-5.6-luna. The chain forks at the end: the selection step emits three ranked retrieval files, and the writing step emits two answer files."}
-:::
-
-::: {.cap}
-Plan once, search wide, narrow to evidence, then write twice.
-**The one variable in this talk is the last box** — given identical evidence,
-does writing once differ from writing, auditing and revising?
-:::
 ## The request we will follow
 
 ::: {.trace-step}
@@ -90,17 +79,12 @@ location, and day-to-day practicality,
 :::
 
 ::: {.cap}
-Eight things asked at once. Hold on to the two bold facts — they sit in
-different sentences, and only one of the two answers ever joins them.
+Eight things asked at once, in one paragraph.
 :::
 ## Retrieval {.divider .divider-img}
 
 ::: {.secshot}
 ![](2026-trec-rag-talk/art-retrieval.jpg){fig-alt="A vast night library. Tall bookshelves rise along the left and right edges of the frame. At the foot of the left-hand shelves a small figure seen from behind holds up an amber lantern, lighting a handful of volumes. The aisle down the middle is dark and empty."}
-:::
-
-::: {.cap}
-One vague request becomes 17 searches, then about a page of text.
 :::
 
 
@@ -129,10 +113,6 @@ The example · 8 subnarratives created for this one request
 
 ## The queries each angle became
 
-::: {.trace-step}
-The example · two of the eight — the other six look the same
-:::
-
 ::: {.qgrid .qpair}
 <details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M-11 -8H-7M-3 -8H11M-11 0H-7M-3 0H11M-11 8H-7M-3 8H6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>What options exist?</summary>
 <code>furnished temporary housing New York City family three six weeks</code>
@@ -144,6 +124,10 @@ The example · two of the eight — the other six look the same
 </details>
 
 
+:::
+
+::: {.cap}
+Two of the eight — the other six look the same, and all of them are in the appendix.
 :::
 
 ## Searching: how it works
@@ -186,10 +170,6 @@ real passages, which stay private. Survivors are then spread by MMR.)
 
 ::: {.secshot}
 ![](2026-trec-rag-talk/art-generation.jpg){fig-alt="A dark studio at night. On the left one figure sits alone at a desk under a warm pool of lamplight, writing on a blank sheet. On the right two figures at another desk pass a blank sheet between them. The space down the middle is dark and empty."}
-:::
-
-::: {.cap}
-The same sealed evidence, written twice — once alone, once with a second model judging.
 :::
 
 
@@ -264,10 +244,6 @@ never appears in the single-pass answer.
 ![](2026-trec-rag-talk/art-score.jpg){fig-alt="A dark hall. A tall board of small panels fills the left edge and a matching board the right, most panels dim and a scattered few glowing warm. Two small figures stand at the lower left looking up at them. The space down the middle is dark and empty."}
 :::
 
-::: {.cap}
-From here on, every number is the organizers' own.
-:::
-
 ## What the organizers said about rag2026-18
 
 ::: {.trace-step}
@@ -324,10 +300,6 @@ Multi-stage costs several extra model calls per topic for this. Nothing here is
 
 ::: {.secshot}
 ![](2026-trec-rag-talk/art-cost.jpg){fig-alt="A dark workshop at night. On the left a single lamp hangs low over an empty bench, lighting a small circle. On the right a tall rack of many lit lamps throws a much larger pool of warm light. The space down the middle is dark and empty."}
-:::
-
-::: {.cap}
-What the second pass cost, in the only unit I actually counted.
 :::
 
 ## What the second pass cost
@@ -421,7 +393,7 @@ We return about a third as many documents as the field median and are more
 precise for it; recall is the price.
 :::
 
-## Appendix · all 17 query lanes
+## Appendix · query lanes 1–4
 
 ::: {.trace-step}
 rag2026-18 · 8 subnarratives × 2 queries = 16, plus the untouched request = 17
@@ -444,6 +416,12 @@ rag2026-18 · 8 subnarratives × 2 queries = 16, plus the untouched request = 17
 <code>real cost comparison short term rental NYC fees taxes</code>
 <code>hidden costs temporary housing New York City</code>
 </details>
+
+:::
+
+## Appendix · query lanes 5–8
+
+::: {.qgrid}
 <details open><summary><svg class="glyph qico" viewBox="-16 -16 32 32" aria-hidden="true"><path d="M0 -11L9 -7.5V1C9 7 4.8 10.6 0 12C-4.8 10.6 -9 7 -9 1V-7.5Z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M-4 0.5L-1 3.5L4.5 -2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Is it safe for a child?</summary>
 <code>safety family short term rental New York City neighborhood</code>
 <code>child safe temporary housing NYC</code>
@@ -462,3 +440,36 @@ rag2026-18 · 8 subnarratives × 2 queries = 16, plus the untouched request = 17
 </details>
 :::
 
+## Appendix · what this was built on
+
+::: {.eyebrow}
+Every model and tool, with where to find it
+:::
+
+::: {.grid-2}
+::: {.card .card-ret}
+[Ours]{.card-label}
+<div class="reflist">
+<span class="rf-k">planning</span><span class="rf-v">**deepseek-v4-flash** · [deepseek.com](https://www.deepseek.com/)</span>
+<span class="rf-k">search</span><span class="rf-v">**Pyserini** BM25 · Lin et al., SIGIR 2021 · [10.1145/3404835.3463238](https://doi.org/10.1145/3404835.3463238)</span>
+<span class="rf-k">reranking</span><span class="rf-v">**mxbai-rerank-base-v2** · [mixedbread-ai on Hugging Face](https://huggingface.co/mixedbread-ai/mxbai-rerank-base-v2)</span>
+<span class="rf-k">dedup</span><span class="rf-v">**all-MiniLM-L6-v2** · Reimers & Gurevych, EMNLP 2019 · [sentence-transformers](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)</span>
+<span class="rf-k">writing</span><span class="rf-v">**gpt-5.6-sol** and **gpt-5.6-luna**</span>
+</div>
+:::
+
+::: {.card .card-gen}
+[The organizers']{.card-label}
+<div class="reflist">
+<span class="rf-k">nuggets</span><span class="rf-v">**AutoNuggetizer** · [arXiv:2411.09607](https://arxiv.org/abs/2411.09607) · [10.1145/3726302.3730090](https://doi.org/10.1145/3726302.3730090)</span>
+<span class="rf-k">preferences</span><span class="rf-v">**arena-rank**, Bradley–Terry · [lmarena/arena-rank](https://github.com/lmarena/arena-rank)</span>
+<span class="rf-k">corpus</span><span class="rf-v">**ClimbMix**, reachable only through the hosted BM25 endpoint</span>
+<span class="rf-k">scoring</span><span class="rf-v">rubric and nugget assignment with GPT-6.1 Sol, per the organizers' README</span>
+</div>
+:::
+:::
+
+::: {.cap}
+The three judged collections on the coverage slide are the organizers' own:
+human rubrics, human-authored nuggets, and AutoNuggetizer's generated ones.
+:::

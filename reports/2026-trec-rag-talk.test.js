@@ -53,7 +53,7 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 23, `expected 23 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 22, `expected 22 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -154,8 +154,8 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 30,
-  `expected 30 content slides, found ${sections.length}`);
+assert(sections.length === 31,
+  `expected 31 content slides, found ${sections.length}`);
 
 // Four sections, named the way the work is actually divided. The contents are
 // shown once, at the top; the three breaks after it carry a picture instead,
@@ -511,7 +511,13 @@ assert(boxes <= 3, `at most 3 boundary boxes, found ${boxes}`);
 assert(!/What I would and would not claim/.test(qmd),
   "the standalone limits slide was cut; its one load-bearing limit moved to the close");
 assert(/## Where that leaves the architecture/.test(qmd),
-  "the talk should close by returning to the architecture it opened on");
+  "the talk should close on the architecture");
+// It used to open on the same figure too. One of the two had to go, and the
+// close is the one the author asked to keep.
+assert(!/^## The architecture$/m.test(qmd),
+  "the architecture is shown once, at the close, not twice");
+assert((qmd.match(/00-architecture\.svg/g) || []).length === 1,
+  "the architecture figure should appear on exactly one slide");
 
 // The prompt slide was cut, and so, later, was the one line that carried it.
 // The constraint is real but it is the speaker's to say out loud: the slide is
@@ -544,8 +550,26 @@ assert(/never writes a sentence of the answer/.test(luna),
 // Pandoc wraps a run of inline spans in a <p>, which silently collapses any
 // grid or flex row built from them onto a single line. This has regressed
 // twice, and it renders without error, so the un-wrapping rule is pinned.
-assert(/\.record > p,\s*\n\.gatelist > p,\s*\n\.adds > p,\s*\n\.roadmap > p \{\s*\n\s*display: contents;/.test(theme),
+assert(/\.record > p,\s*\n\.gatelist > p,\s*\n\.adds > p,\s*\n\.reflist > p,\s*\n\.roadmap > p \{\s*\n\s*display: contents;/.test(theme),
   "the spans-in-a-<p> wrapper must be dropped, or these grids collapse");
+
+// ---- citations ------------------------------------------------------------
+// Every model named on a slide has to be findable. They live in an appendix,
+// not under the diagrams, so the slides stay readable.
+const refsAt = qmd.indexOf("## Appendix · what this was built on");
+assert(refsAt > qmd.indexOf("## Everything here is public"),
+  "the reference list belongs in the appendix");
+for (const ref of ["mxbai-rerank-base-v2", "Pyserini", "all-MiniLM-L6-v2",
+                   "deepseek-v4-flash", "AutoNuggetizer", "arena-rank"]) {
+  assert(qmd.slice(refsAt).includes(ref), `the appendix should cite: ${ref}`);
+}
+for (const url of ["huggingface.co/mixedbread-ai/mxbai-rerank-base-v2",
+                   "huggingface.co/sentence-transformers/all-MiniLM-L6-v2",
+                   "doi.org/10.1145/3404835.3463238",
+                   "arxiv.org/abs/2411.09607",
+                   "github.com/lmarena/arena-rank"]) {
+  assert(qmd.includes(url), `the appendix should link: ${url}`);
+}
 
 // ---- the type floor ------------------------------------------------------
 // "the copy might be small to see". A figure drawn in a 1600-unit viewBox is
@@ -695,11 +719,16 @@ for (const [fig, tok] of [["00-task", "tk"], ["00-architecture", "ar"]]) {
 // mid-talk, but it is the thing people ask to see afterwards.
 const openDetails = (qmd.match(/<details open>/g) || []).length;
 assert(openDetails === 10, `expected 2 lanes on the slide and 8 in the appendix, found ${openDetails}`);
-const appendixQueriesAt = qmd.indexOf("## Appendix · all 17 query lanes");
+// Eight lanes on one appendix slide only fit at microscopic type, so they run
+// across two slides at the size the rest of the deck uses.
+const appendixQueriesAt = qmd.indexOf("## Appendix · query lanes 1–4");
 assert(appendixQueriesAt > qmd.indexOf("## Appendix {.divider}"),
   "the full query grid belongs in the appendix");
+assert(qmd.includes("## Appendix · query lanes 5–8"),
+  "the second half of the lanes needs its own slide");
 assert((qmd.slice(appendixQueriesAt).match(/<details open>/g) || []).length === 8,
   "the appendix carries all eight lanes");
+assert(!/\.qall/.test(theme), "the shrink-to-fit appendix hack should be gone");
 
 // The dedup step is shown concretely, and flagged as illustrative wording
 // because real corpus passages stay private.
