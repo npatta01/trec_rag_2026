@@ -21,11 +21,12 @@
   <rect width="1240" height="520" fill="var(--bg)"/>
 
   <!-- 1. the plan, and what Sol made of it -->
-  <text class="lu-kick" x="24" y="36" style="fill:var(--gen)">1 · LUNA WRITES THE PLAN — 3 TO 8 OBLIGATIONS</text>
+  <text class="lu-kick" x="24" y="36" style="fill:var(--gen)">BEFORE SOL WRITES · LUNA PLANS</text>
 
   <rect x="24" y="56" width="580" height="150" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
   <text class="lu-body" x="48" y="96">cover <tspan font-weight="800">legality and reliability</tspan></text>
-  <text class="lu-body" x="48" y="134">in about <tspan font-weight="800">140 words</tspan></text>
+  <text class="lu-note" x="452" y="36">3 to 8 of these</text>
+  <text class="lu-body" x="48" y="134">in <tspan font-weight="800">140 words</tspan> of the 850–950 total</text>
   <text class="lu-body" x="48" y="172">using evidence <tspan font-weight="800">c003 · c011 · c014</tspan></text>
 
   <path class="lu-flow" d="M314 206 V244"/>
@@ -37,10 +38,10 @@
   <text class="lu-quote" x="48" y="408">the city or qualifies for the</text>
   <text class="lu-quote" x="48" y="444">applicable Class B status.”</text>
 
-  <text class="lu-note" x="24" y="492">Luna never writes a sentence of the answer.</text>
+  <text class="lu-note" x="24" y="492">Every obligation gets its own word target. Luna writes no prose.</text>
 
   <!-- 2. the screen -->
-  <text class="lu-kick" x="650" y="36" style="fill:var(--gen)">2 · LUNA SCREENS EACH EDIT — TRUE OR FALSE</text>
+  <text class="lu-kick" x="650" y="36" style="fill:var(--gen)">AFTER SOL WRITES · LUNA SCREENS EACH EDIT</text>
 
   <rect x="650" y="56" width="566" height="330" rx="12" fill="var(--panel)" stroke="var(--gen)" stroke-width="3"/>
   <g style="color:var(--ok)">

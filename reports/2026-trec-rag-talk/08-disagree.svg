@@ -27,7 +27,6 @@
 
   <path d="M120 290 V326 H260" fill="none" stroke="var(--ret)" stroke-width="3" marker-end="url(#dga)"/>
   <text class="dg-win" x="276" y="334" style="fill:var(--ret)">PUTS SINGLE-PASS AHEAD</text>
-  <text class="dg-sub" x="72" y="378">The rubric items were not released, so I cannot say what was credited.</text>
 
   <rect x="840" y="24" width="720" height="380" rx="14" fill="var(--panel)" opacity=".5"/>
   <rect x="840" y="24" width="720" height="380" rx="14" fill="none" stroke="var(--line)" stroke-width="2" opacity=".5"/>
@@ -45,7 +44,6 @@
 
   <path d="M920 290 V326 H1060" fill="none" stroke="var(--gen)" stroke-width="3" marker-end="url(#dgb)"/>
   <text class="dg-win" x="1076" y="334" style="fill:var(--gen)">PUTS MULTI-STAGE AHEAD</text>
-  <text class="dg-sub" x="872" y="378">Different battle counts, so the bars are shares, not totals.</text>
 
   <text class="dg-head" x="800" y="452" text-anchor="middle">Same two answers. Opposite ranking.</text>
   <defs>

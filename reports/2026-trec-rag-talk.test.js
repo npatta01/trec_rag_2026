@@ -76,15 +76,13 @@ for (const stage of ["Planning", "Searching"]) {
   assert(qmd.includes(`## ${stage}: how it works`), `missing mechanism slide for ${stage}`);
 }
 for (const head of ["## Single-pass: Sol alone", "## Multi-stage: the work changes hands",
-                    "## The two places Luna is used", "## Two writers: this request",
+                    "## The two places Luna is used", "## Single-pass vs multi-stage",
                     "## Reranking: a document becomes passages",
                     "## Selecting the evidence"]) {
   assert(qmd.includes(head), `missing slide: ${head}`);
 }
-for (const stage of ["Planning", "Two writers"]) {
-  assert(qmd.includes(`## ${stage}: this request`),
-    `missing worked-example slide for ${stage}`);
-}
+assert(qmd.includes("## Planning: this request"),
+  "missing worked-example slide for Planning");
 
 // Both worked examples, and the numbers quoted for them.
 // The scored numbers moved out of tables and into charts, so each is checked
@@ -132,7 +130,9 @@ const requiredBoundaries = [
   "a claim that it is novel",
   "the organizers' own, from the score files",
   "42 scored topics",
-  "rubric items were not released",
+  // "The rubric items were not released" came off both the slide and the
+  // figure as too much copy. The claim it guarded - that the deck never says
+  // WHY the rubric scored as it did - is checked directly instead.
   // The citation-support limit came off the deck entirely at the author's
   // request; the check above pins what the deck must not claim instead.
   // The battle counts are per-run against the field, never head to head. The
@@ -141,6 +141,8 @@ const requiredBoundaries = [
   "not our two answers against each other",
   "other teams' answers",
 ];
+assert(!/because the rubric (credited|rewarded|counted)/i.test(flat),
+  "the deck must not explain a rubric score it cannot see inside");
 for (const boundary of requiredBoundaries) {
   assert(flat.includes(boundary), `deck should keep the boundary note: ${boundary}`);
 }
@@ -489,17 +491,19 @@ assert(qmd.indexOf("## Everything here is public") < appendixAt,
 const cost = fs.readFileSync(path.join(root, "2026-trec-rag-talk/13-cost.svg"), "utf8");
 // Per narrative first, because that is the number a listener can hold:
 // retrieval 4-9 calls, generation 1 against 7-12. Totals follow.
-for (const fact of ["4 – 9", "7 – 12", "119", "691", "810", "121", "1,167",
-                    "9.6", "1,787", "per narrative"]) {
+// Three figures, not a table: what both runs share, then the two that differ,
+// with the totals once at the foot. The unit is in the figure's own kicker.
+for (const fact of ["4–9", "7–12", "119", "810", "121", "1,167", "9.6",
+                    "MODEL CALLS PER NARRATIVE"]) {
   assert(cost.includes(fact), `the cost figure should state: ${fact}`);
 }
 assert(476 + 691 === 1167 && 119 + 2 === 121,
   "the cost arithmetic on the figure must still add up");
-// Tokens were never metered, so the deck must not imply a price.
-assert(/THIS COUNTS CALLS, NOT MONEY/.test(cost) && /never metered/.test(cost),
-  "the cost slide must say plainly that it counts calls, not money");
-assert(!/\$|USD|dollars? spent|per 1M tokens/.test(cost),
+// Tokens were never metered, so the deck must not imply a price. The
+// disclaimer came off at the author's request; the unit carries it instead.
+assert(!/\$|USD|dollars? spent|per 1M tokens|cost in dollars/i.test(cost),
   "no figure may put a price on a run that was never metered");
+assert(/MODEL CALLS/.test(cost), "the cost figure must name its unit");
 
 // ---- the hedging budget ----------------------------------------------------
 // A warning box on every slide teaches the room to skip them, so only the
@@ -531,7 +535,7 @@ assert(!/Do not answer the topic/.test(qmd),
 // The slide is one picture: one obligation in plain words, an arrow, and the
 // sentence Sol actually wrote from it in the submitted answer.
 const luna = fs.readFileSync(path.join(root, "2026-trec-rag-talk/16-luna.svg"), "utf8");
-for (const fact of ["3 TO 8 OBLIGATIONS", "legality and reliability", "140 words",
+for (const fact of ["3 to 8 of these", "legality and reliability", "140 words",
                     "c003 · c011 · c014", "SOL WRITES FROM IT",
                     "registered with", "Class B status"]) {
   assert(luna.includes(fact), `the Luna figure should show: ${fact}`);

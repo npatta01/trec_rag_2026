@@ -590,6 +590,7 @@ body.reveal-viewport,
 // Only the forms that genuinely read better when larger. A bordered text
 // block or a table stretched to fill just draws a long empty rule.
 .reveal .slides > section > .diagram,
+.reveal .slides > section > .roadmap,
 .reveal .slides > section > .secshot,
 .reveal .slides > section > .adds,
 .reveal .slides > section > .grid-2,
@@ -1494,8 +1495,8 @@ body.reveal-viewport,
   gap: 0.4em 0.8em;
   align-content: start;
   margin: 0.3em 0 0;
-  font-size: 0.56em;
-  line-height: 1.34;
+  font-size: 0.68em;
+  line-height: 1.38;
 }
 
 .rf-k {
@@ -1508,3 +1509,70 @@ body.reveal-viewport,
 .rf-v { color: var(--ink); }
 
 .reflist > p { display: contents; }
+
+// ------------------------------------------------- the title slide
+// "the middle feels so empty". Reveal paints the art behind the slide via
+// data-background-image, so this only has to spread the text down the frame
+// and keep it light — the picture under it is dark whatever the palette.
+.reveal .slides > section.quarto-title-block {
+  position: relative;
+  display: flex !important;
+  flex-direction: column;
+  height: 100%;
+  padding: 1.6em 0 1.2em;
+  text-align: center;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      to bottom,
+      rgba(6, 10, 18, 0.3),
+      rgba(6, 10, 18, 0.05) 45%,
+      rgba(6, 10, 18, 0.45)
+    );
+  }
+
+  > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .title {
+    color: #f2f6f9;
+    margin: 0 0 0.16em;
+  }
+
+  .subtitle {
+    color: #d3dde7;
+    margin: 0 0 auto;
+  }
+
+  .quarto-title-authors,
+  .author,
+  .quarto-title-author-name {
+    color: #e6edf3;
+    margin-top: auto;
+  }
+
+  .date {
+    color: #aebdcb;
+    margin-top: 0.3em;
+  }
+}
+
+// ------------------------------------------------- the contents slide
+// Five legs sitting in a huddle in the middle left the slide half empty.
+// They spread through the free height instead, and set larger with it.
+.reveal .slides > section.divider > .roadmap {
+  justify-content: space-evenly;
+  gap: 0.2em;
+}
+
+.reveal .slides > section.divider > .roadmap .leg {
+  font-size: 1.05em;
+  padding: 0.5em 0.9em;
+}

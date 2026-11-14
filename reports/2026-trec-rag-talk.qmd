@@ -3,6 +3,10 @@ title: "TREC RAG 2026"
 subtitle: "Single-pass and multi-stage answer generation, traced through one request"
 author: "Nidhin Pattaniyil · Tanwir Zaman · Semih Yagli — NP Labs"
 date: "2026-11-16"
+title-slide-attributes:
+  data-background-image: 2026-trec-rag-talk/art-title.jpg
+  data-background-size: cover
+  data-background-position: center
 filters:
   - 2026-trec-rag-talk/inline-svg.lua
 format:
@@ -84,7 +88,7 @@ Eight things asked at once, in one paragraph.
 ## Retrieval {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/art-retrieval.jpg){fig-alt="A vast night library. Tall bookshelves rise along the left and right edges of the frame. At the foot of the left-hand shelves a small figure seen from behind holds up an amber lantern, lighting a handful of volumes. The aisle down the middle is dark and empty."}
+![](2026-trec-rag-talk/art-retrieval.jpg){fig-alt="A towering wall of small card-catalogue drawers fills the left edge of the frame and another fills the right. On the left a few drawers are pulled open and glow warm, with pale cards fanned above them, and a figure seen from behind reaches up to one while holding a lantern. Every other drawer is shut and dim. The space down the middle is dark and empty."}
 :::
 
 
@@ -169,7 +173,7 @@ real passages, which stay private. Survivors are then spread by MMR.)
 ## Answer Generation {.divider .divider-img}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/art-generation.jpg){fig-alt="A dark studio at night. On the left one figure sits alone at a desk under a warm pool of lamplight, writing on a blank sheet. On the right two figures at another desk pass a blank sheet between them. The space down the middle is dark and empty."}
+![](2026-trec-rag-talk/art-generation.jpg){fig-alt="A quiet study at night. On the left a desk and chair under a warm pool of lamplight, with a blank cream sheet and a few loose pages on it. On the right a tall window with warm light falling through, and a low bookshelf beneath. The space down the middle is dark and empty."}
 :::
 
 
@@ -185,17 +189,13 @@ real passages, which stay private. Survivors are then spread by MMR.)
 ![](2026-trec-rag-talk/03b-multi-stage.svg){fig-alt="A three-lane strip fed by the same sealed evidence. Luna is a crescent moon, Sol a sun, local code a pair of angle brackets. The path zigzags between lanes seven times: Luna plans, Sol writes the draft, Luna audits each evidence group returning at most six cards per group, local code merges them, Sol proposes at most three edits, Luna screens each against five booleans that must all pass, and local code applies only what passed. One pass through the stages, not a repeating loop; if revision fails the already validated draft stands."}
 :::
 
-::: {.cap}
-**No conversation runs through this.** Every box is its own call.
-:::
-
 ## The two places Luna is used
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/16-luna.svg){fig-alt="Two columns. Left, step one: Luna writes the plan, 3 to 8 obligations, one shown in plain words — cover legality and reliability, in about 140 words, using evidence c003, c011 and c014 — with an arrow down to the sentence Sol wrote from it in the submitted answer, about verifying whether the host is registered with the city or qualifies for Class B status. Right, step two: Luna screens each edit against five true-or-false checks — support, atomicity, materiality, redundancy, replacement safety — each with a plain-words gloss, and all five must pass or the edit is dropped. Notes say Luna never writes a sentence of the answer and local code does the editing."}
 :::
 
-## Two writers: this request
+## Single-pass vs multi-stage
 
 ::: {.trace-step}
 The example · rag2026-18
@@ -220,12 +220,9 @@ The example · rag2026-18
 :::
 
 ::: {.cap}
-Same sealed evidence, same ceiling. Multi-stage spent **more of the budget and
-made 16 more statements**. Both spotted the 30-day trap — single-pass noted six
-weeks exceeds it; multi-stage added that the definition alone *does not
-establish* whether a particular six-week sublet is lawful.
+Same evidence, same ceiling. Multi-stage made **16 more statements**.
 :::
-## The difference, in nugget coverage
+## Nugget coverage, all 42 scored topics
 
 ::: {.diagram}
 ![](2026-trec-rag-talk/15-coverage.svg){fig-alt="Three groups of paired bars on a nought-to-one scale, one per judged collection, single-pass above multi-stage in each. NIST human rubrics over 17 narratives: 0.774 against 0.874, multi-stage ahead on 8, tied 8, behind 1. NIST human nuggets over 25 narratives: 0.570 against 0.658, ahead on 18, tied 7, behind 0. Auto-generated nuggets over 25 narratives: 0.128 against 0.250, ahead on 22, tied 3, behind 0. A note says all three rubrics put multi-stage ahead, that single-pass covered more on exactly one of the 42 narratives, and that levels are not comparable between collections."}
@@ -269,8 +266,7 @@ A different topic · rag2026-13, a founder scaling a startup
 :::
 
 ::: {.cap}
-Same two answers, opposite ranking. The rubric items were not released, so I
-cannot say what was credited — only that **the two measures disagree here**.
+Same two answers, opposite ranking.
 :::
 
 ## How often they disagree
@@ -280,9 +276,7 @@ cannot say what was credited — only that **the two measures disagree here**.
 :::
 
 ::: {.cap}
-The previous slide was not a one-off, and it was not typical either. **Five of
-42** disagree; on the 20 where both measures move together they move the same
-way every time. The 17 left over had one measure exactly tied.
+Not a one-off, and not typical either.
 :::
 
 ## Overall: 42 scored topics
@@ -313,8 +307,7 @@ Model calls across all 119 requests
 :::
 
 ::: {.cap}
-The extra passes buy coverage and **cost about ten times the calls**. Retrieval
-is paid once and feeds both, so the comparison is clean.
+Retrieval is paid once. Only the writing is paid twice.
 :::
 
 ## Where that leaves the architecture
