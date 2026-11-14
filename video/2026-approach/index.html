@@ -105,6 +105,15 @@
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
       <div id="grain"></div>
+
+      <!-- The catalog track opens on 16 s of quiet pad; the film enters at its
+           first real onset instead, and the last four seconds fade under the
+           closing line. The raw mp3 is not committed: the query that fetched it
+           is in audio_request.json, and the render carries the licensed mix. -->
+      <audio id="bed" src="assets/bgm/track.mp3"
+             data-start="0" data-duration="79"
+             data-media-start="16.158"
+             data-volume="0.8" data-fade-in="1.4" data-fade-out="4.5"></audio>
     </div>
     <script>
       // The root holds only scene hosts and the paper. Every move lives in the

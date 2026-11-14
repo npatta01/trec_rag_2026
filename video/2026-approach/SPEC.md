@@ -9,7 +9,7 @@ GOAL:    the viewer can say, in their own words, how one request becomes a
          cited answer — and that every sentence points at a passage that was
          actually retrieved.
 OUTPUT:  HyperFrames, 1920 x 1080, 30 fps
-TIME:    74 s x 30 = 2220 frames. No music beat grid; the clock is the stages.
+TIME:    79 s x 30 = 2370 frames. The stages are the clock; the bed follows them.
 ```
 
 ## LOOK
@@ -76,6 +76,15 @@ later. Nothing drifts after it lands.
 | 7 | 1410–1650 | 20 dashed claim rows rise beside the passages | "≤20 claims — a hint about what to cover, never cited" | the sealed set sliding into generation |
 | 8 | 1650–1980 | Sol drafts; Luna's audit marks one group; one edit refused | "Sol writes. Luna checks it against the same passages." · 7–12 calls | the two columns collapsing into one sheet |
 | 9 | 1980–2220 | citation markers light in order along the answer | "Every sentence points at a passage that was retrieved." | hold the last frame 2 s |
+
+## SOUND
+
+One retrieved catalog bed, entered at its first real onset (16.158 s into the
+track, skipping a quiet pad) at volume 0.8, fading in over 1.4 s and out over
+the last 4.5 s under the closing line. Its peak lands at 50 s, on the boundary
+between the claims and the writing, and it tails from 72.8 s so the last line
+sits in the decay. No effects: this film is cards arriving on paper, and three
+borrowed hits would read as a template rather than as causes on screen.
 
 ## BANNED
 

@@ -15,3 +15,6 @@ __pycache__/
 *.pyc
 *.log
 *.pid
+
+# HyperFrames CLI scratch
+.hyperframes/

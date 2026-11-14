@@ -2,3 +2,6 @@ node_modules/
 out/
 renders/
 .hyperframes/
+assets/bgm/
+audio_meta.json
+.media/
