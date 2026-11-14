@@ -35,7 +35,6 @@ for (const asset of [
   "2026-trec-rag-talk/06-retrieval.svg",
   "2026-trec-rag-talk/00-task.svg",
   "2026-trec-rag-talk/00-architecture.svg",
-  "2026-trec-rag-talk/img-request.png",
 ]) {
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
@@ -54,9 +53,12 @@ assert(fetched.length === 0,
 // the pair on the request slide is fine because only one of the two is ever
 // displayed, and display:none takes the other out of the a11y tree too.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 21, `expected 21 fig-alt figures, found ${figAlts.length}`);
-const storyArt = (qmd.match(/\{\.story /g) || []).length;
-assert(storyArt === 4, `expected the 4 storybook illustrations, found ${storyArt}`);
+assert(figAlts.length === 20, `expected 20 fig-alt figures, found ${figAlts.length}`);
+// The illustrations show in every look now, so there is no .story class and
+// no second copy of the request scene to switch against.
+assert(!/\{\.story|\{\.plain/.test(qmd), "the look-specific art classes are gone");
+assert(!fs.existsSync(path.join(root, "2026-trec-rag-talk/img-request.png")),
+  "the night request scene was replaced by the drawing");
 for (const n of ["request", "retrieval", "generation", "score"]) {
   assert(fs.existsSync(path.join(root, `2026-trec-rag-talk/story-${n}.jpg`)),
     `missing storybook illustration: story-${n}.jpg`);
@@ -201,8 +203,8 @@ assert((qmd.match(/\{\.secshot\}/g) || []).length === 3,
   "three section breaks carry a storybook picture");
 // `theme` is read further down; this block runs before it.
 const themeEarly = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
-assert(/img\.story,\s*\n\.reveal \.slides > section > \.secshot \{ display: none; \}/.test(themeEarly),
-  "the storybook art is hidden unless Storybook is on");
+assert(/section\.divider:has\(\.secshot\) \{\s*\n\s*background: var\(--bg\);/.test(themeEarly),
+  "a break carrying a picture has no plate behind it, in any look");
 assert(/:root\[data-theme="story"\]/.test(themeEarly),
   "Storybook needs its own pinned rule");
 assert(/@mixin deck-story/.test(themeEarly), "the storybook palette should be defined");

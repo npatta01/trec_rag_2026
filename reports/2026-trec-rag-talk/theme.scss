@@ -43,8 +43,12 @@ $code-block-font-size: 0.6em !default;
   // blue in both palettes for exactly that reason.
   --deck: #1f5fa8;
 
-  --bg: #f7f8fa;
-  --panel: #ffffff;
+  // Warm off-white, not cool grey. The illustrations are painted on cream
+  // and show in every look now; a blue-grey page made them read as pasted on
+  // rather than printed with the deck. Luminance is within a point of the
+  // old #f7f8fa, so the measured contrasts hold.
+  --bg: #f8f5ef;
+  --panel: #fffdf8;
   --ink: #151a21;
   --muted: #515a67;
   --line: #646d7a;
@@ -74,8 +78,12 @@ $code-block-font-size: 0.6em !default;
 @mixin deck-dark {
   --deck: #7ab3f5;
 
-  --bg: #101318;
-  --panel: #1a1f26;
+  // Same reason, as far as a dark page can go: warm near-black rather than
+  // blue-black. A cream drawing will always be the brightest thing on a dark
+  // slide — that is the medium, not a fault — but it should at least not be
+  // the only warm thing on it.
+  --bg: #141310;
+  --panel: #1f1d19;
   --ink: #eef1f6;
   --muted: #b6bec9;
   --line: #8d96a3;
@@ -1488,13 +1496,7 @@ body.reveal-viewport,
 // down: Reveal letterboxes each slide inside the window, so any slide with a
 // background of its own becomes a rectangle with page showing above and
 // below. In Storybook the plate therefore IS the page — one cream, no band.
-.reveal section img.story,
-.reveal .slides > section > .secshot { display: none; }
-
-:root[data-theme="story"] {
-  .reveal section img.story { display: block; }
-
-  .reveal .slides > section > .secshot {
+.reveal .slides > section > .secshot {
     display: flex;
     align-items: stretch;
     justify-content: center;
@@ -1516,22 +1518,28 @@ body.reveal-viewport,
       max-height: none;
       object-fit: contain;
     }
-  }
+}
 
-  // The night scene on the request slide belongs to the dark deck; the
-  // storybook has its own drawing of the same family.
-  .reveal section img.plain { display: none; }
+// A break that carries a picture puts its name above it rather than floating
+// it in the middle of the drawing.
+.reveal .slides > section.divider:has(.secshot) > h2 {
+  margin: 0 0 0.16em;
+}
 
-  // No plate, so no band: the break is the page with a name on it.
+// No plate behind a picture, in any look. Reveal letterboxes each slide, so
+// a slide with a background of its own becomes a rectangle with page showing
+// above and below — and the drawings are painted on their own cream, which a
+// plate would frame as a pasted rectangle. The break is the page with a name
+// on it.
+.reveal .slides > section.divider:has(.secshot) {
+  background: var(--bg);
+}
+
+:root[data-theme="story"] {
+  // Storybook has no plate anywhere: one cream, no band.
   .reveal .slides > section.divider,
   .reveal .slides > section.quarto-title-block {
     background: var(--bg);
-  }
-
-  // A break that carries a picture puts its name above it rather than
-  // floating it in the middle of the drawing.
-  .reveal .slides > section.divider:has(.secshot) > h2 {
-    margin: 0 0 0.16em;
   }
 }
 
@@ -1629,6 +1637,11 @@ body.reveal-viewport,
 // In dark mode 34% stays, because there the same mix lifts rather than weighs.
 @mixin plate-daylight {
   background: color-mix(in oklab, var(--deck) 14%, var(--bg));
+
+  // ...but never behind a picture. This has to live inside the mixin: the
+  // daylight rules carry an extra attribute selector, so a plain
+  // `:has(.secshot)` rule outside them loses the tie.
+  &:has(.secshot) { background: var(--bg); }
 }
 
 @media (prefers-color-scheme: light) {
