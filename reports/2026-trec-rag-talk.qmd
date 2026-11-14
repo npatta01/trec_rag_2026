@@ -215,6 +215,16 @@ Same evidence, same ceiling. Multi-stage made **16 more statements**.
 :::
 
 
+## What the organizers said about rag2026-18
+
+::: {.trace-step}
+One topic of the 42 — not the overall result
+:::
+
+::: {.diagram}
+![](2026-trec-rag-talk/07-topic18.svg){fig-alt="Two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Beside them, how the assessors scored it: a person was shown one answer of ours and one from another team, side by side, and picked one — each of those is a battle. Single-pass fought ten, seven preferred and three lost; multi-stage fought six, six preferred and none lost. Our two answers never met."}
+:::
+
 ## Nugget coverage, all 42 scored topics
 
 ::: {.diagram}
@@ -227,16 +237,6 @@ hazards**, ask whether the temporary unit has been made lead-safe."*
 
 The request said *repairs* and *a child* in different sentences.
 "Lead" never appears in the single-pass answer.
-:::
-
-## What the organizers said about rag2026-18
-
-::: {.trace-step}
-One topic of the 42 — not the overall result
-:::
-
-::: {.diagram}
-![](2026-trec-rag-talk/07-topic18.svg){fig-alt="Two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Beside them, how the assessors scored it: a person was shown one answer of ours and one from another team, side by side, and picked one — each of those is a battle. Single-pass fought ten, seven preferred and three lost; multi-stage fought six, six preferred and none lost. Our two answers never met."}
 :::
 
 ## When the two measures disagree

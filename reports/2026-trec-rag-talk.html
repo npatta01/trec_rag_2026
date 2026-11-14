@@ -2105,71 +2105,6 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 </div>
 </section>
 <section class="slide level2 center">
-<h2>Nugget coverage, all 42 scored topics</h2>
-<div class="diagram">
-<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1600 620" role="img" aria-labelledby="cv-title cv-desc">
-  <title id="cv-title">Nugget coverage on all three judged collections</title>
-  <desc id="cv-desc">Three groups of paired bars on a nought-to-one scale, one group per collection the organizers scored, each showing single-pass above multi-stage. On NIST&#39;s human-intuition rubrics, 17 narratives, single-pass covered 0.774 and multi-stage 0.874, with multi-stage ahead on 8 narratives, tied on 8 and behind on 1. On NIST&#39;s human-authored nuggets, 25 narratives, single-pass covered 0.570 and multi-stage 0.658, with multi-stage ahead on 18, tied on 7 and behind on none. On the automatically generated nuggets, 25 narratives, single-pass covered 0.128 and multi-stage 0.250, with multi-stage ahead on 22, tied on 3 and behind on none. A note at the foot says these are three separate rubrics written three different ways, that all three put multi-stage ahead, and that the absolute levels are not comparable between collections because each one counts different items.</desc>
-  <style>
-text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-.cv-kick{font-size:24px;font-weight:800;letter-spacing:.05em;fill:var(--muted)}
-.cv-name{font-size:25px;font-weight:760}
-.cv-sub{font-size:24px;fill:var(--muted)}
-.cv-run{font-size:24px;font-weight:700}
-.cv-val{font-size:24px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.cv-tally{font-size:24px;fill:var(--muted)}
-.cv-note{font-size:24px}
-</style>
-  <rect width="1600" height="620" fill="var(--bg)" />
-
-  <text class="cv-kick" x="40" y="40">SHARE OF THE EXPECTED ITEMS EACH ANSWER FULLY SUPPORTED · 0 TO 1</text>
-  <rect x="1078" y="20" width="20" height="20" rx="4" fill="var(--ret)" />
-  <text class="cv-run" x="1108" y="38" style="fill:var(--ret)">single-pass</text>
-  <rect x="1288" y="20" width="20" height="20" rx="4" fill="var(--gen)" />
-  <text class="cv-run" x="1318" y="38" style="fill:var(--gen)">multi-stage</text>
-
-  <!-- 1. human-intuition rubrics, batch 1 -->
-  <text class="cv-name" x="40" y="104">NIST human rubrics</text>
-  <text class="cv-sub" x="40" y="132">batch 1 · 17 narratives</text>
-  <rect x="470" y="72" width="464" height="38" rx="6" fill="var(--ret)" />
-  <text class="cv-val" x="950" y="99" style="fill:var(--ret)">0.774</text>
-  <rect x="470" y="120" width="524" height="38" rx="6" fill="var(--gen)" />
-  <text class="cv-val" x="1010" y="147" style="fill:var(--gen)">0.874</text>
-  <text class="cv-tally" x="1148" y="121">multi ahead on 8, tied 8, behind 1</text>
-
-  <!-- 2. human-authored nuggets, batch 2 -->
-  <text class="cv-name" x="40" y="236">NIST human nuggets</text>
-  <text class="cv-sub" x="40" y="264">batch 2 · 25 narratives</text>
-  <rect x="470" y="204" width="342" height="38" rx="6" fill="var(--ret)" />
-  <text class="cv-val" x="828" y="231" style="fill:var(--ret)">0.570</text>
-  <rect x="470" y="252" width="395" height="38" rx="6" fill="var(--gen)" />
-  <text class="cv-val" x="881" y="279" style="fill:var(--gen)">0.658</text>
-  <text class="cv-tally" x="1148" y="253">multi ahead on 18, tied 7, behind 0</text>
-
-  <!-- 3. auto-generated nuggets, batch 2 -->
-  <text class="cv-name" x="40" y="368">Auto-generated nuggets</text>
-  <text class="cv-sub" x="40" y="396">batch 2 · 25 narratives</text>
-  <rect x="470" y="336" width="77" height="38" rx="6" fill="var(--ret)" />
-  <text class="cv-val" x="563" y="363" style="fill:var(--ret)">0.128</text>
-  <rect x="470" y="384" width="150" height="38" rx="6" fill="var(--gen)" />
-  <text class="cv-val" x="636" y="411" style="fill:var(--gen)">0.250</text>
-  <text class="cv-tally" x="1148" y="385">multi ahead on 22, tied 3, behind 0</text>
-
-  <line x1="470" y1="446" x2="1070" y2="446" stroke="var(--line)" stroke-width="1.5" opacity=".45"></line>
-  <text class="cv-sub" x="470" y="472">0</text>
-  <text class="cv-sub" x="1058" y="472">1</text>
-
-  <rect x="40" y="508" width="1520" height="62" rx="12" fill="var(--panel)" stroke="var(--ok)" stroke-width="3" />
-  <text class="cv-note" x="66" y="548" style="font-weight:800;fill:var(--ok)">ALL THREE PUT MULTI-STAGE AHEAD · SINGLE-PASS COVERED MORE ON 1 OF 42</text>
-</svg>
-</p>
-</div>
-<div class="cap">
-<p>On rag2026-18 multi-stage wrote: <em>“if the apartment repairs involve <strong>lead hazards</strong>, ask whether the temporary unit has been made lead-safe.”</em></p>
-<p>The request said <em>repairs</em> and <em>a child</em> in different sentences. “Lead” never appears in the single-pass answer.</p>
-</div>
-</section>
-<section class="slide level2 center">
 <h2>What the organizers said about rag2026-18</h2>
 <div class="trace-step">
 <p>One topic of the 42 — not the overall result</p>
@@ -2241,6 +2176,71 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
   <text class="t18-sub" x="1040" y="442" style="font-weight:800;fill:var(--ink)">Our two answers never met.</text>
 </svg>
 </p>
+</div>
+</section>
+<section class="slide level2 center">
+<h2>Nugget coverage, all 42 scored topics</h2>
+<div class="diagram">
+<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1600 620" role="img" aria-labelledby="cv-title cv-desc">
+  <title id="cv-title">Nugget coverage on all three judged collections</title>
+  <desc id="cv-desc">Three groups of paired bars on a nought-to-one scale, one group per collection the organizers scored, each showing single-pass above multi-stage. On NIST&#39;s human-intuition rubrics, 17 narratives, single-pass covered 0.774 and multi-stage 0.874, with multi-stage ahead on 8 narratives, tied on 8 and behind on 1. On NIST&#39;s human-authored nuggets, 25 narratives, single-pass covered 0.570 and multi-stage 0.658, with multi-stage ahead on 18, tied on 7 and behind on none. On the automatically generated nuggets, 25 narratives, single-pass covered 0.128 and multi-stage 0.250, with multi-stage ahead on 22, tied on 3 and behind on none. A note at the foot says these are three separate rubrics written three different ways, that all three put multi-stage ahead, and that the absolute levels are not comparable between collections because each one counts different items.</desc>
+  <style>
+text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.cv-kick{font-size:24px;font-weight:800;letter-spacing:.05em;fill:var(--muted)}
+.cv-name{font-size:25px;font-weight:760}
+.cv-sub{font-size:24px;fill:var(--muted)}
+.cv-run{font-size:24px;font-weight:700}
+.cv-val{font-size:24px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.cv-tally{font-size:24px;fill:var(--muted)}
+.cv-note{font-size:24px}
+</style>
+  <rect width="1600" height="620" fill="var(--bg)" />
+
+  <text class="cv-kick" x="40" y="40">SHARE OF THE EXPECTED ITEMS EACH ANSWER FULLY SUPPORTED · 0 TO 1</text>
+  <rect x="1078" y="20" width="20" height="20" rx="4" fill="var(--ret)" />
+  <text class="cv-run" x="1108" y="38" style="fill:var(--ret)">single-pass</text>
+  <rect x="1288" y="20" width="20" height="20" rx="4" fill="var(--gen)" />
+  <text class="cv-run" x="1318" y="38" style="fill:var(--gen)">multi-stage</text>
+
+  <!-- 1. human-intuition rubrics, batch 1 -->
+  <text class="cv-name" x="40" y="104">NIST human rubrics</text>
+  <text class="cv-sub" x="40" y="132">batch 1 · 17 narratives</text>
+  <rect x="470" y="72" width="464" height="38" rx="6" fill="var(--ret)" />
+  <text class="cv-val" x="950" y="99" style="fill:var(--ret)">0.774</text>
+  <rect x="470" y="120" width="524" height="38" rx="6" fill="var(--gen)" />
+  <text class="cv-val" x="1010" y="147" style="fill:var(--gen)">0.874</text>
+  <text class="cv-tally" x="1148" y="121">multi ahead on 8, tied 8, behind 1</text>
+
+  <!-- 2. human-authored nuggets, batch 2 -->
+  <text class="cv-name" x="40" y="236">NIST human nuggets</text>
+  <text class="cv-sub" x="40" y="264">batch 2 · 25 narratives</text>
+  <rect x="470" y="204" width="342" height="38" rx="6" fill="var(--ret)" />
+  <text class="cv-val" x="828" y="231" style="fill:var(--ret)">0.570</text>
+  <rect x="470" y="252" width="395" height="38" rx="6" fill="var(--gen)" />
+  <text class="cv-val" x="881" y="279" style="fill:var(--gen)">0.658</text>
+  <text class="cv-tally" x="1148" y="253">multi ahead on 18, tied 7, behind 0</text>
+
+  <!-- 3. auto-generated nuggets, batch 2 -->
+  <text class="cv-name" x="40" y="368">Auto-generated nuggets</text>
+  <text class="cv-sub" x="40" y="396">batch 2 · 25 narratives</text>
+  <rect x="470" y="336" width="77" height="38" rx="6" fill="var(--ret)" />
+  <text class="cv-val" x="563" y="363" style="fill:var(--ret)">0.128</text>
+  <rect x="470" y="384" width="150" height="38" rx="6" fill="var(--gen)" />
+  <text class="cv-val" x="636" y="411" style="fill:var(--gen)">0.250</text>
+  <text class="cv-tally" x="1148" y="385">multi ahead on 22, tied 3, behind 0</text>
+
+  <line x1="470" y1="446" x2="1070" y2="446" stroke="var(--line)" stroke-width="1.5" opacity=".45"></line>
+  <text class="cv-sub" x="470" y="472">0</text>
+  <text class="cv-sub" x="1058" y="472">1</text>
+
+  <rect x="40" y="508" width="1520" height="62" rx="12" fill="var(--panel)" stroke="var(--ok)" stroke-width="3" />
+  <text class="cv-note" x="66" y="548" style="font-weight:800;fill:var(--ok)">ALL THREE PUT MULTI-STAGE AHEAD · SINGLE-PASS COVERED MORE ON 1 OF 42</text>
+</svg>
+</p>
+</div>
+<div class="cap">
+<p>On rag2026-18 multi-stage wrote: <em>“if the apartment repairs involve <strong>lead hazards</strong>, ask whether the temporary unit has been made lead-safe.”</em></p>
+<p>The request said <em>repairs</em> and <em>a child</em> in different sentences. “Lead” never appears in the single-pass answer.</p>
 </div>
 </section>
 <section class="slide level2 center">
@@ -2492,9 +2492,9 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 <p>Model calls across all 119 requests</p>
 </div>
 <div class="diagram">
-<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1400 520" role="img" aria-labelledby="co-title co-desc">
+<p><svg xmlns="http://www.w3.org/2000/svg" viewbox="0 0 1400 550" role="img" aria-labelledby="co-title co-desc">
   <title id="co-title">Cost per narrative, in model calls: what both runs share, and what only one of them pays</title>
-  <desc id="co-desc">Three figures, read left to right. First, shared by both runs: retrieval costs 4 to 9 model calls per narrative — one planner call plus one nuggetizer call for each of its 3 to 8 subnarratives. Then the part that differs, drawn as two bars on the same scale: single-pass writing costs 1 call per narrative, multi-stage writing costs 7 to 12. Both figures are writing calls per narrative. A band at the foot states the totals across all 119 narratives: 810 shared calls, then 121 against 1,167, about 9.6 times as many.</desc>
+  <desc id="co-desc">Three figures, read left to right. First, shared by both runs: retrieval costs 4 to 9 model calls per narrative — one planner call plus one nuggetizer call for each of its 3 to 8 subnarratives. Then the part that differs, drawn as two bars on the same scale: single-pass writing costs 1 call per narrative, multi-stage writing costs 7 to 12 — four fixed calls, which are plan, draft, propose and screen, plus one audit call per subnarrative, of which there are 3 to 8. It is one pass, not repeated rounds of editing. Both figures are writing calls per narrative. A band at the foot states the totals across all 119 narratives: 810 shared calls, then 121 against 1,167, about 9.6 times as many.</desc>
   <style>
 text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
 .co-unit{font-size:25px;fill:var(--muted)}
@@ -2528,11 +2528,12 @@ text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
   <text class="co-name" x="508" y="300">Multi-stage</text>
   <rect x="508" y="326" width="600" height="34" rx="6" fill="var(--gen)" />
   <text class="co-huge" x="1140" y="363" style="fill:var(--gen)">7–12</text>
+  <text class="co-unit" x="508" y="398">4 fixed calls — plan, draft, propose, screen — plus one audit per subnarrative</text>
 
   <!-- the totals, once, at the foot -->
-  <rect x="24" y="392" width="1352" height="100" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4" />
-  <text class="co-kick" x="52" y="428" style="fill:var(--muted)">ACROSS ALL 119 NARRATIVES</text>
-  <text class="co-foot" x="52" y="466">810 shared · then <tspan font-weight="800" style="fill:var(--ret)">121</tspan> against <tspan font-weight="800" style="fill:var(--gen)">1,167</tspan> — about <tspan font-weight="800">9.6×</tspan> the calls, for the same evidence.</text>
+  <rect x="24" y="422" width="1352" height="100" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4" />
+  <text class="co-kick" x="52" y="458" style="fill:var(--muted)">ACROSS ALL 119 NARRATIVES</text>
+  <text class="co-foot" x="52" y="496">810 shared · then <tspan font-weight="800" style="fill:var(--ret)">121</tspan> against <tspan font-weight="800" style="fill:var(--gen)">1,167</tspan> — about <tspan font-weight="800">9.6×</tspan> the calls, for the same evidence.</text>
 </svg>
 </p>
 </div>

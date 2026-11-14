@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 520" role="img" aria-labelledby="co-title co-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 550" role="img" aria-labelledby="co-title co-desc">
   <title id="co-title">Cost per narrative, in model calls: what both runs share, and what only one of them pays</title>
-  <desc id="co-desc">Three figures, read left to right. First, shared by both runs: retrieval costs 4 to 9 model calls per narrative — one planner call plus one nuggetizer call for each of its 3 to 8 subnarratives. Then the part that differs, drawn as two bars on the same scale: single-pass writing costs 1 call per narrative, multi-stage writing costs 7 to 12. Both figures are writing calls per narrative. A band at the foot states the totals across all 119 narratives: 810 shared calls, then 121 against 1,167, about 9.6 times as many.</desc>
+  <desc id="co-desc">Three figures, read left to right. First, shared by both runs: retrieval costs 4 to 9 model calls per narrative — one planner call plus one nuggetizer call for each of its 3 to 8 subnarratives. Then the part that differs, drawn as two bars on the same scale: single-pass writing costs 1 call per narrative, multi-stage writing costs 7 to 12 — four fixed calls, which are plan, draft, propose and screen, plus one audit call per subnarrative, of which there are 3 to 8. It is one pass, not repeated rounds of editing. Both figures are writing calls per narrative. A band at the foot states the totals across all 119 narratives: 810 shared calls, then 121 against 1,167, about 9.6 times as many.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25}}
@@ -36,9 +36,10 @@
   <text class="co-name" x="508" y="300">Multi-stage</text>
   <rect x="508" y="326" width="600" height="34" rx="6" fill="var(--gen)"/>
   <text class="co-huge" x="1140" y="363" style="fill:var(--gen)">7–12</text>
+  <text class="co-unit" x="508" y="398">4 fixed calls — plan, draft, propose, screen — plus one audit per subnarrative</text>
 
   <!-- the totals, once, at the foot -->
-  <rect x="24" y="392" width="1352" height="100" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4"/>
-  <text class="co-kick" x="52" y="428" style="fill:var(--muted)">ACROSS ALL 119 NARRATIVES</text>
-  <text class="co-foot" x="52" y="466">810 shared · then <tspan font-weight="800" style="fill:var(--ret)">121</tspan> against <tspan font-weight="800" style="fill:var(--gen)">1,167</tspan> — about <tspan font-weight="800">9.6×</tspan> the calls, for the same evidence.</text>
+  <rect x="24" y="422" width="1352" height="100" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4"/>
+  <text class="co-kick" x="52" y="458" style="fill:var(--muted)">ACROSS ALL 119 NARRATIVES</text>
+  <text class="co-foot" x="52" y="496">810 shared · then <tspan font-weight="800" style="fill:var(--ret)">121</tspan> against <tspan font-weight="800" style="fill:var(--gen)">1,167</tspan> — about <tspan font-weight="800">9.6×</tspan> the calls, for the same evidence.</text>
 </svg>
