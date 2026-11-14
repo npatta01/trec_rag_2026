@@ -203,6 +203,13 @@ assert((qmd.match(/\{\.secshot\}/g) || []).length === 3,
   "three section breaks carry a storybook picture");
 // `theme` is read further down; this block runs before it.
 const themeEarly = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
+// Nothing in daylight may set a background that differs from the page.
+// Reveal letterboxes the slide inside the window — measured at 1024x768 the
+// slide box is 963x572, leaving 98px of page above and below — so any slide
+// with a ground of its own draws a hard seam across the window there.
+assert(/@mixin plate-daylight \{\s*\n\s*background: var\(--bg\);\s*\n\}/.test(themeEarly),
+  "a daylight break is the page, not a plate: a plate bands at the letterbox");
+
 // A picture break takes the drawings' own cream, so their edges vanish into
 // it instead of reading as a rectangle pasted onto the slide.
 assert(/section\.divider:has\(\.secshot\) \{\s*\n\s*background: #fdf1da;/.test(themeEarly),
