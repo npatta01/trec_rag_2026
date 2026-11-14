@@ -1467,7 +1467,15 @@ body.reveal-viewport,
 // so it gets the whole slide and roughly twice the type.
 .qpair {
   gap: 0.6em 0.9em;
-  align-content: center;
+  align-content: stretch;
+  align-items: stretch;
+  grid-auto-rows: 1fr;
+}
+
+.qpair details {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .qpair details {

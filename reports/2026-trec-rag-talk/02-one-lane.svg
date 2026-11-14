@@ -55,7 +55,7 @@
 
   <g transform="translate(856,360)" style="color:var(--s3)"><circle r="23" fill="var(--s3-soft)" stroke="var(--s3)" stroke-width="2.6"/><use href="#ln-g-filter"/></g>
   <text class="ln-row" x="896" y="354">Select</text>
-  <text class="ln-sub" x="896" y="380">drop duplicates, then spread</text>
+  <text class="ln-sub" x="896" y="380">drop duplicates, then MMR spread</text>
 
   <g transform="translate(856,454)" style="color:var(--adv)"><circle r="23" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.6" stroke-dasharray="7 5"/><use href="#ln-g-hint"/></g>
   <text class="ln-row" x="896" y="448">Nuggets</text>

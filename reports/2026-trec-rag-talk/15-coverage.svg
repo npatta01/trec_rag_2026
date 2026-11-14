@@ -52,7 +52,6 @@
   <text class="cv-sub" x="470" y="472">0</text>
   <text class="cv-sub" x="1058" y="472">1</text>
 
-  <rect x="40" y="498" width="1520" height="86" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
-  <text class="cv-note" x="66" y="532" style="font-weight:800;fill:var(--ok)">THREE RUBRICS, WRITTEN THREE DIFFERENT WAYS — ALL THREE PUT MULTI-STAGE AHEAD</text>
-  <text class="cv-note" x="66" y="568">Two written by assessors, one by a model. Across all 42, single-pass covered more on <tspan font-weight="800">exactly one</tspan>.</text>
+  <rect x="40" y="508" width="1520" height="62" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
+  <text class="cv-note" x="66" y="548" style="font-weight:800;fill:var(--ok)">ALL THREE PUT MULTI-STAGE AHEAD · SINGLE-PASS COVERED MORE ON 1 OF 42</text>
 </svg>

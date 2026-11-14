@@ -149,27 +149,6 @@ Every number is a **per-query ceiling**, not a total.
 ![](2026-trec-rag-talk/02b-rerank.svg){fig-alt="One retrieved document, drawn with two more stacked behind it because BM25 returned up to a thousand, is cut into four overlapping windows of 3,500 characters with 350 of overlap, drawn as cards that overlap each other. The reranker mxbai-rerank-base-v2 then scores each window against this lane's query: window two scores 0.81 and window one 0.74 and both are kept, while window three at 0.22 and window four at 0.09 are dropped. A note says what moves on is windows, not documents, at most 100 per query."}
 :::
 
-## Selecting the evidence
-
-::: {.diagram}
-![](2026-trec-rag-talk/05-evidence.svg){fig-alt="Nine retrieved passages are drawn as cards, where cards saying the same thing carry the same line pattern and brackets mark the three sets of near-duplicates. An all-MiniLM-L6-v2 embedding treats any pair above cosine 0.92 as a duplicate, so each set collapses to one survivor in its original wording, and maximal marginal relevance with lambda 0.7 keeps the survivors spread. Nine passages become five selected, capped at forty per subnarrative, and these are the authority the answer must cite. They are passed separately to a nugget generator returning up to twenty short claims, drawn in amber with a dashed edge because the answer may use them but must cite the passage, never the claim."}
-:::
-
-::: {.dupe}
-::: {.dupe-pair}
-[A short-term rental in New York City is one of fewer than 30 consecutive days.]{.dupe-a}
-[New York City defines a short-term rental as a stay under 30 consecutive days.]{.dupe-b}
-:::
-[cosine **0.94** — above 0.92, so these count as one passage. The stronger one
-survives in its original wording; the other is dropped.]{.dupe-verdict}
-:::
-
-::: {.cap}
-Both writers get the same frozen package — these exact passages and the
-citation IDs, and **nothing else**. (My wording above, standing in for the
-real passages, which stay private. Survivors are then spread by MMR.)
-:::
-
 ## Answer Generation {.divider .divider-img}
 
 ::: {.secshot}
@@ -229,10 +208,11 @@ Same evidence, same ceiling. Multi-stage made **16 more statements**.
 :::
 
 ::: {.cap}
-What that looks like in prose: on rag2026-18 multi-stage wrote *"if the apartment
-repairs involve **lead hazards**, ask whether the temporary unit has been made
-lead-safe"* — joining two facts the request put in different sentences. The word
-never appears in the single-pass answer.
+On rag2026-18 multi-stage wrote: *"if the apartment repairs involve **lead
+hazards**, ask whether the temporary unit has been made lead-safe."*
+
+The request said *repairs* and *a child* in different sentences.
+"Lead" never appears in the single-pass answer.
 :::
 
 ## Overall score {.divider .divider-img}
@@ -248,13 +228,9 @@ One topic of the 42 — not the overall result
 :::
 
 ::: {.diagram}
-![](2026-trec-rag-talk/07-topic18.svg){fig-alt="Two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Beside them, the assessor battles for this topic as two stacked bars: single-pass fought ten, seven preferred and three lost; multi-stage fought six, six preferred and none lost."}
+![](2026-trec-rag-talk/07-topic18.svg){fig-alt="Two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Beside them, how the assessors scored it: a person was shown one answer of ours and one from another team, side by side, and picked one — each of those is a battle. Single-pass fought ten, seven preferred and three lost; multi-stage fought six, six preferred and none lost. Our two answers never met."}
 :::
 
-::: {.boundary}
-The two battle bars are **not our two answers against each other.** Each run
-was put against **other teams' answers**, separately.
-:::
 ## When the two measures disagree
 
 ::: {.trace-step}

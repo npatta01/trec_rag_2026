@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 540" role="img" aria-labelledby="t18-title t18-desc">
   <title id="t18-title">rag2026-18 scored by the organizers, both runs and the field median</title>
-  <desc id="t18-desc">On the left, two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Multi-stage reaches the full bar in both. On the right, the assessor battles for this topic, drawn as two stacked bars. Single-pass fought ten battles: seven where its answer was preferred and three where it was rejected. Multi-stage fought six: six preferred and none rejected. Each run is judged against other teams' answers, so the two stacks are separate samples and never say a human chose between these two.</desc>
+  <desc id="t18-desc">On the left, two groups of three bars on a nought-to-one scale. Vital nuggets supported: single-pass 0.857, multi-stage 1.000, field median 0.857. All nuggets supported: single-pass 0.929, multi-stage 1.000, field median 0.786. Multi-stage reaches the full bar in both. On the right, how the assessors scored it: a person was shown one answer of ours and one from another team, side by side, and picked one; each of those is a battle. Single-pass fought ten battles, seven preferred and three lost. Multi-stage fought six, six preferred and none lost. Our two answers never met, so the two rows are separate samples and never say a human chose between them.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--adv:#91610d;--adv-soft:#faecc7}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--adv:#f0c46f;--adv-soft:#433616}}
@@ -46,20 +46,22 @@
 
   <!-- the battles, as their own panel: a different sample, not a duel -->
   <line class="t18-ax" x1="1000" y1="30" x2="1000" y2="470"/>
-  <text class="t18-kick" x="1040" y="36">ASSESSOR BATTLES ON THIS TOPIC</text>
+  <text class="t18-kick" x="1040" y="36">HOW THE ASSESSORS SCORED IT</text>
 
-  <text class="t18-who" x="1040" y="118">single-pass · 10 fought</text>
-  <rect x="1040" y="132" width="294" height="44" rx="6" fill="var(--ret)"/>
-  <rect x="1334" y="132" width="126" height="44" rx="6" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.4"/>
-  <text class="t18-n" x="1187" y="161" text-anchor="middle" style="fill:var(--bg)">7 preferred</text>
-  <text class="t18-n" x="1397" y="161" text-anchor="middle" style="fill:var(--adv)">3 lost</text>
+  <text class="t18-sub" x="1040" y="86">One answer of ours and one from</text>
+  <text class="t18-sub" x="1040" y="118">another team, side by side. A person</text>
+  <text class="t18-sub" x="1040" y="150">picks one. That is a battle.</text>
 
-  <text class="t18-who" x="1040" y="236">multi-stage · 6 fought</text>
-  <rect x="1040" y="250" width="252" height="44" rx="6" fill="var(--gen)"/>
-  <text class="t18-n" x="1166" y="279" text-anchor="middle" style="fill:var(--bg)">6 preferred</text>
-  <text class="t18-n" x="1310" y="279" style="fill:var(--muted)">none lost</text>
+  <text class="t18-who" x="1040" y="212">single-pass · 10 battles</text>
+  <rect x="1040" y="226" width="322" height="46" rx="6" fill="var(--ret)"/>
+  <rect x="1362" y="226" width="138" height="46" rx="6" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="2.4"/>
+  <text class="t18-n" x="1201" y="257" text-anchor="middle" style="fill:var(--bg)">7 preferred</text>
+  <text class="t18-n" x="1431" y="257" text-anchor="middle" style="fill:var(--adv)">3 lost</text>
 
-  <text class="t18-sub" x="1040" y="376">One battle each, so the rows</text>
-  <text class="t18-sub" x="1040" y="410">differ in length.</text>
-  <text class="t18-sub" x="1040" y="452">Never against the other run.</text>
+  <text class="t18-who" x="1040" y="326">multi-stage · 6 battles</text>
+  <rect x="1040" y="340" width="276" height="46" rx="6" fill="var(--gen)"/>
+  <text class="t18-n" x="1178" y="371" text-anchor="middle" style="fill:var(--bg)">6 preferred</text>
+  <text class="t18-n" x="1334" y="371" style="fill:var(--muted)">none lost</text>
+
+  <text class="t18-sub" x="1040" y="442" style="font-weight:800;fill:var(--ink)">Our two answers never met.</text>
 </svg>

@@ -32,7 +32,6 @@ for (const asset of [
   "2026-trec-rag-talk/15-coverage.svg",
   "2026-trec-rag-talk/16-luna.svg",
   "2026-trec-rag-talk/04-plan.svg",
-  "2026-trec-rag-talk/05-evidence.svg",
   "2026-trec-rag-talk/06-retrieval.svg",
   "2026-trec-rag-talk/00-task.svg",
   "2026-trec-rag-talk/00-architecture.svg",
@@ -53,7 +52,7 @@ assert(fetched.length === 0,
 
 // Diagrams carry alt text for screen readers and must not print a caption.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 22, `expected 22 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 21, `expected 21 fig-alt figures, found ${figAlts.length}`);
 // The palette-variant scenes are decorative duplicates of a described image,
 // so they are hidden from screen readers rather than described twice. (The
 // role glyphs are aria-hidden too, hence matching on the scene class.)
@@ -77,8 +76,7 @@ for (const stage of ["Planning", "Searching"]) {
 }
 for (const head of ["## Single-pass: Sol alone", "## Multi-stage: the work changes hands",
                     "## The two places Luna is used", "## Single-pass vs multi-stage",
-                    "## Reranking: a document becomes passages",
-                    "## Selecting the evidence"]) {
+                    "## Reranking: a document becomes passages"]) {
   assert(qmd.includes(head), `missing slide: ${head}`);
 }
 assert(qmd.includes("## Planning: this request"),
@@ -100,6 +98,12 @@ const chartedFacts = [
   ["09-overall", ["62.9%", "45.0%", "399", "422", "26", "15"]],
   ["06-retrieval", ["0.4116", "0.3499"]],
 ];
+// "can u explain what this is" about the battle bars, and "this is confusing"
+// about the caveat under them. Both now live in the figure, in plain words.
+const topic18 = fs.readFileSync(path.join(root, "2026-trec-rag-talk/07-topic18.svg"), "utf8");
+for (const fact of ["That is a battle.", "another team", "Our two answers never met."]) {
+  assert(topic18.includes(fact), `the topic figure should explain: ${fact}`);
+}
 for (const [fig, facts] of chartedFacts) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   for (const fact of facts) {
@@ -138,8 +142,8 @@ const requiredBoundaries = [
   // The battle counts are per-run against the field, never head to head. The
   // phrasing has been cut twice for reading as slop; the claim it carries has
   // to survive each rewrite, so the guard tracks the claim's current sentence.
-  "not our two answers against each other",
-  "other teams' answers",
+  // Moved into the figure: as a caption under it, readers asked both what a
+  // battle was and what the caveat meant. The figure now explains both.
 ];
 assert(!/because the rubric (credited|rewarded|counted)/i.test(flat),
   "the deck must not explain a rubric score it cannot see inside");
@@ -156,8 +160,8 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 31,
-  `expected 31 content slides, found ${sections.length}`);
+assert(sections.length === 30,
+  `expected 30 content slides, found ${sections.length}`);
 
 // Four sections, named the way the work is actually divided. The contents are
 // shown once, at the top; the three breaks after it carry a picture instead,
@@ -187,7 +191,7 @@ assert(!/head-to-head/i.test(qmd),
 for (const stale of ["rag2026-17", "out-of-home", "maltreatment", "preterm", "NICU"]) {
   assert(!qmd.includes(stale), `deck still references the retired example: ${stale}`);
 }
-for (const fig of ["02-one-lane", "02b-rerank", "04-plan", "05-evidence", "06-retrieval",
+for (const fig of ["02-one-lane", "02b-rerank", "04-plan", "06-retrieval",
                    "03a-single-pass", "03b-multi-stage", "07-topic18",
                    "08-disagree", "09-overall"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
@@ -227,7 +231,7 @@ assert(JSON.stringify(queryCards.slice(2)) === JSON.stringify(angleCards),
 // The 40 budget is a SELECTED PASSAGE cap. In the handoff schema a "group" is
 // a subnarrative (group_id == subnarrative_id), one per subnarrative on all
 // 119 topics, so "40 groups per subnarrative" is wrong in two ways.
-for (const f of ["02-one-lane", "05-evidence"]) {
+for (const f of ["02-one-lane"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}.svg`), "utf8");
   assert(!/groups per subnarrative/.test(svg),
     `${f}.svg must not call the 40-passage budget a group cap`);
@@ -236,17 +240,9 @@ assert(!/evidence groups/.test(qmd),
   "the deck must not call selected passages 'evidence groups'");
 
 // Near-duplicate detection is a named model at a named threshold.
-const evidence = fs.readFileSync(path.join(root, "2026-trec-rag-talk/05-evidence.svg"), "utf8");
-for (const mech of ["all-MiniLM-L6-v2", "0.92"]) {
-  assert(evidence.includes(mech),
-    `the evidence figure should name the dedup mechanism: ${mech}`);
-}
-// MMR came off the figure as clutter, but the step is real: it stays named in
-// the caption, where it costs one word instead of four lines.
-assert(flat.includes("spread by MMR"),
-  "the selection step is dedup AND spread; MMR must still be named somewhere");
-assert(!/each next pick/.test(evidence),
-  "the four-line MMR gloss was cut from the figure");
+assert(!/05-evidence\.svg/.test(qmd),
+  "the elaborated selection slide was cut; the lane figure carries the step now");
+
 
 // Per-topic audit counts are published, so the deck must not claim otherwise;
 // only the kept/rejected decisions are private.
@@ -377,7 +373,7 @@ assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
 // was ink on its own accent bar at 1.05:1. Inline styles win; attributes do
 // not, so no figure may colour text with an attribute again.
 const figures = ["00-task", "00-architecture", "02-one-lane", "02b-rerank",
-                 "03a-single-pass", "03b-multi-stage", "04-plan", "05-evidence",
+                 "03a-single-pass", "03b-multi-stage", "04-plan",
                  "06-retrieval", "07-topic18", "08-disagree", "09-overall",
                  "11a-retrieval-cutoff", "13-cost", "15-coverage", "16-luna"];
 for (const f of figures) {
@@ -419,8 +415,10 @@ for (const name of ["slate-light", "slate-dark", "forest-light", "forest-dark"])
 // stays on the evidence slide in one line; the dedicated trace is gone.
 assert(!/10-nugget-trace/.test(qmd),
   "the nugget trace slide was cut; nothing should still point at it");
-assert(flat.includes("nothing else") && flat.includes("these exact passages"),
-  "the evidence slide must still say what the writers are given");
+// What the writers are given was its own slide, and it came out. The sealed
+// handoff is still named where it matters - at the top of both writer figures.
+assert(/sealed evidence handoff/.test(single),
+  "the writer figures must still name the sealed handoff");
 
 // ---- reranking is its own slide --------------------------------------------
 // "it is not clear how document goes to passage and score" - the unit change
@@ -606,7 +604,7 @@ const inlined = (html.match(/<svg\b/gi) || []).length;
 assert(inlined >= 6, `expected the 6 figures inlined, found ${inlined} <svg> elements`);
 
 // Each figure keeps its own accessible name once inlined.
-for (const id of ["tk", "ar", "ln", "rr", "sp", "ms", "pl", "ev", "rt", "t18",
+for (const id of ["tk", "ar", "ln", "rr", "sp", "ms", "pl", "rt", "t18",
                   "dg", "ov", "rc", "co", "cv", "lu", "da"]) {
   assert(html.includes(`id="${id}-title"`) && html.includes(`id="${id}-desc"`),
     `inlined figure ${id} should keep its <title> and <desc>`);
@@ -622,7 +620,7 @@ for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
                           ["15-coverage", "cv"],
                           ["16-luna", "lu"],
                           ["04-plan", "pl"],
-                          ["05-evidence", "ev"], ["06-retrieval", "rt"]]) {
+                          ["06-retrieval", "rt"]]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   const classes = new Set();
   for (const m of svg.matchAll(/class="([^"]*)"/g)) {
@@ -637,7 +635,7 @@ for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
 assert(!/:root\s*\{\s*color-scheme/.test(html),
   "inlined figures must not carry their own :root palette into the page");
 // ...but they keep it on disk, so each file still renders when opened alone.
-for (const fig of ["02-one-lane", "03a-single-pass", "03b-multi-stage", "05-evidence"]) {
+for (const fig of ["02-one-lane", "03a-single-pass", "03b-multi-stage"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
   assert(/:root\s*\{[^}]*--bg:/.test(svg),
     `${fig}.svg should keep its own :root so it renders standalone`);
@@ -734,17 +732,28 @@ assert((qmd.slice(appendixQueriesAt).match(/<details open>/g) || []).length === 
   "the appendix carries all eight lanes");
 assert(!/\.qall/.test(theme), "the shrink-to-fit appendix hack should be gone");
 
-// The dedup step is shown concretely, and flagged as illustrative wording
-// because real corpus passages stay private.
-assert(/cosine \*\*0\.94\*\*/.test(qmd), "the evidence slide should show a worked duplicate pair");
-assert(flat.includes("standing in for the real passages"),
-  "the illustrative sentences must be marked as not being corpus text");
+// The worked duplicate pair went with the selection slide. Nothing else in
+// the deck quotes stand-in corpus text, so there is nothing left to flag -
+// but if any comes back it must still be marked as not being corpus text.
+assert(!/cosine \*\*0\.94\*\*/.test(qmd),
+  "the worked duplicate pair was cut with its slide");
+assert(!/[""][A-Z][^""]{40,}[""]/.test(qmd.replace(/\{[^}]*\}/g, "")) ||
+       flat.includes("standing in for the real passages") ||
+       flat.includes("submitted multi-stage") || flat.includes("multi-stage wrote"),
+  "any quoted passage must be sourced or marked as stand-in wording");
 
 // The nuggetizer's cap still rides on the lane figure, which is now the only
 // place the hint claims appear at all.
 // The stage list was two lines of prose per stage. One short line each now.
 assert(/≤20/.test(lane) && /hints for the writer, never cited/.test(lane),
   "the lane figure should still bound and label the nugget claims");
+// MMR came off the evidence figure as clutter and then the slide carrying it
+// was cut, so the lane figure is the last place the step is named. The step is
+// real; one word for it is the floor.
+assert(/MMR/.test(lane),
+  "the selection step is dedup AND spread; MMR must still be named somewhere");
+assert(/drop duplicates, then MMR spread/.test(lane),
+  "with the selection slide gone, the lane figure is the only place that step appears");
 for (const stage of ["Search", "Rerank", "Select", "Nuggets"]) {
   assert(lane.includes(`>${stage}</text>`), `the lane figure should keep the stage: ${stage}`);
 }
