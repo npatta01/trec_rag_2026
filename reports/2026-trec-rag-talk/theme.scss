@@ -1502,7 +1502,7 @@ body.reveal-viewport,
     justify-content: center;
     flex: 1 1 auto;
     min-height: 0;
-    margin: 0.4em 0 0.2em;
+    margin: 0.4em 0 0;
 
     p, figure, .quarto-figure {
       margin: 0;
@@ -1526,13 +1526,26 @@ body.reveal-viewport,
   margin: 0 0 0.16em;
 }
 
-// No plate behind a picture, in any look. Reveal letterboxes each slide, so
-// a slide with a background of its own becomes a rectangle with page showing
-// above and below — and the drawings are painted on their own cream, which a
-// plate would frame as a pasted rectangle. The break is the page with a name
-// on it.
+// A picture break is the picture. Measured: all four drawings are 1500x844
+// with content running to every edge — 0% margin left, 0.1% right, 0.2%
+// bottom — and their own cream ground, so on any slide colour but that cream
+// they are a hard-edged rectangle pasted on.
+//
+// So the slide takes the drawings' own cream, in every look, and their edges
+// disappear into it. #fdf1da is the top corner of all four (253,241,218 give
+// or take two). The bottom corners are darker — the table and floor, about
+// 234,209,176 — which is why the picture sits flush to the bottom of the
+// slide: a strip of ground under it would show that seam.
+//
+// Full-bleed with the name over the picture was the other option and is out:
+// the darkest pixel in the top sixth of every drawing is near-black (the ink
+// outlines reach the top edge), so a title over it measures 1.5:1.
 .reveal .slides > section.divider:has(.secshot) {
-  background: var(--bg);
+  background: #fdf1da;
+  padding-bottom: 0;
+
+  // Dark ink on cream whatever the look, since the ground is now fixed.
+  > h2 { color: #07394a; }
 }
 
 :root[data-theme="story"] {

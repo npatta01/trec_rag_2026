@@ -203,8 +203,12 @@ assert((qmd.match(/\{\.secshot\}/g) || []).length === 3,
   "three section breaks carry a storybook picture");
 // `theme` is read further down; this block runs before it.
 const themeEarly = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
-assert(/section\.divider:has\(\.secshot\) \{\s*\n\s*background: var\(--bg\);/.test(themeEarly),
-  "a break carrying a picture has no plate behind it, in any look");
+// A picture break takes the drawings' own cream, so their edges vanish into
+// it instead of reading as a rectangle pasted onto the slide.
+assert(/section\.divider:has\(\.secshot\) \{\s*\n\s*background: #fdf1da;/.test(themeEarly),
+  "a picture break should take the drawings' own cream, in every look");
+assert(/section\.divider:has\(\.secshot\)[\s\S]{0,400}?padding-bottom: 0;/.test(themeEarly),
+  "the picture sits flush to the bottom, or its darker bottom edge seams");
 assert(/:root\[data-theme="story"\]/.test(themeEarly),
   "Storybook needs its own pinned rule");
 assert(/@mixin deck-story/.test(themeEarly), "the storybook palette should be defined");
