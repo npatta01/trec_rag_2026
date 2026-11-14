@@ -43,6 +43,20 @@ assert(
   html.indexOf('class="link-card paper"') < html.indexOf('class="link-card architecture"'),
   "paper and talk should be the first card",
 );
+
+// The approach video plays on the page itself, above the link map, with a
+// poster so the card is not a black rectangle before anyone presses play.
+assert(html.includes('<section class="film"'), "artifact hub should carry the approach film");
+assert(
+  html.indexOf('<section class="film"') < html.indexOf('class="link-grid"'),
+  "the film should sit above the link map",
+);
+for (const asset of ["reports/2026-trec-rag-approach.mp4", "reports/2026-trec-rag-approach-poster.jpg"]) {
+  assert(html.includes(asset), `artifact hub should reference ${asset}`);
+  assert(fs.existsSync(path.join(root, asset)), `artifact hub asset should exist: ${asset}`);
+}
+assert(/<video[^>]*\bcontrols\b/.test(html), "the film must be playable, not autoplaying");
+assert(/<video[^>]*\bposter=/.test(html), "the film needs a poster frame");
 for (const landmark of ["<main", "<header", "<section", "<footer", "aria-label="]) {
   assert(html.includes(landmark), `artifact hub should expose ${landmark}`);
 }

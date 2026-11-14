@@ -1,0 +1,140 @@
+<template>
+  <style>
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: Inter, sans-serif;
+      color: #07394a;
+    }
+    #rq-label {
+      position: absolute;
+      left: 150px;
+      top: 118px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #3d5c66;
+    }
+    #rq-head {
+      position: absolute;
+      left: 150px;
+      top: 162px;
+      font-size: 64px;
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      line-height: 1.04;
+    }
+    #rq-sub {
+      position: absolute;
+      left: 150px;
+      top: 258px;
+      font-size: 30px;
+      font-weight: 400;
+      color: #3d5c66;
+    }
+    #rq-sheet {
+      position: absolute;
+      left: 150px;
+      top: 352px;
+      width: 1620px;
+      padding: 44px 54px 48px;
+      background: #fffaf0;
+      border: 1px solid rgba(7, 57, 74, 0.18);
+      border-left: 5px solid #0d6f84;
+      border-radius: 12px;
+      box-shadow: 0 2px 0 rgba(7, 57, 74, 0.06);
+      font-size: 34px;
+      font-weight: 400;
+      line-height: 1.5;
+    }
+    #rq-id {
+      position: absolute;
+      left: 150px;
+      top: 300px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #0d6f84;
+    }
+    /* The eight things the request is actually asking. Each gets its own rule
+       under it, in the retrieval accent, so the split in the next scene is
+       already visible in the words the reader just read. */
+    .rq-seam {
+      font-weight: 700;
+    }
+
+    #rq-count {
+      position: absolute;
+      right: 150px;
+      top: 236px;
+      text-align: right;
+      font-size: 72px;
+      font-weight: 900;
+      letter-spacing: -.03em;
+      color: #0d6f84;
+      line-height: 1;
+    }
+    #rq-count span { display: block; width: 440px; margin-left: auto; font-size: 28px; font-weight: 400; color: #3d5c66; letter-spacing: 0; margin-top: 10px; }
+    #rq-foot {
+      position: absolute;
+      left: 150px;
+      top: 846px;
+      font-size: 30px;
+      font-weight: 400;
+      color: #3d5c66;
+    }
+  </style>
+
+  <div id="root" data-composition-id="request" data-width="1920" data-height="1080">
+    <div id="rq-label" class="clip" data-start="0" data-duration="9">TREC RAG 2026 · the task</div>
+    <h1 id="rq-head" class="clip" data-start="0" data-duration="9">One request, in the person's own words.</h1>
+    <div id="rq-sub" class="clip" data-start="0.35" data-duration="8.65">There are 119 of them, and every answer has to cite its sources.</div>
+
+    <div id="rq-id" class="clip" data-start="0.55" data-duration="8.45">rag2026-18</div>
+
+    <div id="rq-sheet" class="clip" data-layout-ignore data-start="0.55" data-duration="8.45">Our family of three may need <span class="rq-seam" id="rq-s1">furnished temporary housing in New York City for about six weeks</span> … whether to use <span class="rq-seam" id="rq-s2">Airbnb/Vrbo, an extended-stay hotel, corporate housing, or a short sublet</span> … so we don’t book something <span class="rq-seam" id="rq-s3">illegal or unreliable</span>. How should we compare <span class="rq-seam" id="rq-s4">the real costs</span>, <span class="rq-seam" id="rq-s5">safety</span>, <span class="rq-seam" id="rq-s6">cancellation risk</span>, <span class="rq-seam" id="rq-s7">space</span>, <span class="rq-seam" id="rq-s8">location, and day-to-day practicality</span>?</div>
+
+    <div id="rq-count" class="clip" data-start="2.9" data-duration="6.1">8<span>separate things to answer</span></div>
+    <div id="rq-foot" class="clip" data-hold data-start="5.6" data-duration="3.4">It is not one question. It is eight.</div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    // enter: power2.out over 14 frames (0.47 s)
+    tl.set("#rq-label", { opacity: 1, y: 0 }, 0);
+    tl.set("#rq-head", { opacity: 1, y: 0 }, 0);
+    tl.fromTo("#rq-sub", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.47, ease: "power2.out" }, 0.35);
+    tl.fromTo("#rq-id", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.47, ease: "power2.out" }, 0.55);
+
+    // The sheet is the hero: it settles once and then holds perfectly still
+    // while it is being read.
+    tl.fromTo(
+      "#rq-sheet",
+      { opacity: 0, y: 40 },
+      { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" },
+      0.55,
+    );
+
+    // The eight rules draw left to right, 4 frames apart, across the back half,
+    // so the split in the next scene is already visible in the words just read.
+    for (let i = 1; i <= 8; i += 1) {
+      tl.fromTo(
+        `#rq-s${i}`,
+        { color: "#07394a" },
+        { color: "#0d6f84", duration: 0.33, ease: "power2.out" },
+        3.0 + (i - 1) * 0.2,
+      );
+    }
+
+    tl.fromTo("#rq-count", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 2.9);
+    tl.to("#rq-count", { scale: 1.12, duration: .22, ease: "power2.out", transformOrigin: "100% 50%" }, 4.5);
+    tl.to("#rq-count", { scale: 1, duration: .3, ease: "power2.inOut" }, 4.72);
+    tl.fromTo("#rq-foot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.47, ease: "power2.out" }, 5.6);
+
+    window.__timelines = window.__timelines || {};
+    window.__timelines["request"] = tl;
+  </script>
+</template>

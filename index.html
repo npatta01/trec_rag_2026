@@ -39,6 +39,9 @@
     .route-node strong { display: block; margin-bottom: 4px; }
     .route-node span { color: var(--muted); font-size: .9rem; line-height: 1.4; }
     .route-arrow { color: var(--amber); font-size: 1.4rem; font-weight: 800; }
+    .film { margin: 0 0 42px; }
+    .film video { background: #fdf1da; border: 1px solid var(--border); border-radius: 12px; display: block; height: auto; width: 100%; }
+    .film-cap { color: var(--muted); font-size: .95rem; line-height: 1.5; margin: 12px 0 0; max-width: 900px; }
     .link-grid { display: grid; gap: 22px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .link-card { --accent: var(--blue); background: color-mix(in srgb, var(--panel) 92%, var(--accent)); border: 1px solid var(--border); border-top: 5px solid var(--accent); border-radius: 4px 4px 12px 12px; min-height: 260px; padding: 26px 22px 22px; position: relative; }
     .link-card::before { color: var(--accent); content: attr(data-icon); font-size: 1.5rem; position: absolute; right: 22px; top: 22px; }
@@ -115,6 +118,16 @@
       <div class="route-node"><strong>Accepted organizer files</strong><span>Variable-depth ranked evidence plus cited answers</span></div>
     </section>
 
+    <section class="film" aria-label="How the system works">
+      <video id="approach" controls preload="metadata" playsinline
+             poster="reports/2026-trec-rag-approach-poster.jpg"
+             width="1920" height="1080">
+        <source src="reports/2026-trec-rag-approach.mp4" type="video/mp4">
+        <a href="reports/2026-trec-rag-approach.mp4">Download the approach video (MP4)</a>
+      </video>
+      <p class="film-cap">One request, all the way through: eight angles, sixteen searches, the passages that survive, and the two ways the answer gets written. 79 seconds, no sound.</p>
+    </section>
+
     <section class="link-grid" aria-label="Project artifacts">
       <article class="link-card paper" data-icon="¶">
         <h2>Paper &amp; talk</h2>
@@ -123,6 +136,7 @@
           <li><a href="output/pdf/2026-trec-rag-paper.pdf">Paper (PDF)</a></li>
           <li><a href="reports/2026-trec-rag-paper.tex">Paper source</a></li>
           <li><a href="reports/2026-trec-rag-talk.html">Conference talk slides</a></li>
+          <li><a href="reports/2026-trec-rag-approach.mp4">Approach video (79 s)</a></li>
         </ul>
       </article>
 

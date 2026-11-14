@@ -8,6 +8,7 @@ organizer evaluation that followed.
 
 [Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf) ·
 [Conference talk](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-talk.html) ·
+[Approach video](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-approach.mp4) ·
 [Architecture walkthrough](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html) ·
 [Organizer scores](https://npatta01.github.io/trec_rag_2026/reports/2026-organizer-score-explorer.html)
 

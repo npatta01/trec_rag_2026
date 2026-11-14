@@ -22,6 +22,7 @@ const required = [
   // link; they are what a reader arrives for and must not drift out again.
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
   "reports/2026-trec-rag-talk.html",
+  "reports/2026-trec-rag-approach.mp4",
   "reports/2026-organizer-score-explorer.html",
   "[Run archive](docs/run-archive.md)",
   "Architecture Report",

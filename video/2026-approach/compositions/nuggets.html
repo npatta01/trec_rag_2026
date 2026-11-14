@@ -1,0 +1,45 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; font-family: Inter, sans-serif; color: #07394a; }
+    #nuggets-label { position: absolute; left: 150px; top: 118px; font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #855a06; }
+    #nuggets-head { position: absolute; left: 150px; top: 166px; font-size: 60px; font-weight: 900; letter-spacing: -.02em; line-height: 1.04; max-width: 1620px; }
+    #nuggets-sub { position: absolute; left: 150px; top: 266px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #nuggets-foot { position: absolute; left: 150px; top: 936px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #nuggets-foot b { font-weight: 700; color: #07394a; }
+    .ng-col { position: absolute; top: 352px; width: 780px; height: 420px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-radius: 10px; box-shadow: 0 2px 0 rgba(7,57,74,.06); padding: 24px 28px; }
+    #ng-left { left: 150px; border-left: 5px solid #0d6f84; }
+    #ng-right { left: 990px; border: 2px dashed #855a06; border-left: 5px dashed #855a06; }
+    .ng-k { font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px; }
+    .ng-n { font-size: 76px; font-weight: 900; letter-spacing: -.03em; line-height: 1.1; }
+    .ng-w { font-size: 30px; font-weight: 400; color: #3d5c66; margin-bottom: 18px; }
+    .ng-d { font-size: 30px; line-height: 1.45; }
+    #ng-rule { position: absolute; left: 150px; top: 806px; width: 1620px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-radius: 10px; box-shadow: 0 2px 0 rgba(7,57,74,.06); border: 2px solid #39702f; padding: 22px 28px; font-size: 34px; font-weight: 700; }
+  </style>
+
+  <div id="root" data-composition-id="nuggets" data-width="1920" data-height="1080">
+    <div id="nuggets-label" class="clip" data-start="0.1" data-duration="7.9">Step 6 · what the writer is given</div>
+    <h1 id="nuggets-head" class="clip" data-start="0.15" data-duration="7.9">Two things go to the writer, and only one may be cited.</h1>
+    <div id="nuggets-sub" class="clip" data-start="0.35" data-duration="7.9">The dashed edge is the difference, and it is the whole contract.</div>
+    <div class="ng-col clip" id="ng-left" data-start="0.6" data-duration="7.4">
+      <div class="ng-k" style="color:#0d6f84">Passages</div><div class="ng-n" style="color:#0d6f84">≤ 40</div>
+      <div class="ng-w">the evidence</div><div class="ng-d">Real text from real documents. Every statement in the answer has to cite one of these.</div></div>
+    <div class="ng-col clip" id="ng-right" data-start="1.0" data-duration="7.0">
+      <div class="ng-k" style="color:#855a06">Claims</div><div class="ng-n" style="color:#855a06">≤ 20</div>
+      <div class="ng-w">the hints</div><div class="ng-d">Short statements the nuggetizer wrote from those passages, one call per angle. Advisory only.</div></div>
+    <div id="ng-rule" class="clip" data-start="2.4" data-duration="5.6">A passage is evidence, and every statement cites one. A claim is never cited.</div>
+    <div id="nuggets-foot" class="clip" data-hold data-start="5.0" data-duration="3.0">Generation never sees the corpus again. Only this.</div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#nuggets-label", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .1);
+    tl.fromTo("#nuggets-head", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .15);
+    tl.fromTo("#nuggets-sub", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .35);
+    tl.fromTo("#ng-left", { opacity: 0, x: -34 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 0.6);
+    tl.fromTo("#ng-right", { opacity: 0, x: 34 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 1.0);
+    tl.fromTo("#ng-rule", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: .6, ease: "power3.out" }, 2.4);
+    tl.fromTo("#nuggets-foot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 5.0);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["nuggets"] = tl;
+  </script>
+</template>
