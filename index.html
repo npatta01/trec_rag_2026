@@ -48,10 +48,11 @@
     .link-card li + li { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }
     .link-card a { color: var(--text); font-weight: 750; text-decoration-color: color-mix(in srgb, var(--accent) 70%, transparent); text-decoration-thickness: 2px; text-underline-offset: .25em; }
     .link-card a:hover { color: var(--accent); }
-    .architecture { --accent: var(--blue); }
+    .paper { --accent: var(--blue); }
+    .architecture { --accent: var(--violet); }
     .submissions { --accent: var(--green); }
     .validation { --accent: var(--coral); }
-    .reports { --accent: var(--violet); }
+    .reports { --accent: var(--muted); }
     .analyses { --accent: var(--amber); }
     .code { --accent: var(--cyan); }
     .inputs { --accent: var(--amber); }
@@ -95,9 +96,9 @@
 <body>
   <main>
     <header>
-      <div class="eyebrow">TREC RAG 2026 · completed project</div>
+      <div class="eyebrow">TREC RAG 2026 · NP Labs</div>
       <h1>TREC RAG 2026 submission</h1>
-      <p class="intro">The final architecture, five Evalbase-accepted files, validation contracts, reports, and implementation for our Retrieval and Retrieval-Augmented Generation systems.</p>
+      <p class="intro">The paper, the conference talk, the final architecture, the organizer scores, and the five Evalbase-accepted files from our Retrieval and Retrieval-Augmented Generation systems.</p>
     </header>
 
     <section class="status-strip" aria-label="Final submission status">
@@ -115,6 +116,16 @@
     </section>
 
     <section class="link-grid" aria-label="Project artifacts">
+      <article class="link-card paper" data-icon="¶">
+        <h2>Paper &amp; talk</h2>
+        <p>Read the participant paper, or follow the conference talk that traces one request end to end.</p>
+        <ul>
+          <li><a href="output/pdf/2026-trec-rag-paper.pdf">Paper (PDF)</a></li>
+          <li><a href="reports/2026-trec-rag-paper.tex">Paper source</a></li>
+          <li><a href="reports/2026-trec-rag-talk.html">Conference talk slides</a></li>
+        </ul>
+      </article>
+
       <article class="link-card architecture" data-icon="↗">
         <h2>Architecture</h2>
         <p>Follow the actual final system from the frozen retrieval source to five accepted organizer files.</p>
@@ -126,9 +137,11 @@
       </article>
 
       <article class="link-card analyses" data-icon="⌁">
-        <h2>Final analyses</h2>
-        <p>Read the 119-topic Retrieval quality analysis and the two separate private RAGDoll citation-support reports.</p>
+        <h2>Scores &amp; analyses</h2>
+        <p>Browse every released organizer score, then the 119-topic Retrieval quality analysis and both citation-support reports.</p>
         <ul>
+          <li><a href="reports/2026-organizer-score-explorer.html">Organizer score explorer</a></li>
+          <li><a href="submissions/trec-rag-2026/organizer-results/README.md">Released score files</a></li>
           <li><a href="reports/2026-retrieval-nugget-coverage.html">Retrieval Quality Analysis</a></li>
           <li><a href="reports/2026-ragdoll-rag26-ss1.html">RAG Analysis: rag26-ss1</a></li>
           <li><a href="reports/2026-ragdoll-rag26-ms1-final.html">RAG Analysis: rag26-ms1-final</a></li>
@@ -145,28 +158,6 @@
         </ul>
       </article>
 
-      <article class="link-card validation" data-icon="◇">
-        <h2>Validation &amp; skills</h2>
-        <p>Re-run format checks or orient an agent with the exact official and repository contracts.</p>
-        <ul>
-          <li><a href=".agents/skills/validate-trec-rag-2026-submissions/SKILL.md">Submission validator skill</a></li>
-          <li><a href="trec-rag-skills/skills/trec-rag-2026-track-guidelines/SKILL.md">Official track contract</a></li>
-          <li><a href="trec-rag-skills/skills/pyserini-rest-api/SKILL.md">Pyserini API contract</a></li>
-          <li><a href=".agents/skills/trec-rag-competition-debug-report/SKILL.md">Private debug-report skill</a></li>
-        </ul>
-      </article>
-
-      <article class="link-card reports" data-icon="▤">
-        <h2>Reports</h2>
-        <p>Read the final system first, then use the briefing and prior-year synthesis as context.</p>
-        <ul>
-          <li><a href="reports/index.html">Reports home</a></li>
-          <li><a href="reports/trec-rag-briefing-report.html">2026 task briefing</a></li>
-          <li><a href="reports/trec-rag-2025-writeups/interactive-writeup.html">2025 team writeups</a></li>
-          <li><a href="reports/2025-promising-rag-architecture.html">2025 architecture synthesis</a></li>
-        </ul>
-      </article>
-
       <article class="link-card code" data-icon="&lt;/&gt;">
         <h2>Code</h2>
         <p>Trace the final runners, cache-first Retrieval replay, and checked-in source configurations.</p>
@@ -180,19 +171,43 @@
         </ul>
       </article>
 
-      <article class="link-card inputs" data-icon="◫">
-        <h2>Official inputs</h2>
-        <p>Use the pinned upstream revisions that define the 119 narratives and submission rules.</p>
+      <article class="link-card validation" data-icon="◇">
+        <h2>Validation &amp; contracts</h2>
+        <p>Re-run format checks or orient an agent with the exact official and repository contracts.</p>
+        <ul>
+          <li><a href=".agents/skills/validate-trec-rag-2026-submissions/SKILL.md">Submission validator skill</a></li>
+          <li><a href="trec-rag-skills/skills/trec-rag-2026-track-guidelines/SKILL.md">Official track contract</a></li>
+          <li><a href="trec-rag-skills/skills/pyserini-rest-api/SKILL.md">Pyserini API contract</a></li>
+          <li><a href=".agents/skills/trec-rag-competition-debug-report/SKILL.md">Private debug-report skill</a></li>
+        </ul>
+      </article>
+
+      <article class="link-card inputs" data-icon="▫">
+        <h2>Data &amp; inputs</h2>
+        <p>Use the pinned upstream revisions that define the 119 narratives, plus the archived run artifacts.</p>
         <ul>
           <li><a href="trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv">Official test narratives</a></li>
           <li><a href="trec-rag-data/">Pinned data submodule</a></li>
           <li><a href="trec-rag-skills/">Pinned skills submodule</a></li>
+          <li><a href="https://huggingface.co/buckets/Npatta01/trec-rag-2026-artifacts/tree/trec_rag_2026/backups/full-2026-11-09-v1">Run archive backup</a></li>
+          <li><a href="https://github.com/npatta01/trec_rag_2026/releases/tag/trec-rag-2026-artifacts-v1">Per-topic trace CSV</a></li>
+        </ul>
+      </article>
+
+      <article class="link-card reports" data-icon="▤">
+        <h2>Background reports</h2>
+        <p>Use the task briefing and the prior-year synthesis as context for the decisions above.</p>
+        <ul>
+          <li><a href="reports/index.html">Reports home</a></li>
+          <li><a href="reports/trec-rag-briefing-report.html">2026 task briefing</a></li>
+          <li><a href="reports/trec-rag-2025-writeups/interactive-writeup.html">2025 team writeups</a></li>
+          <li><a href="reports/2025-promising-rag-architecture.html">2025 architecture synthesis</a></li>
         </ul>
       </article>
     </section>
 
     <footer>
-      <span>Five accepted runs · 119 narratives · documentation finalized 2026-08-09</span>
+      <span>NP Labs · Nidhin Pattaniyil, Tanwir Zaman, Semih Yagli · five accepted runs over 119 narratives</span>
       <nav aria-label="Repository information">
         <a href="README.md">Repository README</a>
         <a href="AGENTS.md">Agent instructions</a>

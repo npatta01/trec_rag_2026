@@ -25,7 +25,24 @@ for (const href of internalHrefs) {
   assert(fs.existsSync(path.resolve(root, target)), `internal link should resolve: ${href}`);
 }
 
-assert((html.match(/<article class="link-card /g) || []).length === 7, "artifact hub should render seven cards");
+assert((html.match(/<article class="link-card /g) || []).length === 8, "artifact hub should render eight cards");
+
+// The paper and the talk are what most people arrive for, so they are the
+// first card and each has to resolve. The PDF lives under output/, which is
+// not the ignored outputs/ work directory.
+for (const [label, href] of [
+  ["Paper (PDF)", "output/pdf/2026-trec-rag-paper.pdf"],
+  ["Paper source", "reports/2026-trec-rag-paper.tex"],
+  ["Conference talk slides", "reports/2026-trec-rag-talk.html"],
+]) {
+  assert(html.includes(`href="${href}"`), `artifact hub should link ${href}`);
+  assert(html.includes(`>${label}</a>`), `artifact hub should label ${label}`);
+  assert(fs.existsSync(path.join(root, href)), `artifact hub target should exist: ${href}`);
+}
+assert(
+  html.indexOf('class="link-card paper"') < html.indexOf('class="link-card architecture"'),
+  "paper and talk should be the first card",
+);
 for (const landmark of ["<main", "<header", "<section", "<footer", "aria-label="]) {
   assert(html.includes(landmark), `artifact hub should expose ${landmark}`);
 }

@@ -1,25 +1,28 @@
 # NP Labs · TREC RAG 2026
 
-This repository contains the NP Labs submission for TREC RAG 2026.
+NP Labs submission for TREC RAG 2026: bounded retrieval over the ClimbMix
+corpus, cited answer generation from one authenticated evidence source, and the
+organizer evaluation that followed.
 
-## [View the project artifact hub](https://npatta01.github.io/trec_rag_2026/)
+## [View the project site](https://npatta01.github.io/trec_rag_2026/)
 
-The published hub is the best place to start. It presents the final system
-architecture, accepted submission records, the 2026 Retrieval quality report,
-and both 2026 RAGDoll evaluations in one reader-friendly site.
+[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf) ·
+[Conference talk](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-talk.html) ·
+[Architecture walkthrough](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html) ·
+[Organizer scores](https://npatta01.github.io/trec_rag_2026/reports/2026-organizer-score-explorer.html)
 
 ## The problem
 
 TREC RAG 2026 asks systems to answer complex information needs using the
-ClimbMix corpus. A useful system must retrieve trustworthy evidence for every
+ClimbMix corpus. A useful system has to retrieve trustworthy evidence for every
 part of an official narrative, turn that evidence into a clear answer, and keep
-each factual claim traceable to an allowed source. Our submission addresses
-both sides of that problem: variable-depth Retrieval rankings and cited RAG
-answers derived from one authenticated evidence source.
+each factual claim traceable to an allowed source. Our submission addresses both
+sides: variable-depth Retrieval rankings, and cited RAG answers derived from one
+authenticated evidence source.
 
 [![The NP Labs TREC RAG 2026 system: bounded source retrieval creates one authenticated source, which branches into three Retrieval submissions and two evidence-grounded RAG submissions.](reports/2026-competition-architecture/01-whole-system.svg)](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
 
-*Explore the diagram and the full guided walkthrough in the [published artifact hub](https://npatta01.github.io/trec_rag_2026/).*
+*The guided walkthrough of this diagram is in the [published artifact hub](https://npatta01.github.io/trec_rag_2026/).*
 
 ## Project at a glance
 
@@ -32,50 +35,34 @@ answers derived from one authenticated evidence source.
 
 ### Reports for reviewers
 
-- [Architecture Report](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html) — the final
-  system from bounded source retrieval through all five accepted files.
-- [Retrieval Quality Report](https://npatta01.github.io/trec_rag_2026/reports/2026-retrieval-nugget-coverage.html) —
-  evidence coverage analysis across the 119 official narratives.
-- [RAGDoll Evaluation — Single-pass RAG](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html) —
-  citation-support analysis for `rag26-ss1`.
+- [Architecture Report](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
+  — the final system from bounded source retrieval through all five accepted files.
+- [Retrieval Quality Report](https://npatta01.github.io/trec_rag_2026/reports/2026-retrieval-nugget-coverage.html)
+  — evidence coverage across the 119 official narratives.
+- [RAGDoll Evaluation — Single-pass RAG](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html)
+  — citation-support analysis for `rag26-ss1`.
 - [RAGDoll Evaluation — Multi-stage RAG](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ms1-final.html)
   — citation-support analysis for `rag26-ms1-final`.
 
-## Run backup and Luna planner outputs
+### Repository references
 
-The [Hugging Face backup](https://huggingface.co/buckets/Npatta01/trec-rag-2026-artifacts/tree/trec_rag_2026/backups/full-2026-11-09-v1) contains the seven run archives, including the Retrieval traces, the exact evidence handoff for both RAG runs, the saved multi-stage work, and both RAGDoll evaluations. The [restore guide](https://huggingface.co/buckets/Npatta01/trec-rag-2026-artifacts/resolve/trec_rag_2026/backups/full-2026-11-09-v1/RESTORE.md) gives the download, checksum, and extraction commands.
-
-Download [rag-multistage.tar.zst](https://huggingface.co/buckets/Npatta01/trec-rag-2026-artifacts/resolve/trec_rag_2026/backups/full-2026-11-09-v1/rag-multistage.tar.zst) for the Luna planner outputs. Inside the archive, topic directories are under `outputs/rag26-ms1-multistage-final/work/bounded_revision/<topic-directory>/`.
-
-- `receipts/planner.json` contains the planner call record, including the raw response and accepted payload when present. There are 119 receipts.
-- `blueprint.state.json` contains the validated plan used by later stages. There are 112 saved blueprints.
-
-List the planner receipts or extract the receipt for topic `rag2026-0`.
-
-```bash
-tar --zstd -tf rag-multistage.tar.zst | grep '/receipts/planner\.json$'
-tar --zstd -xOf rag-multistage.tar.zst \
-  outputs/rag26-ms1-multistage-final/work/bounded_revision/rag2026-0-57748010/receipts/planner.json
-```
-
-## Repository references
-
-- [Submission ledger](submissions/trec-rag-2026/SUBMISSION_LEDGER.md) — exact
-  accepted files, hashes, priorities, and Evalbase confirmations.
-- [Architecture report](reports/2026-competition-architecture.html) — rendered
-  system walkthrough; its [Quarto source](reports/2026-competition-architecture.qmd)
-  is canonical.
-- [Submission validation skill](.agents/skills/validate-trec-rag-2026-submissions/SKILL.md)
-  — combined Retrieval format and organizer AutoJudge preflight.
+- [Submission ledger](submissions/trec-rag-2026/SUBMISSION_LEDGER.md) — accepted
+  files, hashes, priorities, and Evalbase confirmations.
+- [Architecture source](reports/2026-competition-architecture.qmd) — canonical
+  Quarto source for the rendered walkthrough.
+- [Submission validator](.agents/skills/validate-trec-rag-2026-submissions/SKILL.md)
+  — Retrieval format and organizer AutoJudge preflight.
 - [Implementation reference](code/trec_rag/README.md) — pipeline behavior,
-  commands, reproduction boundaries, and evaluation workflow.
+  commands, and reproduction boundaries.
+- [Run archive](docs/run-archive.md) — the Hugging Face backup, the Luna planner
+  receipts, and the per-topic trace CSV.
 
 ## Developer notes
 
 ### Repository layout
 
-- `submissions/trec-rag-2026/` — immutable accepted organizer artifacts and
-  their provenance records.
+- `submissions/trec-rag-2026/` — immutable accepted organizer artifacts, their
+  provenance records, and the organizer-released scores.
 - `reports/` — the public artifact hub and supporting source-backed reports.
 - `code/` — reusable evaluation, retrieval, generation, and validation code.
 - `configs/` — checked-in experiment and reproduction configurations.
@@ -84,40 +71,23 @@ tar --zstd -xOf rag-multistage.tar.zst \
 
 ### Clone and initialize
 
-Official TREC RAG data and task guidance are tracked as git submodules:
+Official TREC RAG data and task guidance are tracked as git submodules. The
+repository ships hooks that keep them synchronized after checkout and merge.
 
 ```bash
 git submodule update --init --recursive
-```
-
-The repository includes hooks that keep submodules synchronized after checkout
-and merge. Enable them once per clone:
-
-```bash
 git config core.hooksPath .githooks
-```
-
-Set up the pinned Python environment with:
-
-```bash
 code/tools/setup_env.sh
 ```
 
 ### Verification
 
-Run the complete Python suite:
-
 ```bash
 .venv/bin/python -m pytest -q
 ```
 
-Run the public landing and report smoke tests:
-
 ```bash
-node README.test.js
-node index.test.js
-node reports/index.test.js
-node reports/2026-competition-architecture.test.js
+node README.test.js && node index.test.js && node reports/index.test.js
 ```
 
 Shared instructions for Codex, Claude, and future coding agents live in
