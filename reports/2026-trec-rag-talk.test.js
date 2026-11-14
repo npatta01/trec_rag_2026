@@ -573,6 +573,32 @@ for (const url of ["huggingface.co/mixedbread-ai/mxbai-rerank-base-v2",
   assert(qmd.includes(url), `the appendix should link: ${url}`);
 }
 
+// ---- slides stay where Reveal puts them -----------------------------------
+// Reveal lays every section out absolutely, one on top of another. Giving a
+// section `position: relative` - which looks harmless, and is the obvious way
+// to anchor an overlay - drops it into normal flow, so it stacks BELOW the
+// whole deck and renders as an empty frame with the slide far off the bottom.
+// It showed up on the image dividers and the title slide, and only at aspect
+// ratios other than 16:9, which is why it survived a visual pass.
+// Only rules that END at the section itself — a child of a section may of
+// course be positioned, and the overlay title has to be.
+const sectionRules = [...theme.matchAll(
+  /\.reveal\s+\.slides\s*>\s*section(?:\.[-\w]+)*\s*\{([^}]*)\}/g)].map((m) => m[1]);
+for (const body of sectionRules) {
+  const pos = body.match(/(?:^|[;\s])position:\s*([a-z]+)/);
+  assert(!pos || pos[1] === "absolute",
+    `a slide section may not override position (found ${pos && pos[1]}) — ` +
+    "it falls out of Reveal's stack and renders below the deck");
+}
+// The overlay dividers and the title slide are the two that tempted it, so
+// the reason is written next to them and checked here.
+assert(/An absolute section is already the containing block/.test(theme),
+  "keep the note explaining why the image dividers set no position");
+// height:100% with padding needs the padding inside the box, or the slide
+// overflows its own frame at every aspect ratio.
+assert(/section\.quarto-title-block \{[^}]*box-sizing: border-box/.test(theme),
+  "a slide with height:100% and padding must be border-box");
+
 // ---- the type floor ------------------------------------------------------
 // "the copy might be small to see". A figure drawn in a 1600-unit viewBox is
 // scaled to about 1150px of slide width, so an 18px label lands near 13px on
