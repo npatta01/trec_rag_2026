@@ -209,6 +209,12 @@ const themeEarly = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scs
 // with a ground of its own draws a hard seam across the window there.
 assert(/@mixin plate-daylight \{\s*\n\s*background: var\(--bg\);\s*\n\}/.test(themeEarly),
   "a daylight break is the page, not a plate: a plate bands at the letterbox");
+// Dark solved the same problem the other way: the page became the blue the
+// plate was mixing to, so blue transitions survive with nothing to seam.
+assert(/--bg: #354454;/.test(themeEarly),
+  "the dark page is the blue the transitions used to be plated in");
+assert(/:root\[data-theme="dark"\] \{[\s\S]{0,240}?section\.quarto-title-block \{ background: var\(--bg\); \}/.test(themeEarly),
+  "no plate in dark either, or the title and the breaks band");
 
 // A picture break takes the drawings' own cream, so their edges vanish into
 // it instead of reading as a rectangle pasted onto the slide.

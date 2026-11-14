@@ -82,12 +82,18 @@ $code-block-font-size: 0.6em !default;
 @mixin deck-dark {
   --deck: #7ab3f5;
 
-  // Same reason, as far as a dark page can go: warm near-black rather than
-  // blue-black. A cream drawing will always be the brightest thing on a dark
-  // slide — that is the medium, not a fault — but it should at least not be
-  // the only warm thing on it.
-  --bg: #141310;
-  --panel: #1f1d19;
+  // The whole dark page is the blue the transitions used to be plated in.
+  // A plate of any colour bands at the letterbox — 98px of page shows above
+  // and below each slide — so the way to keep blue transitions is to make
+  // the page blue and drop the plate. #354454 is exactly the colour the
+  // plate was mixing to.
+  --bg: #354454;
+  // The panel is recessed, not raised. Lifting it to #415467 made cards the
+  // brightest surface on the slide and broke 22 pieces of text: the
+  // retrieval accent fell to 3.97:1, muted to 4.16, --deck to 3.57. At
+  // #2c3947 the same three are 5.99, 6.28 and 5.38, and the soft tints are
+  // already darker than the page so they agree with it.
+  --panel: #2c3947;
   --ink: #eef1f6;
   --muted: #b6bec9;
   --line: #8d96a3;
@@ -191,6 +197,19 @@ $code-block-font-size: 0.6em !default;
 // pinned-dark rule on equal specificity.
 :root[data-theme="story"] {
   @include deck-story;
+}
+
+// No plate in dark either, now that the page is the plate's colour.
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="story"]) {
+    .reveal .slides > section.divider,
+    .reveal .slides > section.quarto-title-block { background: var(--bg); }
+  }
+}
+
+:root[data-theme="dark"] {
+  .reveal .slides > section.divider,
+  .reveal .slides > section.quarto-title-block { background: var(--bg); }
 }
 
 // Keep scrollbars, form controls and the browser's own canvas in step with a
