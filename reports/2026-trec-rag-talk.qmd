@@ -64,7 +64,8 @@ Six weeks of housing for a family of three — without booking
 
 ::: {.grid-2}
 ::: {.scene}
-![](2026-trec-rag-talk/story-request.jpg){fig-alt="A family of three standing with a suitcase, holding a small fan of blank cards and choosing between them. A thought bubble above shows four worries as icons — a coin, a shield, a calendar and a bed. Behind them their own apartment building stands wrapped in scaffolding and netting."}
+![](2026-trec-rag-talk/story-request.jpg){.art-day fig-alt="A family of three standing with a suitcase, holding a small fan of blank cards and choosing between them. A thought bubble above shows four worries as icons — a coin, a shield, a calendar and a bed. Behind them their own apartment building stands wrapped in scaffolding and netting."}
+![](2026-trec-rag-talk/story-request-night.jpg){.art-night fig-alt="The same family of three at night, standing with a suitcase and holding a fan of blank cards. A thought bubble above shows four worries as icons — a coin, a shield, a calendar and a bed. Behind them their apartment building stands wrapped in scaffolding."}
 :::
 
 ::: {.redact}
@@ -86,7 +87,8 @@ Eight things asked at once, in one paragraph.
 ## Retrieval {.divider}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/story-retrieval.jpg){fig-alt="A library bay: three shelves packed with books of every height and colour. On the table in front, three of them taken down and lying face up, each cover carrying its own emblem — a circle, a triangle, a flower — beside a magnifying glass."}
+![](2026-trec-rag-talk/story-retrieval.jpg){.art-day fig-alt="A library bay: three shelves packed with books of every height and colour. On the table in front, three of them taken down and lying face up, each cover carrying its own emblem — a circle, a triangle, a flower — beside a magnifying glass."}
+![](2026-trec-rag-talk/story-retrieval-night.jpg){.art-night fig-alt="The same library bay at night: three shelves of books in deep wood, three of them taken down and lying face up on the table, each cover carrying its own emblem, beside a magnifying glass. The only light in the frame is the warm amber on the covers."}
 :::
 
 
@@ -148,7 +150,8 @@ Two of the eight — the other six look the same, and all of them are in the app
 ## Answer Generation {.divider}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/story-generation.jpg){fig-alt="A table split down the middle by a wooden post, the two halves headed SINGLE-PASS and MULTI-STAGE. On the left, a blank page, one arrow, a finished page: a single hop. On the right, the same page at the same size passing through several separate steps — a draft, a check under a magnifying glass, a finish. One pass against several."}
+![](2026-trec-rag-talk/story-generation.jpg){.art-day fig-alt="A table split down the middle by a wooden post, the two halves headed SINGLE-PASS and MULTI-STAGE. On the left, a blank page, one arrow, a finished page: a single hop. On the right, the same page at the same size passing through several separate steps — a draft, a check under a magnifying glass, a finish. One pass against several."}
+![](2026-trec-rag-talk/story-generation-night.jpg){.art-night fig-alt="The same table split down the middle by a post, at night: on the left a blank page, one arrow, a finished page, a single hop; on the right the same page passing through a draft, a check under a magnifying glass, and a finish. The pages are deep charcoal and the arrows are the one warm light."}
 :::
 
 
@@ -215,7 +218,8 @@ The request said *repairs* and *a child* in different sentences.
 ## Results {.divider}
 
 ::: {.secshot}
-![](2026-trec-rag-talk/story-score.jpg){fig-alt="Two answer cards side by side on a table, labelled SINGLE-PASS and MULTI-STAGE. The left card carries a sun for Sol, which wrote it alone; the right carries a moon and a sun, for Luna and Sol together. Along the bottom of each, six circles for the facts it was checked for having: three filled gold on the left card, five on the right. The same question, and one answer covered more of it."}
+![](2026-trec-rag-talk/story-score.jpg){.art-day fig-alt="Two answer cards side by side on a table, labelled SINGLE-PASS and MULTI-STAGE. The left card carries a sun for Sol, which wrote it alone; the right carries a moon and a sun, for Luna and Sol together. Along the bottom of each, six circles for the facts it was checked for having: three filled gold on the left card, five on the right. The same question, and one answer covered more of it."}
+![](2026-trec-rag-talk/story-score-night.jpg){.art-night fig-alt="The same two answer cards side by side at night, labelled SINGLE-PASS and MULTI-STAGE. The left carries a sun, the right a moon and a sun. Along the bottom of each, six circles for the facts it was checked for having: three filled amber on the left, five on the right."}
 :::
 
 

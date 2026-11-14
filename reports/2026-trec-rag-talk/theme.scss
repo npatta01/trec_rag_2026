@@ -107,16 +107,21 @@ $code-block-font-size: 0.6em !default;
   --adv: #f0c46f;
   --adv-soft: #433616;
 
-  // Five stage hues, so a pipeline figure can tell its steps apart.
-  --s1: #23a7d6;
+  // Five stage hues, so a pipeline figure can tell its steps apart. These
+  // were set against the old near-black page and all five fell under AA on
+  // it when the page became blue — s1 3.59, s2 2.77, s3 3.09, s4 3.54,
+  // s5 4.39 — while still passing on their own tints, which is why a DOM
+  // contrast pass missed it: they live inside the SVG figures. Lightened
+  // until each clears 4.8 on the page and 5.6 on its tint.
+  --s1: #61c0e1;
   --s1-soft: #17353f;
-  --s2: #8c75e8;
+  --s2: #baacf1;
   --s2-soft: #1f173f;
-  --s3: #e456cc;
+  --s3: #ef9ae0;
   --s3-soft: #3f1739;
-  --s4: #db8624;
+  --s4: #e5a861;
   --s4-soft: #3f2d17;
-  --s5: #20c568;
+  --s5: #3bcc7a;
   --s5-soft: #173f29;
 }
 
@@ -170,7 +175,9 @@ $code-block-font-size: 0.6em !default;
   // half of the pair.
   --gen: #9c4514;
   --gen-soft: #fbe3cf;
-  --ok: #3f7a35;
+  // #3f7a35 is 4.69 on the page but 4.37 on its own tint — under AA, which
+  // the sibling session found and I reproduced. #39702f is 5.37 / 5.01.
+  --ok: #39702f;
   --ok-soft: #e2f0d8;
   // #9a6a07 in the sibling deck, where it is what the eyebrows are set in.
   // On this deck's cream it measured 4.28:1 against the page and 4.10:1 on
@@ -187,7 +194,7 @@ $code-block-font-size: 0.6em !default;
   --s3-soft: #f8dfea;
   --s4: #855a06;
   --s4-soft: #fdeec4;
-  --s5: #3f7a35;
+  --s5: #39702f;
   --s5-soft: #e2f0d8;
 
   color-scheme: light;

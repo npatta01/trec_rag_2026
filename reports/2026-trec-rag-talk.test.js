@@ -52,11 +52,22 @@ assert(fetched.length === 0,
 // 17 diagrams plus the 4 storybook illustrations. Every one is described;
 // the pair on the request slide is fine because only one of the two is ever
 // displayed, and display:none takes the other out of the a11y tree too.
+// 16 diagrams plus the 4 illustrations twice over, day and night. Both
+// halves of each pair are described: only one is ever displayed, and
+// display:none takes the other out of the a11y tree with it.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 20, `expected 20 fig-alt figures, found ${figAlts.length}`);
-// The illustrations show in every look now, so there is no .story class and
-// no second copy of the request scene to switch against.
-assert(!/\{\.story|\{\.plain/.test(qmd), "the look-specific art classes are gone");
+assert(figAlts.length === 24, `expected 24 fig-alt figures, found ${figAlts.length}`);
+assert(!/\{\.story|\{\.plain/.test(qmd), "the old look-specific art classes are gone");
+const day = (qmd.match(/\{\.art-day /g) || []).length;
+const night = (qmd.match(/\{\.art-night /g) || []).length;
+assert(day === 4 && night === 4,
+  `each illustration needs both lights, found ${day} day / ${night} night`);
+for (const n of ["request", "retrieval", "generation", "score"]) {
+  for (const half of ["", "-night"]) {
+    assert(fs.existsSync(path.join(root, `2026-trec-rag-talk/story-${n}${half}.jpg`)),
+      `missing illustration: story-${n}${half}.jpg`);
+  }
+}
 assert(!fs.existsSync(path.join(root, "2026-trec-rag-talk/img-request.png")),
   "the night request scene was replaced by the drawing");
 for (const n of ["request", "retrieval", "generation", "score"]) {
@@ -459,15 +470,23 @@ const contrast = (a, b) => {
   return (x + 0.05) / (y + 0.05);
 };
 const sheet = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
-for (const name of ["deck-light", "deck-dark"]) {
+// Every accent, in every look, against BOTH grounds it is set on: the page
+// and its own soft tint. The five stage hues are in this list because they
+// are the ones that caught us out — they live inside the SVG figures, so
+// when the dark page went from near-black to blue all five fell under AA
+// against it (s1 3.59, s2 2.77, s3 3.09, s4 3.54, s5 4.39) while still
+// passing on their tints, and a DOM contrast pass cannot see them at all.
+// Computed from the palette rather than pinned, so no edit can quietly
+// drop one back under.
+for (const name of ["deck-light", "deck-dark", "deck-story"]) {
   const body = sheet.match(new RegExp(`@mixin ${name} \\{([\\s\\S]*?)\\n\\}`));
   assert(body, `palette ${name} should exist`);
-  const tok = Object.fromEntries([...body[1].matchAll(/--([a-z-]+):\s*(#[0-9a-f]{6})/gi)]
+  const tok = Object.fromEntries([...body[1].matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)]
     .map((m) => [m[1], m[2].toLowerCase()]));
-  for (const k of ["ret", "gen", "ok", "adv"]) {
-    // These accents are used as text on their own soft tint (role labels,
-    // numbered chips) and on the page ground.
+  for (const k of ["ret", "gen", "ok", "adv", "deck", "s1", "s2", "s3", "s4", "s5"]) {
+    if (!tok[k]) continue;
     for (const on of [`${k}-soft`, "bg"]) {
+      if (!tok[on]) continue;
       const got = contrast(tok[k], tok[on]);
       assert(got >= 4.5, `${name}: --${k} on --${on} is ${got.toFixed(2)}:1, under AA`);
     }
