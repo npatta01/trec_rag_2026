@@ -47,7 +47,7 @@ $code-block-font-size: 0.6em !default;
   // and show in every look now; a blue-grey page made them read as pasted on
   // rather than printed with the deck. Luminance is within a point of the
   // old #f7f8fa, so the measured contrasts hold.
-  --bg: #f8f5ef;
+  --bg: #f4f0e6;
   --panel: #fffdf8;
   --ink: #151a21;
   --muted: #515a67;
@@ -1526,6 +1526,24 @@ body.reveal-viewport,
   margin: 0 0 0.16em;
 }
 
+// Ready for the night drawings. The sibling session is producing a dark-ground
+// version of each of the four; when they land, each picture becomes a pair
+// marked .art-day / .art-night and these rules pick one. Until then no image
+// carries either class and nothing below does anything.
+.reveal section img.art-night { display: none; }
+
+:root[data-theme="dark"] {
+  .reveal section img.art-day { display: none; }
+  .reveal section img.art-night { display: block; }
+
+  // A night drawing is painted on the deck's own dark ground, so the break
+  // goes back to being the page rather than the cream plate below.
+  .reveal .slides > section.divider:has(.secshot) {
+    background: var(--bg);
+    > h2 { color: var(--ink); }
+  }
+}
+
 // A picture break is the picture. Measured: all four drawings are 1500x844
 // with content running to every edge — 0% margin left, 0.1% right, 0.2%
 // bottom — and their own cream ground, so on any slide colour but that cream
@@ -1648,13 +1666,13 @@ body.reveal-viewport,
 // plate, and muddy under Forest. 14% is 18 points below: a tint the big type
 // still sits on comfortably, at 13.5:1 under Slate and 12.6:1 under Forest.
 // In dark mode 34% stays, because there the same mix lifts rather than weighs.
+// In daylight the plate is the same cream the drawings are painted on, a
+// shade lighter than the page — paper on a desk. Mixing --deck into the
+// ground gave a cold blue-grey slab, which on a warm page read as a piece
+// of another deck; and it disagreed with the picture breaks, which have to
+// be that cream. One plate colour for all of them instead.
 @mixin plate-daylight {
-  background: color-mix(in oklab, var(--deck) 14%, var(--bg));
-
-  // ...but never behind a picture. This has to live inside the mixin: the
-  // daylight rules carry an extra attribute selector, so a plain
-  // `:has(.secshot)` rule outside them loses the tie.
-  &:has(.secshot) { background: var(--bg); }
+  background: #fdf1da;
 }
 
 @media (prefers-color-scheme: light) {
