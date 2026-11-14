@@ -1610,6 +1610,26 @@ body.reveal-viewport,
     color: #aebdcb;
     margin-top: 0.3em;
   }
+
+  // The words were running the full width of the slide, straight across the
+  // bookshelf on one side and the window on the other. Both pictures keep a
+  // band down the middle clear; the type belongs inside it.
+  //
+  // Measured per text row as the per-column standard deviation of luminance
+  // (flat enough for type = sd < 12), intersected between the night and
+  // daylight art, then made symmetric about the centre since the type is
+  // centred: title 50%, subtitle 49%, authors 49%, date 44%. One column at
+  // 48% clears every row, and the date is short enough for the tightest.
+  .title,
+  .subtitle,
+  .quarto-title-authors,
+  .author,
+  .date {
+    max-width: 48%;
+    // margin-inline only: the vertical margins above do the spacing, and the
+    // `margin: 0 0 auto` on .subtitle is what spreads the block down the frame
+    margin-inline: auto;
+  }
 }
 
 // ------------------------------------------------- the contents slide

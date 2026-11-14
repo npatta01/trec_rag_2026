@@ -1,7 +1,10 @@
 ---
 title: "TREC RAG 2026"
 subtitle: "Single-pass and multi-stage answer generation, traced through one request"
-author: "Nidhin Pattaniyil · Tanwir Zaman · Semih Yagli — NP Labs"
+# Non-breaking spaces bind each name. The title type is capped at the 48%
+# column the artwork keeps clear, so this line wraps — and it has to wrap
+# at a separator, never through somebody's name.
+author: "Nidhin Pattaniyil · Tanwir Zaman · Semih Yagli — NP Labs"
 date: "2026-11-16"
 filters:
   - 2026-trec-rag-talk/inline-svg.lua

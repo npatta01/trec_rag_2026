@@ -838,6 +838,35 @@ for (const stage of ["Search", "Rerank", "Select", "Nuggets"]) {
   assert(lane.includes(`>${stage}</text>`), `the lane figure should keep the stage: ${stage}`);
 }
 
+// ------------------------------------------------- type inside the artwork
+// The title words ran the full width of the slide, across the bookshelf on
+// one side and the window on the other. Both pictures keep a band down the
+// middle clear. Measured per text row as the per-column standard deviation
+// of luminance (flat enough for type = sd < 12), intersected between the
+// night and daylight art and made symmetric about the centre, that band is
+// title 50%, subtitle 49%, authors 49%, date 44%. One column at 48% clears
+// every row; with it, the busiest column under any glyph measures sd 1-3.
+const titleCol = theme.match(
+  /\.title,\s*\.subtitle,\s*\.quarto-title-authors,\s*\.author,\s*\.date\s*\{([^}]*)\}/);
+assert(titleCol, "the title type should share one rule capping it to the clear column");
+const colWidth = titleCol[1].match(/max-width:\s*(\d+)%/);
+assert(colWidth, "that rule should cap the column with a max-width");
+assert(Number(colWidth[1]) <= 48,
+  `the type column must stay within the artwork's clear band: ${colWidth[1]}% > 48%`);
+assert(/margin-inline:\s*auto/.test(titleCol[1]),
+  "the column should centre with margin-inline, leaving the vertical spread alone");
+
+// Capping the width means the author line wraps, so it must wrap at a
+// separator. Non-breaking spaces inside each name are what guarantee that.
+const authorLine = qmd.match(/^author:\s*"([^"]*)"/m);
+assert(authorLine, "the deck should declare its authors");
+for (const name of authorLine[1].split(/\s*[\u00b7\u2014]\s*/)) {
+  assert(!/ /.test(name),
+    `"${name}" can wrap mid-name — bind it with a non-breaking space`);
+}
+assert(authorLine[1].includes("\u00a0"),
+  "the author names should be bound with non-breaking spaces");
+
 // ---------------------------------------------------------------- shipping
 // Quarto's embed-resources leaves a few stylesheets as
 // `<link rel="stylesheet" href="data:text/css,...">`. Opened as a local file
