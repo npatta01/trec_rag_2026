@@ -160,23 +160,31 @@ assert(!flat.includes("This is about how the approach works"),
 // names the pieces and the lane figure already draws these exact ceilings
 // against one real query, so it was the same story told a third time.
 const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
-assert(sections.length === 30,
-  `expected 30 content slides, found ${sections.length}`);
+// 29 since the Cost break came off: the slide straight after it was the
+// comparison, so the break only previewed its own section. Cost keeps its
+// place in the contents legend.
+assert(sections.length === 29,
+  `expected 29 content slides, found ${sections.length}`);
+assert(!/^## Cost/m.test(qmd), "the Cost section break should not be back");
 
 // Four sections, named the way the work is actually divided. The contents are
 // shown once, at the top; the three breaks after it carry a picture instead,
 // because the same list four times taught the room nothing new.
 const dividers = (html.match(/class="[^"]*\bdivider\b/g) || []).length;
-assert(dividers === 6, `expected 6 dividers (contents, 4 sections, appendix), found ${dividers}`);
+assert(dividers === 5,
+  `expected 5 dividers (contents, 3 sections, appendix), found ${dividers}`);
 assert((qmd.match(/class="roadmap"/g) || []).length === 1,
   "the roadmap belongs on the opening contents slide only");
 const legs = (qmd.match(/<span class="leg[ "]/g) || []).length;
 assert(legs === 5, `the contents slide should list the five sections, found ${legs}`);
 assert((qmd.match(/class="leg leg-now"/g) || []).length === 1,
   "the contents slide lights the section it opens");
-for (const sec of ["Architecture", "Retrieval", "Answer Generation", "Overall score", "Cost"]) {
+// "Overall score" became "Results". Cost stays in the legend although its
+// break slide is gone, because the section itself is still there.
+for (const sec of ["Architecture", "Retrieval", "Answer Generation", "Results", "Cost"]) {
   assert(qmd.includes(`</span>${sec}</span>`), `the contents should name: ${sec}`);
 }
+assert(!/Overall score/.test(qmd), "the section is called Results now");
 // Every section break is a plate of the deck's own colour with the section
 // name on it. The photo-illustrations came off all five: decoration none of
 // them needed, and on the title slide it was crowding the words.

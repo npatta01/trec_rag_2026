@@ -32,7 +32,7 @@ format:
 <span class="leg leg-now"><span class="leg-n">1</span>Architecture</span>
 <span class="leg"><span class="leg-n">2</span>Retrieval</span>
 <span class="leg"><span class="leg-n">3</span>Answer Generation</span>
-<span class="leg"><span class="leg-n">4</span>Overall score</span>
+<span class="leg"><span class="leg-n">4</span>Results</span>
 <span class="leg"><span class="leg-n">5</span>Cost</span>
 </div>
 
@@ -204,7 +204,7 @@ The request said *repairs* and *a child* in different sentences.
 "Lead" never appears in the single-pass answer.
 :::
 
-## Overall score {.divider}
+## Results {.divider}
 
 
 ## What the organizers said about rag2026-18
@@ -240,9 +240,6 @@ A different topic · rag2026-13, a founder scaling a startup
 ::: {.diagram}
 ![](2026-trec-rag-talk/09-overall.svg){fig-alt="A grid of 42 squares, one per scored topic: 26 filled in the multi-stage colour where multi-stage supported more nuggets, 15 outlined where the two tied exactly, and 1 filled in the single-pass colour where single-pass did better. Below, each run's assessor record as a share of its own battles: multi-stage won 62.9 per cent of 399, single-pass 45.0 per cent of 422."}
 :::
-
-## Cost {.divider}
-
 
 ## What the second pass cost
 
