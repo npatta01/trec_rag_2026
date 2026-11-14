@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 520" role="img" aria-labelledby="rt-title rt-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 574" role="img" aria-labelledby="rt-title rt-desc">
   <title id="rt-title">Our retrieval run against the field median on three measures</title>
   <desc id="rt-desc">Three paired bars comparing our submitted retrieval run with the median run across the field. Precision: ours 0.4116 against a median of 0.3499, so ours is higher. Recall: ours 0.0897 against a median of 0.1002, so ours is lower. Documents returned per topic: ours 38.6 against a median of 100.0, roughly a third as many. Each pair is scaled to its own larger value, so bar lengths compare only within a row.</desc>
   <style>
@@ -41,4 +41,5 @@
   <text class="rt-who" x="346" y="402" style="fill:var(--bg)">ours</text>
   <rect x="340" y="426" width="760" height="42" rx="6" fill="var(--line)" opacity=".45"/>
   <text class="rt-val" x="1116" y="456">100.0</text>
+  <text class="rt-key" x="30" y="534">A third as many documents as the field median, and more precise for it. Recall is the price.</text>
 </svg>

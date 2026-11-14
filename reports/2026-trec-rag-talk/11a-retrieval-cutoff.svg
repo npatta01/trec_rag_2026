@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 626" role="img" aria-labelledby="rc-title rc-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 664" role="img" aria-labelledby="rc-title rc-desc">
   <title id="rc-title">Each lane decides its own cutoff, and the union is the candidate core</title>
   <desc id="rc-desc">Four horizontal lanes for one narrative, each plotting its documents by score from low on the left to high on the right. The top lane is the untouched narrative; the three below are the facet lanes, one per subnarrative. Every lane carries its own dashed cutoff line, and the four lines sit at four different places, because each is computed from that lane's own scores as the median plus 2.5 times 1.4826 times the median absolute deviation. Documents to the right of a lane's line are filled in and admitted; those to the left are hollow and dropped. The lanes admit 6, 4, 9 and 3 documents respectively. Below, a band shows that the union of those admissions is the candidate core for the narrative, and that because the cutoff is a score and not a position, depth is decided by the evidence: across the 119 narratives the submitted depth runs from 1 to 121 documents over 61 distinct depths, averaging about 36, for 4,246 rows per run.</desc>
   <style>
@@ -71,4 +71,5 @@
   <text class="rc-sub"  x="1104" y="600">mean depth</text>
   <text class="rc-big"  x="1300" y="568">4,246</text>
   <text class="rc-sub"  x="1300" y="600">rows per run</text>
+  <text class="rc-sub" x="66" y="648">Submitted three times — narrative + subnarrative, evidence breadth, narrative alone. Same set, different order.</text>
 </svg>

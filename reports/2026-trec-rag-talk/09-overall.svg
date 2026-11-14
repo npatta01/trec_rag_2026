@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 560" role="img" aria-labelledby="ov-title ov-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 594" role="img" aria-labelledby="ov-title ov-desc">
   <title id="ov-title">All 42 scored topics, and both runs' assessor records</title>
   <desc id="ov-desc">Above, a grid of 42 squares, one per scored topic, grouped by outcome. Twenty-six squares are filled in the multi-stage colour: topics where multi-stage supported more nuggets. Fifteen are outlined in grey: topics where the two tied exactly. One is filled in the single-pass colour: the single topic where single-pass did better. Below, two bars showing each run's assessor record as a share of its own battles. Multi-stage won 62.9 per cent of its 399 battles; single-pass won 45.0 per cent of its 422. Each run is judged against other teams' answers, so the two bars are separate samples rather than a head-to-head.</desc>
   <style>
@@ -82,4 +82,5 @@
   <text class="ov-sub" x="1320" y="453">of 422 battles</text>
 
   <text class="ov-sub" x="40" y="520">The bar length is each run's own win rate. A longer bar is not a win over the other run — they never met.</text>
+  <text class="ov-sub" x="40" y="560">Not a claim that it is novel — only that the extra passes did something visible.</text>
 </svg>

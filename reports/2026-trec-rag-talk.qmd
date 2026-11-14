@@ -137,9 +137,6 @@ Two of the eight — the other six look the same, and all of them are in the app
 ![](2026-trec-rag-talk/02-one-lane.svg){fig-alt="One BM25 query lane, stage by stage: up to 1,000 documents retrieved, chunked and reranked down to at most 100 kept passages, reduced to at most 40 selected passages, producing at most 20 nugget claims. The nugget stage is drawn in amber with a dashed edge because the answer may use those claims but must always cite the passage instead."}
 :::
 
-::: {.cap}
-Every number is a **per-query ceiling**, not a total.
-:::
 ## Reranking: a document becomes passages
 
 ::: {.diagram}
@@ -240,9 +237,6 @@ A different topic · rag2026-13, a founder scaling a startup
 ![](2026-trec-rag-talk/08-disagree.svg){fig-alt="Two panels. The automated rubric: all nuggets supported, single-pass 1.000 against multi-stage 0.857, with an arrow marking single-pass ahead. The human assessors: single-pass preferred in 5 of its 10 battles, multi-stage in 8 of its 12, with an arrow marking multi-stage ahead. The two arrows point at different runs."}
 :::
 
-::: {.cap}
-Same two answers, opposite ranking.
-:::
 
 ## How often they disagree
 
@@ -250,9 +244,6 @@ Same two answers, opposite ranking.
 ![](2026-trec-rag-talk/12-disagree-all.svg){fig-alt="Across the 42 scored topics the two measures agree on 20, all of them favouring multi-stage; they disagree on 5; and on 17 one measure is exactly tied. The five disagreements are listed with the run each measure puts ahead: rag2026-13, rubric single-pass 1.000 against 0.857 while assessors favour multi-stage 67 per cent against 50; rag2026-59, rubric multi-stage 1.000 against 0.800 while assessors favour single-pass 67 against 58; rag2026-97, rubric multi-stage 1.000 against 0.714, assessors single-pass 55 against 50; rag2026-2, rubric multi-stage 0.833 against 0.667, assessors single-pass 40 against 38; and rag2026-109, rubric multi-stage 0.667 against 0.611 while assessors favour single-pass 69 against 29, the widest gap on the list."}
 :::
 
-::: {.cap}
-Not a one-off, and not typical either.
-:::
 
 ## Overall: 42 scored topics
 
@@ -260,10 +251,6 @@ Not a one-off, and not typical either.
 ![](2026-trec-rag-talk/09-overall.svg){fig-alt="A grid of 42 squares, one per scored topic: 26 filled in the multi-stage colour where multi-stage supported more nuggets, 15 outlined where the two tied exactly, and 1 filled in the single-pass colour where single-pass did better. Below, each run's assessor record as a share of its own battles: multi-stage won 62.9 per cent of 399, single-pass 45.0 per cent of 422."}
 :::
 
-::: {.boundary}
-The organizers' own numbers. **Not a claim that it is novel** — only that the
-extra passes did something visible.
-:::
 ## Cost {.divider .divider-img}
 
 ::: {.secshot}
@@ -281,9 +268,6 @@ Model calls across all 119 requests
 ![](2026-trec-rag-talk/13-cost.svg){fig-alt="Two panels. Paid once: one planner call per request, 119 in all, plus one nuggetizer call per subnarrative, 691 in all, giving 810 shared model calls; beneath, 1,787 BM25 searches and the local-GPU reranking, which cost no model calls. Paid once per strategy: single-pass 121 calls drawn as a short bar, multi-stage 1,167 drawn as a bar about ten times longer, which is 9.6 times the calls for the same evidence, or 1 against 7 to 12 per request. A note says this counts calls and not money, because tokens were never metered."}
 :::
 
-::: {.cap}
-Retrieval is paid once. Only the writing is paid twice.
-:::
 
 ## Where that leaves the architecture
 
@@ -341,12 +325,6 @@ The Retrieval submission — a separate, weaker run, kept back here for question
 ![](2026-trec-rag-talk/11a-retrieval-cutoff.svg){fig-alt="Four horizontal lanes for one narrative, each plotting its documents by score. The top is the untouched narrative, the three below are facet lanes. Each lane carries its own dashed cutoff line and the four sit at four different places, because each is the median plus 2.5 times 1.4826 times that lane's median absolute deviation. Documents right of a line are filled and admitted, those left are hollow and dropped, admitting 6, 4, 9 and 3. A band below says the union is the candidate core, and that depth runs from 1 to 121 documents over 61 distinct depths, averaging about 36, for 4,246 rows per run."}
 :::
 
-::: {.cap}
-That identical set went out three times — ordered by narrative-plus-subnarrative,
-by evidence breadth, and by narrative alone. I hashed every `(topic, document)`
-pair across the three files: same set, different order, so all three scored the
-same per topic.
-:::
 
 ## How the Retrieval run scored
 
@@ -354,12 +332,6 @@ same per topic.
 ![](2026-trec-rag-talk/06-retrieval.svg){fig-alt="Three paired bars comparing our retrieval run with the field median. Precision: ours 0.4116 against 0.3499. Recall: ours 0.0897 against 0.1002. Documents returned per topic: ours 38.6 against 100.0, roughly a third as many. Each pair is scaled to its own larger value."}
 :::
 
-::: {.cap}
-Because the three runs hold the same documents, they scored identically per
-topic — so this measures **what the cutoff selected**, not how it was ordered.
-We return about a third as many documents as the field median and are more
-precise for it; recall is the price.
-:::
 
 ## Appendix · query lanes 1–4
 

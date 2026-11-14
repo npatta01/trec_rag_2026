@@ -131,8 +131,7 @@ for (const fact of requiredFacts) {
 // Evidence boundaries that must survive editing.
 const requiredBoundaries = [
   // The framing lives with the aggregate numbers now, not on the task slide.
-  "a claim that it is novel",
-  "The organizers' own numbers",
+  // moved into 09-overall.svg when the caption after the figure came off
   "42 scored topics",
   // "The rubric items were not released" came off both the slide and the
   // figure as too much copy. The claim it guarded - that the deck never says
@@ -450,9 +449,17 @@ const cutoff = fs.readFileSync(path.join(root, "2026-trec-rag-talk/11a-retrieval
 for (const fact of ["1 – 121", "61", "4,246", "1.4826"]) {
   assert(cutoff.includes(fact), `the cutoff figure should state: ${fact}`);
 }
-// The three orderings are a sentence now, not a second figure.
-assert(flat.includes("same set, different order"),
+// The three orderings are a line inside the cutoff figure now.
+assert(/Same set, different order/.test(cutoff),
   "the appendix must still state what the three files have in common");
+assert(/Not a claim that it is novel/.test(grid),
+  "the novelty caveat moved into the overall figure; it must not vanish");
+// No slide whose body is a figure may carry a caption after it: one line at
+// the bottom, and it belongs inside the picture.
+const figureSlides = qmd.split(/\n## /).slice(1).filter((b) => b.includes("{.diagram}"));
+const withCaps = figureSlides.filter((b) => /::: \{\.(cap|boundary)\}/.test(b));
+assert(withCaps.length <= 1,
+  `at most one figure slide may keep a caption, found ${withCaps.length}`);
 assert(!/11-retrieval-submission/.test(qmd) && !/11b-retrieval-orderings/.test(qmd),
   "the retrieval figures were reworked; nothing should point at the retired ones");
 // Retrieval was the weaker of the two submissions, so its mechanics sit after
