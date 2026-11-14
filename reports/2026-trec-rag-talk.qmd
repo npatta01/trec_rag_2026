@@ -313,10 +313,11 @@ Per-citation support judgments.
 :::
 :::
 
-::: {.cap}
-Happy to walk through any of it — rag2026-18 and rag2026-13 are in the coverage
-report and both RAGDoll reports, so the whole path is checkable.
-:::
+<div class="repo">
+<div class="repo-k">All of it lives in one place</div>
+<div class="repo-url-row"><a class="repo-url" href="https://github.com/npatta01/trec_rag_2026">github.com/npatta01/trec_rag_2026</a></div>
+<div class="repo-v">This deck, the pipeline code, every report above, and the per-topic traces. rag2026-18 and rag2026-13 run all the way through, so the whole path is checkable.</div>
+</div>
 
 ## Appendix {.divider}
 

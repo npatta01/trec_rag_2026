@@ -486,11 +486,18 @@ const sheet = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), 
 // passing on their tints, and a DOM contrast pass cannot see them at all.
 // Computed from the palette rather than pinned, so no edit can quietly
 // drop one back under.
-for (const name of ["deck-light", "deck-dark", "deck-story"]) {
+// deck-light is the base :root, so the other two are read as overrides on top
+// of it. Taking deck-story's own body alone would skip every ground it does
+// not restate and quietly check nothing.
+const tokensOf = (name) => {
   const body = sheet.match(new RegExp(`@mixin ${name} \\{([\\s\\S]*?)\\n\\}`));
   assert(body, `palette ${name} should exist`);
-  const tok = Object.fromEntries([...body[1].matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)]
+  return Object.fromEntries([...body[1].matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)]
     .map((m) => [m[1], m[2].toLowerCase()]));
+};
+const base = tokensOf("deck-light");
+for (const name of ["deck-light", "deck-dark", "deck-story"]) {
+  const tok = name === "deck-light" ? base : { ...base, ...tokensOf(name) };
   for (const k of ["ret", "gen", "ok", "adv", "deck", "s1", "s2", "s3", "s4", "s5"]) {
     if (!tok[k]) continue;
     for (const on of [`${k}-soft`, "bg"]) {
@@ -498,6 +505,17 @@ for (const name of ["deck-light", "deck-dark", "deck-story"]) {
       const got = contrast(tok[k], tok[on]);
       assert(got >= 4.5, `${name}: --${k} on --${on} is ${got.toFixed(2)}:1, under AA`);
     }
+  }
+  // --deck is the link colour, so unlike the stage hues it is not confined to
+  // the page: a link sits on whichever card holds it, and the closing slide
+  // puts links on all four tints and on --panel. Only --bg was covered above,
+  // and a browser pass cannot settle this — a hidden Browser pane throttles
+  // style recalc and hands back the previously painted colour, which is how
+  // these came back looking like five failures that were not there.
+  for (const on of ["panel", "ret-soft", "gen-soft", "ok-soft", "adv-soft"]) {
+    if (!tok[on]) continue;
+    const got = contrast(tok.deck, tok[on]);
+    assert(got >= 4.5, `${name}: a link (--deck) on --${on} is ${got.toFixed(2)}:1, under AA`);
   }
   assert(contrast(tok.ink, tok.bg) >= 7 && contrast(tok.muted, tok.bg) >= 4.5,
     `${name}: body text must clear AA on the page ground`);

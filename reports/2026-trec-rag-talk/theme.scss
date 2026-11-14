@@ -766,6 +766,47 @@ body.reveal-viewport,
   margin-top: 0.5em;
 }
 
+// The one line somebody in the back row might write down, so the URL is the
+// biggest thing on the strip and nothing shares the row with it. The repo
+// belongs to the whole talk rather than to a stage of it, so this takes
+// --deck, the structural token, and none of the four semantic roles.
+.repo {
+  display: grid;
+  justify-items: center;
+  gap: 0.14em;
+  margin-top: 0.6em;
+  padding: 0.52em 1em 0.6em;
+  text-align: center;
+  background: var(--panel);
+  border: 2px solid color-mix(in oklab, var(--deck) 42%, var(--panel));
+  border-radius: 12px;
+}
+
+.repo-k {
+  color: var(--muted);
+  font-size: 0.55em;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.reveal .repo .repo-url-row { line-height: 1; }
+
+.reveal .repo a.repo-url {
+  font-size: 1.12em;
+  font-weight: 780;
+  line-height: 1.2;
+  text-decoration: none;
+  border-bottom: 2px solid color-mix(in oklab, var(--deck) 45%, var(--panel));
+}
+
+.repo-v {
+  color: var(--muted);
+  font-size: 0.6em;
+  line-height: 1.35;
+  max-width: 46em;
+}
+
 // A short numbered stack naming the parts of something without explaining
 // each one. Markdown nests a <ul> inside the div, so the reset targets that.
 .facets {
@@ -885,7 +926,7 @@ body.reveal-viewport,
 
 .qgrid code {
   display: block;
-  font-size: 0.52em;
+  font-size: 0.55em;  // 17.6 slide px: the deck's floor, not under it
   margin: 0.16em 0 0;
   padding: 0.18em 0.4em;
   line-height: 1.26;
@@ -1621,7 +1662,9 @@ body.reveal-viewport,
 
 .rf-k {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.88em;
+  // 0.88em put these mono keys at 15.7 slide px, under the deck's 17 floor
+  // while every other line cleared it.
+  font-size: 0.98em;
   color: var(--muted);
   white-space: nowrap;
 }
