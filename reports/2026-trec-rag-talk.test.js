@@ -319,8 +319,10 @@ for (const [svg, who] of [[single, ["Sol", "local code"]],
 const theme = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
 assert(/\.reveal section svg\.glyph/.test(theme),
   "the glyph rule must match Reveal's specificity for section svg");
-assert(/svg\.glyph\{[^}]*display:inline-block/.test(html.replace(/\s+/g, "")) ||
-       /display%3Ainline%2Dblock/.test(html),
+// The second branch here used to be a percent-encoded copy of the first,
+// because the compiled CSS arrived as a data: URL. The post-render step
+// inlines it now, so the plain form is the only one that can match.
+assert(/svg\.glyph\{[^}]*display:inline-block/.test(html.replace(/\s+/g, "")),
   "the compiled deck should render glyphs inline");
 const glyphs = (qmd.match(/class="glyph[ "]/g) || []).length;
 assert(glyphs >= 15, `expected the deck's symbol set, found ${glyphs} glyphs`);
@@ -702,8 +704,16 @@ for (const [fig, tok] of [["02-one-lane", "ln"], ["03a-single-pass", "sp"],
 }
 
 // The figures' own colour blocks are dropped on the way in; the page owns them.
-assert(!/:root\s*\{\s*color-scheme/.test(html),
-  "inlined figures must not carry their own :root palette into the page");
+// Scoped to the inlined <svg> elements on purpose: the deck's theme has a
+// :root block of its own, and a whole-page search for one only ever passed
+// because Quarto had the stylesheet percent-encoded in a data: URL, where no
+// plain regex could see it. Inlining the CSS made that silence audible.
+const inlinedSvgs = html.match(/<svg[\s\S]*?<\/svg>/g) || [];
+assert(inlinedSvgs.length >= 10,
+  `expected the figures to be inlined as <svg>, found ${inlinedSvgs.length}`);
+const svgsWithRoot = inlinedSvgs.filter((s) => /:root\s*\{/.test(s)).length;
+assert(svgsWithRoot === 0,
+  `${svgsWithRoot} inlined figure(s) still carry their own :root palette into the page`);
 // ...but they keep it on disk, so each file still renders when opened alone.
 for (const fig of ["02-one-lane", "03a-single-pass", "03b-multi-stage"]) {
   const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${fig}.svg`), "utf8");
@@ -827,5 +837,19 @@ assert(/drop duplicates, then MMR spread/.test(lane),
 for (const stage of ["Search", "Rerank", "Select", "Nuggets"]) {
   assert(lane.includes(`>${stage}</text>`), `the lane figure should keep the stage: ${stage}`);
 }
+
+// ---------------------------------------------------------------- shipping
+// Quarto's embed-resources leaves a few stylesheets as
+// `<link rel="stylesheet" href="data:text/css,...">`. Opened as a local file
+// that works, which is why this went unnoticed; anywhere a CSP governs
+// `style-src` the data: URL is not in the allow-list, the fetch is refused,
+// and the deck renders as unstyled serif text with black SVG shapes. Run
+// `python3 inline-data-css.py 2026-trec-rag-talk.html` after every render.
+assert(!html.includes("data:text/css"),
+  "no stylesheet may be a data: URL — run inline-data-css.py after rendering");
+assert(!/<link\b[^>]*rel="stylesheet"/i.test(html),
+  "the deck must carry its CSS inline, with no stylesheet <link> left to fetch");
+assert(fs.existsSync(path.join(root, "inline-data-css.py")),
+  "the post-render step that inlines data: stylesheets should exist");
 
 console.log("reports/2026-trec-rag-talk.test.js OK");
