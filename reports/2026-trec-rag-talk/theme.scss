@@ -1403,6 +1403,19 @@ body.reveal-viewport,
   text-align: center;
 }
 
+// A section name on an otherwise empty plate was set at the same size as the
+// heading of a slide carrying a whole figure. It is the only thing on the
+// slide, so it can be read from the back of the room. Not the contents
+// slide, which has its five legs underneath and needs the room for them.
+.reveal .slides > section.divider:not(:has(.roadmap)) > h2 {
+  font-size: 2.1em;
+  line-height: 1.1;
+}
+
+.reveal .slides > section.divider:not(:has(.roadmap)) > .cap {
+  font-size: 1.15em;
+}
+
 .reveal .slides > section.divider > .cap {
   margin-top: auto;
   padding-bottom: 0.3em;
@@ -1576,8 +1589,29 @@ body.reveal-viewport,
   padding: 0.5em 0.9em;
 }
 
-// The title slide is type on the page now, not a plate, so daylight only has
-// to darken the words that were written to sit on a dark picture.
+// A plate that lifts off a dark page has to sit down on a light one. At 34%
+// in daylight it measured 39 luminance points below the page — a slab, not a
+// plate, and muddy under Forest. 14% is 18 points below: a tint the big type
+// still sits on comfortably, at 13.5:1 under Slate and 12.6:1 under Forest.
+// In dark mode 34% stays, because there the same mix lifts rather than weighs.
+@mixin plate-daylight {
+  background: color-mix(in oklab, var(--ret) 14%, var(--bg));
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .reveal .slides > section.divider,
+  :root:not([data-theme="dark"]) .reveal .slides > section.quarto-title-block {
+    @include plate-daylight;
+  }
+}
+
+:root[data-theme="light"] .reveal .slides > section.divider,
+:root[data-theme="light"] .reveal .slides > section.quarto-title-block {
+  @include plate-daylight;
+}
+
+// The title words were written to sit on a dark picture, so daylight darkens
+// them to sit on a pale plate instead.
 @mixin title-daylight {
   .title { color: #0d1821; }
   // Light grey-blue at 8.9:1 still read as faint: the problem was weight and
