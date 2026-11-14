@@ -16,7 +16,7 @@
   <rect width="1500" height="560" fill="var(--bg)"/>
 
   <!-- the three outcomes, to scale against each other -->
-  <rect x="40" y="34" width="420" height="104" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
+  <rect x="40" y="34" width="420" height="104" rx="12" fill="var(--panel)" stroke="var(--ok)" stroke-width="3"/>
   <text class="da-big" x="64" y="88" style="fill:var(--ok)">20</text>
   <text class="da-cap" x="130" y="76">agree — and all 20</text>
   <text class="da-cap" x="130" y="100">favour multi-stage</text>

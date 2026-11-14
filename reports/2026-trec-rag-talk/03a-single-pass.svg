@@ -58,7 +58,7 @@
   <path class="sp-back" d="M700 226 V160 H626"/>
   <text class="sp-chip" x="714" y="167">one retry — used on 2 of 119</text>
 
-  <rect x="260" y="392" width="950" height="42" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
+  <rect x="260" y="392" width="950" height="42" rx="10" fill="var(--panel)" stroke="var(--ok)" stroke-width="2.6"/>
   <text class="sp-label" x="735" y="421" text-anchor="middle" style="fill:var(--ok)">119 answers · one model call each</text>
 
   <text class="sp-prov" x="30" y="415">openai/gpt-5.6-sol</text>

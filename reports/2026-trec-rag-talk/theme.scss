@@ -1569,50 +1569,20 @@ body.reveal-viewport,
 .reflist > p { display: contents; }
 
 // ------------------------------------------------- the title slide
-// "the middle feels so empty". The art rides on a ::before layer the script
-// points at the right twin, so this only has to spread the text down the
-// frame and keep it readable over whichever picture is showing.
+// "the middle feels so empty", so the text spreads down the frame rather
+// than huddling in the middle. The background picture came off: it was
+// fighting the words for the same space and adding nothing the words did
+// not already say.
 .reveal .slides > section.quarto-title-block {
   display: flex !important;
   flex-direction: column;
   height: 100%;
   // height:100% plus padding overflows unless the padding is inside the box
   box-sizing: border-box;
+  justify-content: center;
+  gap: 0.1em;
   padding: 1.6em 0 1.2em;
   text-align: center;
-
-  // The picture gets a layer of its own rather than the section's own
-  // background: a filter on the section would dull the type with it.
-  // The script sets --title-art to whichever twin the theme calls for.
-  &::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-    background-image: var(--title-art, none);
-    background-size: cover;
-    background-position: center;
-  }
-
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-    background: linear-gradient(
-      to bottom,
-      rgba(6, 10, 18, 0.3),
-      rgba(6, 10, 18, 0.05) 45%,
-      rgba(6, 10, 18, 0.45)
-    );
-  }
-
-  > * {
-    position: relative;
-    z-index: 1;
-  }
 
   .title {
     color: #f2f6f9;
@@ -1621,14 +1591,14 @@ body.reveal-viewport,
 
   .subtitle {
     color: #d3dde7;
-    margin: 0 0 auto;
+    margin: 0 0 1.4em;
   }
 
   .quarto-title-authors,
   .author,
   .quarto-title-author-name {
     color: #e6edf3;
-    margin-top: auto;
+    margin-top: 0;
   }
 
   .date {
@@ -1636,23 +1606,14 @@ body.reveal-viewport,
     margin-top: 0.3em;
   }
 
-  // The words were running the full width of the slide, straight across the
-  // bookshelf on one side and the window on the other. Both pictures keep a
-  // band down the middle clear; the type belongs inside it.
-  //
-  // Measured per text row as the per-column standard deviation of luminance
-  // (flat enough for type = sd < 12), intersected between the night and
-  // daylight art, then made symmetric about the centre since the type is
-  // centred: title 50%, subtitle 49%, authors 49%, date 44%. One column at
-  // 48% clears every row, and the date is short enough for the tightest.
+  // Room to breathe at the sides without running the full 1280: the title
+  // picture is gone, so this is a measure, not a band kept clear of artwork.
   .title,
   .subtitle,
   .quarto-title-authors,
   .author,
   .date {
-    max-width: 48%;
-    // margin-inline only: the vertical margins above do the spacing, and the
-    // `margin: 0 0 auto` on .subtitle is what spreads the block down the frame
+    max-width: 82%;
     margin-inline: auto;
   }
 }
@@ -1684,8 +1645,7 @@ body.reveal-viewport,
 // A dark section break on a light page is deliberate — a chapter card — but
 // the deck's hairline border around it reads as a leftover rather than a
 // frame. In light mode the plate sits on a soft shadow instead.
-:root[data-theme="light"] .reveal .slides > section.divider-img,
-:root[data-theme="light"] .reveal .slides > section.quarto-title-block {
+:root[data-theme="light"] .reveal .slides > section.divider-img {
   box-shadow: 0 2px 18px rgb(16 24 40 / 0.18);
 }
 
@@ -1748,28 +1708,9 @@ body.reveal-viewport,
   @include break-daylight;
 }
 
-// The two title pictures ride in the page only so Quarto inlines them; the
-// script reads their src and paints the slide with the right one.
-#title-art { display: none !important; }
-
-// The title plate flips with its picture, like the section breaks do.
+// The title slide is type on the page now, not a plate, so daylight only has
+// to darken the words that were written to sit on a dark picture.
 @mixin title-daylight {
-  background-color: #f1f4f8;
-
-  // The daylight art is warm enough that a translucent wash cannot cool it
-  // without covering it: measured rgb(253 240 221), R-B +32. So the picture
-  // itself loses its saturation, on its own layer, leaving the type alone.
-  &::before { filter: saturate(0.5) brightness(1.02); }
-
-  &::after {
-    background: linear-gradient(
-      to bottom,
-      rgb(238 243 251 / 0.46),
-      rgb(238 243 251 / 0.38) 50%,
-      rgb(238 243 251 / 0.5)
-    );
-  }
-
   .title { color: #0d1821; }
   // Light grey-blue at 8.9:1 still read as faint: the problem was weight and
   // temperature, not ratio, so these go darker and heavier rather than larger.

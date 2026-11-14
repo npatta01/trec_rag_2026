@@ -60,7 +60,7 @@
   <text class="rc-sub" x="902" y="508" text-anchor="middle">four lanes, four different cutoffs</text>
 
   <!-- the union -->
-  <rect x="40" y="528" width="1520" height="84" rx="12" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3"/>
+  <rect x="40" y="528" width="1520" height="84" rx="12" fill="var(--panel)" stroke="var(--ok)" stroke-width="3"/>
   <text class="rc-note" x="66" y="562" style="font-weight:800;fill:var(--ok)">THE UNION IS THE CANDIDATE CORE</text>
   <text class="rc-note" x="66" y="592">The bar is a score, not a position.</text>
   <text class="rc-big"  x="700" y="568">1 – 121</text>

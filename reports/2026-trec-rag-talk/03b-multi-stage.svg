@@ -80,7 +80,7 @@
   <text class="ms-step" x="1286" y="338" style="fill:var(--muted)">7</text>
   <text class="ms-step" x="797" y="338" style="fill:var(--muted)">4</text>
 
-  <rect x="220" y="406" width="1150" height="68" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
+  <rect x="220" y="406" width="1150" height="68" rx="10" fill="var(--panel)" stroke="var(--ok)" stroke-width="2.6"/>
   <text class="ms-foot" x="244" y="434">3–8 obligations · ≤6 cards per group · at most 3 edits · all five must pass</text>
   <text class="ms-foot" x="244" y="462">code applies only what passed · 119 answers · one pass, not a repeating loop</text>
 

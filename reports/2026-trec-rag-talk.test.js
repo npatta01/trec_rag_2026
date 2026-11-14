@@ -628,16 +628,24 @@ for (const name of ["retrieval", "generation", "score", "cost"]) {
     assert(fs.existsSync(path.join(root, f)), `missing section art: ${f}`);
   }
 }
-assert(fs.existsSync(path.join(root, "2026-trec-rag-talk/art-title.jpg")) &&
-       fs.existsSync(path.join(root, "2026-trec-rag-talk/art-title-light.jpg")),
-  "the title slide needs both of its pictures");
-// Quarto inlines these; nothing should start referencing them by path again.
-assert(!/title-slide-attributes/.test(qmd),
-  "the title art is painted from the hidden pair, not a background attribute");
+// The title slide had a picture of its own and lost it: it was fighting the
+// words for the same space and saying nothing the words did not. Nothing
+// should quietly put one back.
+for (const f of ["art-title.jpg", "art-title-light.jpg"]) {
+  assert(!fs.existsSync(path.join(root, `2026-trec-rag-talk/${f}`)),
+    `${f} came off the deck; it should not be back`);
+}
+assert(!/title-slide-attributes/.test(qmd) && !/art-title/.test(qmd),
+  "the title slide carries no background picture");
 const toggle = fs.readFileSync(path.join(root, "2026-trec-rag-talk/palette-toggle.html"), "utf8");
-assert(/title-art-dark/.test(toggle) && /title-art-light/.test(toggle) &&
-       /prefers-color-scheme: light/.test(toggle),
-  "the toggle must carry both title pictures and honour the system setting");
+assert(!/title-art/.test(toggle) && !/paintTitle/.test(toggle),
+  "the toggle no longer paints a title picture");
+// Auto is now purely CSS: the button clears the attribute and the theme's
+// own prefers-color-scheme rules decide. No JS reads the system setting.
+assert(/removeAttribute\("data-theme"\)/.test(toggle),
+  "auto must clear data-theme so the CSS media query decides");
+assert(/@media \(prefers-color-scheme: light\)/.test(theme),
+  "the theme must carry the auto-mode rules the toggle defers to");
 // A light plate needs dark words on it, and the reverse, in both the pinned
 // themes and in auto.
 for (const sel of ["section.divider-img", "section.quarto-title-block"]) {
@@ -863,23 +871,29 @@ assert(!/\.divider[^{}]*\{[^}]*border-top/.test(theme),
 // ------------------------------------------------- type inside the artwork
 // The title words ran the full width of the slide, across the bookshelf on
 // one side and the window on the other. Both pictures keep a band down the
-// middle clear. Measured per text row as the per-column standard deviation
-// of luminance (flat enough for type = sd < 12), intersected between the
-// night and daylight art and made symmetric about the centre, that band is
-// title 50%, subtitle 49%, authors 49%, date 44%. One column at 48% clears
-// every row; with it, the busiest column under any glyph measures sd 1-3.
+// measure, not a band kept clear of artwork: with the picture gone the type
+// only needs margins, so the cap is wide rather than the old 48%.
 const titleCol = theme.match(
   /\.title,\s*\.subtitle,\s*\.quarto-title-authors,\s*\.author,\s*\.date\s*\{([^}]*)\}/);
-assert(titleCol, "the title type should share one rule capping it to the clear column");
+assert(titleCol, "the title type should share one rule setting its measure");
 const colWidth = titleCol[1].match(/max-width:\s*(\d+)%/);
-assert(colWidth, "that rule should cap the column with a max-width");
-assert(Number(colWidth[1]) <= 48,
-  `the type column must stay within the artwork's clear band: ${colWidth[1]}% > 48%`);
+assert(colWidth, "that rule should set the measure with a max-width");
+assert(Number(colWidth[1]) >= 70,
+  `nothing competes with the title now, so it should not be squeezed: ${colWidth[1]}%`);
 assert(/margin-inline:\s*auto/.test(titleCol[1]),
   "the column should centre with margin-inline, leaving the vertical spread alone");
 
-// Capping the width means the author line wraps, so it must wrap at a
-// separator. Non-breaking spaces inside each name are what guarantee that.
+// No slide may be carried by a green surface. Green marks a rule or a
+// verdict -- it is an edge and a word, never the panel under them, or the
+// slide reads as "the green one" among twenty blue ones.
+for (const f of fs.readdirSync(path.join(root, "2026-trec-rag-talk")).filter((n) => n.endsWith(".svg"))) {
+  const svg = fs.readFileSync(path.join(root, `2026-trec-rag-talk/${f}`), "utf8");
+  assert(!/fill="var\(--ok-soft\)"/.test(svg),
+    `${f} fills a shape with --ok-soft; green belongs on the stroke and the text`);
+}
+
+// The names stay bound with non-breaking spaces: the line fits on one now,
+// but it must still break at a separator if it ever has to.
 const authorLine = qmd.match(/^author:\s*"([^"]*)"/m);
 assert(authorLine, "the deck should declare its authors");
 for (const name of authorLine[1].split(/\s*[\u00b7\u2014]\s*/)) {

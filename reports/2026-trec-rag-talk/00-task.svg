@@ -51,7 +51,7 @@
   <path class="tk-flow" d="M680 259 H770"/>
 
   <!-- the answer -->
-  <rect x="784" y="34" width="682" height="432" rx="14" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="3.5"/>
+  <rect x="784" y="34" width="682" height="432" rx="14" fill="var(--panel)" stroke="var(--ok)" stroke-width="3.5"/>
   <text class="tk-role" x="812" y="72" style="fill:var(--ok)">WHAT YOU HAND BACK</text>
   <text class="tk-hd"   x="812" y="112">One written answer</text>
 

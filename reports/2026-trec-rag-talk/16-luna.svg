@@ -67,7 +67,7 @@
   <text class="lu-check" x="716" y="348">replacement safety</text>
   <text class="lu-gloss" x="716" y="374">nothing lost by swapping</text>
 
-  <rect x="650" y="402" width="566" height="56" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2.6"/>
+  <rect x="650" y="402" width="566" height="56" rx="10" fill="var(--panel)" stroke="var(--ok)" stroke-width="2.6"/>
   <text class="lu-check" x="674" y="437" style="fill:var(--ok)">All five must pass, or it is dropped.</text>
 
   <text class="lu-note" x="650" y="492">Luna answers; local code does the editing.</text>
