@@ -36,7 +36,6 @@ for (const asset of [
   "2026-trec-rag-talk/00-task.svg",
   "2026-trec-rag-talk/00-architecture.svg",
   "2026-trec-rag-talk/img-request.png",
-  "2026-trec-rag-talk/img-request-forest.png",
 ]) {
   assert(fs.existsSync(path.join(root, asset)), `${asset} should exist`);
 }
@@ -55,22 +54,16 @@ assert(fetched.length === 0,
 // remain are the diagrams, and every one of them is described.
 const figAlts = qmd.match(/fig-alt="/g) || [];
 assert(figAlts.length === 17, `expected 17 fig-alt figures, found ${figAlts.length}`);
-// ...except the forest-palette twin of the request scene, which is a
-// duplicate of a described image and is hidden from screen readers instead.
 const undescribed = (qmd.match(/!\[\]\([^\n]*/g) || [])
   .filter((l) => !/fig-alt=/.test(l) && !/aria-hidden="true"/.test(l));
 assert(undescribed.length === 0,
   `every image needs fig-alt or aria-hidden: ${undescribed.join(" | ").slice(0, 120)}`);
-// The palette-variant scenes are decorative duplicates of a described image,
-// so they are hidden from screen readers rather than described twice. (The
-// role glyphs are aria-hidden too, hence matching on the scene class.)
-// Only the request scene is left: the two writers at desks were cut, because
-// Sol and Luna are models and drawing them as people at desks obscured the
-// stage machine the slide is actually about.
-const variants = (qmd.match(/\{\.scene-forest aria-hidden="true"\}/g) || []).length;
-assert(variants === 1, `expected 1 hidden scene variant, found ${variants}`);
-const primaries = (qmd.match(/\{\.scene-slate fig-alt=/g) || []).length;
-assert(primaries === 1, `expected 1 described scene image, found ${primaries}`);
+// The request scene used to ship a second painted copy for the Forest
+// palette. One palette now, so there is one scene and no class to switch it.
+assert(!/scene-(slate|forest)/.test(qmd),
+  "the palette-variant scene classes went with the second palette");
+assert(!fs.existsSync(path.join(root, "2026-trec-rag-talk/img-request-forest.png")),
+  "the Forest copy of the request scene should not be back");
 assert(!/img-writers/.test(qmd) && !fs.existsSync(path.join(root, "2026-trec-rag-talk/img-writers.png")),
   "the desk illustration was cut; nothing should still point at it");
 assert(!/!\[[^\]]+\]\(/.test(qmd),
@@ -373,8 +366,8 @@ assert(qicons === 18,
 // advisory. The title plate, the section breaks, the progress bar, the nav
 // controls and the links are none of those: they are furniture. Painting
 // them with --ret spent the retrieval accent on chrome AND turned the blue
-// transitions teal under Forest, which is not the blue that was asked for.
-// --deck is structural and the same hue in both palettes.
+// transitions teal under Forest, back when a second palette existed.
+// --deck is structural: furniture, not a step in the pipeline.
 assert(/section\.divider,\s*\n\.reveal \.slides > section\.quarto-title-block \{[^}]*color-mix\(in oklab, var\(--deck\)/.test(theme),
   "the breaks and the title share one plate, mixed from the structural token");
 assert(!/background: #0b1220/.test(theme),
@@ -387,12 +380,10 @@ for (const [name, pattern] of [[".reveal .progress", "\\.reveal \\.progress"],
   assert(!/var\(--(ret|gen|ok|adv)\)/.test(rule[1]),
     `${name} is furniture and must not wear a content accent`);
 }
-// The structural token must be one hue across both palettes, or the "blue"
-// transitions go teal again the moment Forest is on.
+// The structural token is blue in both brightnesses.
 const deck = [...theme.matchAll(/--deck:\s*(#[0-9a-f]{6})/gi)].map((m) => m[1].toLowerCase());
-assert(deck.length === 4, `every palette needs --deck, found ${deck.length}`);
-assert(new Set(deck).size === 2,
-  `--deck should be one light value and one dark value, found ${new Set(deck).size}`);
+assert(deck.length === 2 && new Set(deck).size === 2,
+  `--deck needs one light and one dark value, found ${deck.length}`);
 assert(/nth-child\(3n \+ 1\)/.test(theme),
   "the subnarrative cards should cycle through accents");
 assert(/\.nargrid \.qcard:nth-child\(3n \+ 1\)/.test(theme),
@@ -425,7 +416,7 @@ const contrast = (a, b) => {
   return (x + 0.05) / (y + 0.05);
 };
 const sheet = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
-for (const name of ["slate-light", "slate-dark", "forest-light", "forest-dark"]) {
+for (const name of ["deck-light", "deck-dark"]) {
   const body = sheet.match(new RegExp(`@mixin ${name} \\{([\\s\\S]*?)\\n\\}`));
   assert(body, `palette ${name} should exist`);
   const tok = Object.fromEntries([...body[1].matchAll(/--([a-z-]+):\s*(#[0-9a-f]{6})/gi)]
@@ -741,23 +732,27 @@ for (const fig of ["02-one-lane", "03a-single-pass", "03b-multi-stage"]) {
     `${fig}.svg should keep its own :root so it renders standalone`);
 }
 
-// Two palettes, and they must actually differ in the dominant accent.
+// One palette, two brightnesses. The Slate/Forest toggle doubled every
+// colour definition and every rule that referenced one, and the deck was not
+// improved by being green. Nothing should reintroduce a second palette.
 const scss = fs.readFileSync(path.join(root, "2026-trec-rag-talk/theme.scss"), "utf8");
-for (const mix of ["slate-light", "slate-dark", "forest-light", "forest-dark"]) {
+for (const mix of ["deck-light", "deck-dark"]) {
   assert(scss.includes(`@mixin ${mix}`), `theme should define the ${mix} palette`);
 }
+assert(!/data-palette/.test(scss) && !/data-palette/.test(toggle),
+  "there is one palette; no data-palette plumbing should remain");
+assert(!/@mixin (slate|forest)-/.test(scss),
+  "the Slate/Forest mixins are gone; one palette defines light and dark");
 const retOf = (mix) => {
   const body = scss.split(`@mixin ${mix} {`)[1].split("}")[0];
   return (body.match(/--ret:\s*(#[0-9a-f]{6})/i) || [])[1];
 };
-assert(retOf("slate-dark") !== retOf("forest-dark"),
-  "the palettes must differ in --ret, the accent used most in the figures");
-assert(/:root\[data-palette="forest"\]/.test(scss),
-  "Forest must be selectable by attribute");
+assert(retOf("deck-light") !== retOf("deck-dark"),
+  "light and dark need their own --ret, the accent used most in the figures");
 
-// The control itself.
-assert(/id="palette-toggle"/.test(html), "the palette control should be in the deck");
-assert(/trec-talk-palette/.test(html), "the chosen palette should be remembered");
+// The control itself. There is one button now, not two.
+assert(!/id="palette-toggle"/.test(html) && !/trec-talk-palette/.test(html),
+  "the palette control went with the second palette");
 
 // ---- pinned light/dark -----------------------------------------------------
 // The deck is often shown on a machine whose system setting is the opposite of
@@ -776,8 +771,13 @@ const mediaAt = scss.indexOf("@media (prefers-color-scheme: dark)");
 const pinnedAt = scss.indexOf(':root[data-theme="dark"] {');
 assert(mediaAt > 0 && pinnedAt > mediaAt,
   "forced-dark rules must be written after the dark media query to win on ties");
-assert(/:root\[data-theme="dark"\]\[data-palette="forest"\]/.test(scss),
-  "each palette needs its own forced-dark rule");
+// One palette, so the dark values are included exactly twice: once behind
+// the media query, once for a pinned dark. A second palette used to need two
+// more, written after these to win the tie on equal specificity.
+assert((scss.match(/@include deck-dark;/g) || []).length === 2,
+  "deck-dark belongs to the media query and the pinned rule, and nowhere else");
+assert((scss.match(/@include deck-light;/g) || []).length === 1,
+  "deck-light is the base and is included once");
 assert(/:root\[data-theme="dark"\]\s*\{\s*color-scheme: dark/.test(scss),
   "color-scheme should follow a pinned theme, not the system");
 

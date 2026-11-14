@@ -35,7 +35,7 @@ $code-block-font-size: 0.6em !default;
 // Figures are inlined by inline-svg.lua with their own :root blocks stripped,
 // so these variables repaint the diagrams as well as the slides.
 
-@mixin slate-light {
+@mixin deck-light {
   // Structural, not semantic. The title plate, the section breaks, the
   // progress bar and the menu icon are not about retrieval, and painting
   // them with --ret both spent the retrieval accent on furniture and turned
@@ -71,7 +71,7 @@ $code-block-font-size: 0.6em !default;
   --s5-soft: #d6f5e3;
 }
 
-@mixin slate-dark {
+@mixin deck-dark {
   --deck: #7ab3f5;
 
   --bg: #101318;
@@ -102,101 +102,30 @@ $code-block-font-size: 0.6em !default;
   --s5-soft: #173f29;
 }
 
-@mixin forest-light {
-  --deck: #1f5fa8;
-
-  --bg: #f6f8f7;
-  --panel: #ffffff;
-  --ink: #13231c;
-  --muted: #4b5d54;
-  --line: #5e6d66;
-  --hairline: rgb(94 109 102 / 0.28);
-  --ret: #08766c;
-  --ret-soft: #d9f1ed;
-  --gen: #525fbd;
-  --gen-soft: #e6e9ff;
-  --ok: #277a45;
-  --ok-soft: #ddf2e3;
-  --adv: #91610d;
-  --adv-soft: #faecc7;
-
-  // Five stage hues, so a pipeline figure can tell its steps apart.
-  --s1: #0d776f;
-  --s1-soft: #d6f5f3;
-  --s2: #2f4ae8;
-  --s2-soft: #d6daf5;
-  --s3: #a015c0;
-  --s3-soft: #f0d6f5;
-  --s4: #b53214;
-  --s4-soft: #f5dbd6;
-  --s5: #0e7a17;
-  --s5-soft: #d6f5d8;
-}
-
-@mixin forest-dark {
-  --deck: #7ab3f5;
-
-  --bg: #0d1411;
-  --panel: #17211c;
-  --ink: #f0f6f2;
-  --muted: #bac7bf;
-  --line: #9cada3;
-  --hairline: rgb(156 173 163 / 0.34);
-  --ret: #69d8ca;
-  --ret-soft: #183d38;
-  --gen: #aab4ff;
-  --gen-soft: #242b57;
-  --ok: #82dda0;
-  --ok-soft: #173c25;
-  --adv: #f0c46f;
-  --adv-soft: #433616;
-
-  // Five stage hues, so a pipeline figure can tell its steps apart.
-  --s1: #20c5b8;
-  --s1-soft: #173f3c;
-  --s2: #6f81e8;
-  --s2-soft: #171d3f;
-  --s3: #cc5fe5;
-  --s3-soft: #38173f;
-  --s4: #e36e53;
-  --s4-soft: #3f1f17;
-  --s5: #20c52e;
-  --s5-soft: #173f1b;
-}
-
 // Light is the base. Dark arrives two ways: because the system asks for it,
 // or because the reader pinned it with the control. Pinning has to work on a
 // machine whose system says the opposite — a hall laptop in light mode, a
 // presenter who wants dark at 9am — so the media query yields to a pin.
+//
+// There used to be a second palette, Forest, on a toggle beside this one. It
+// doubled every definition here and every rule that referenced one, and the
+// deck is not improved by being green. One palette, two brightnesses.
 :root {
   color-scheme: light dark;
-  @include slate-light;
-}
-
-:root[data-palette="forest"] {
-  @include forest-light;
+  @include deck-light;
 }
 
 // Dark by system preference, unless the reader pinned light.
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    @include slate-dark;
-  }
-
-  // Same specificity as the rule above, written after it, so Forest wins.
-  :root:not([data-theme="light"])[data-palette="forest"] {
-    @include forest-dark;
+    @include deck-dark;
   }
 }
 
 // Dark because the reader pinned it, whatever the system says. Written after
 // the media query so it also beats the light defaults above.
 :root[data-theme="dark"] {
-  @include slate-dark;
-}
-
-:root[data-theme="dark"][data-palette="forest"] {
-  @include forest-dark;
+  @include deck-dark;
 }
 
 // Keep scrollbars, form controls and the browser's own canvas in step with a
@@ -1082,16 +1011,11 @@ body.reveal-viewport,
   color: var(--ink);
 }
 
-#deck-controls .swatch,
 #deck-controls .dot {
   width: 0.9em;
   height: 0.9em;
   border-radius: 50%;
   border: 1px solid var(--hairline);
-}
-
-#palette-toggle .swatch {
-  background: linear-gradient(135deg, var(--ret) 0 50%, var(--gen) 50% 100%);
 }
 
 // The dot says which of the three states is on without needing the word.
@@ -1113,22 +1037,6 @@ body.reveal-viewport,
 
 @media print {
   #deck-controls { display: none; }
-}
-
-// The illustrations are painted, so they cannot read CSS variables the way the
-// diagrams do. Each ships in both palettes and the matching one is shown.
-// Reveal's `.reveal section img { display: block }` outranks a bare class, so
-// these selectors carry its weight.
-.reveal section img.scene-forest {
-  display: none;
-}
-
-:root[data-palette="forest"] .reveal section img.scene-slate {
-  display: none;
-}
-
-:root[data-palette="forest"] .reveal section img.scene-forest {
-  display: block;
 }
 
 // The query numbers read as a chip rather than a loose digit, so eight open

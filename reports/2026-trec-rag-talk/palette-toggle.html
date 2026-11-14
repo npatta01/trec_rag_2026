@@ -3,27 +3,21 @@
   <button id="theme-toggle" type="button" data-state="auto">
     <span class="dot" aria-hidden="true"></span><span id="theme-name">Auto</span>
   </button>
-  <button id="palette-toggle" type="button">
-    <span class="swatch" aria-hidden="true"></span><span id="palette-name">Slate</span>
-  </button>
 </div>
 <script>
 (function () {
-  // Two independent choices, both remembered: light/dark, and which palette.
-  // "Auto" follows the system; Light and Dark pin it, because the machine a
-  // talk is given on is often not the one it was written on.
+  // One choice, remembered: light, dark, or follow the system. There used to
+  // be a second button here for a Slate/Forest palette; it doubled every
+  // colour definition in the theme and the deck was not improved by being
+  // green. "Auto" follows the system; Light and Dark pin it, because the
+  // machine a talk is given on is often not the one it was written on.
   var THEMES = ["auto", "dark", "light"];
   var THEME_LABEL = { auto: "Auto", dark: "Dark", light: "Light" };
-  var PALETTES = ["slate", "forest"];
-  var PALETTE_LABEL = { slate: "Slate", forest: "Forest" };
   var THEME_KEY = "trec-talk-theme";
-  var PALETTE_KEY = "trec-talk-palette";
 
   var root = document.documentElement;
   var themeButton = document.getElementById("theme-toggle");
   var themeName = document.getElementById("theme-name");
-  var paletteButton = document.getElementById("palette-toggle");
-  var paletteName = document.getElementById("palette-name");
 
   function save(key, value) {
     try { localStorage.setItem(key, value); } catch (err) { /* private window */ }
@@ -50,16 +44,7 @@
     save(THEME_KEY, value);
   }
 
-  function applyPalette(value) {
-    root.setAttribute("data-palette", value);
-    paletteName.textContent = PALETTE_LABEL[value];
-    paletteButton.setAttribute("aria-label", "Colour palette: " + PALETTE_LABEL[value] + ". Click to change.");
-    save(PALETTE_KEY, value);
-  }
-
-  var theme = load(THEME_KEY, THEMES);
-  applyTheme(theme);
-  applyPalette(load(PALETTE_KEY, PALETTES));
+  applyTheme(load(THEME_KEY, THEMES));
 
   function cycle(list, current) {
     return list[(list.indexOf(current) + 1) % list.length];
@@ -69,19 +54,14 @@
     applyTheme(cycle(THEMES, themeButton.getAttribute("data-state")));
   });
 
-  paletteButton.addEventListener("click", function () {
-    applyPalette(cycle(PALETTES, root.getAttribute("data-palette")));
-  });
-
-  // "d" for brightness, "p" for palette — but not over Reveal's own overlays,
-  // and not while something is being typed into.
+  // "d" for brightness — but not over Reveal's own overlays, and not while
+  // something is being typed into.
   document.addEventListener("keydown", function (event) {
     if (event.metaKey || event.ctrlKey || event.altKey) { return; }
     var target = event.target;
     if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) { return; }
     if (document.querySelector(".reveal.overview, .slide-menu-wrapper.active")) { return; }
     if (event.key === "d") { themeButton.click(); }
-    if (event.key === "p") { paletteButton.click(); }
   });
 })();
 </script>

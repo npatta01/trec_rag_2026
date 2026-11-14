@@ -64,8 +64,7 @@ Six weeks of housing for a family of three — without booking
 
 ::: {.grid-2}
 ::: {.scene}
-![](2026-trec-rag-talk/img-request.png){.scene-slate fig-alt="Two adults and a small child stand on a pavement with two wheeled suitcases at night, looking up at an apartment building wrapped in construction scaffolding and safety netting — the apartment being repaired while they need somewhere else to stay. A street lamp and a few windows glow warm."}
-![](2026-trec-rag-talk/img-request-forest.png){.scene-forest aria-hidden="true"}
+![](2026-trec-rag-talk/img-request.png){fig-alt="Two adults and a small child stand on a pavement with two wheeled suitcases at night, looking up at an apartment building wrapped in construction scaffolding and safety netting — the apartment being repaired while they need somewhere else to stay. A street lamp and a few windows glow warm."}
 :::
 
 ::: {.redact}
