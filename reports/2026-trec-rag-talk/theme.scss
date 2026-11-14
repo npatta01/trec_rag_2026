@@ -291,7 +291,7 @@ body.reveal-viewport,
 
 .eyebrow {
   color: var(--ret);
-  font-size: 0.50em;
+  font-size: 0.55em;
   font-weight: 760;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -300,7 +300,7 @@ body.reveal-viewport,
 
 .trace-step {
   color: var(--adv);
-  font-size: 0.50em;
+  font-size: 0.55em;
   font-weight: 760;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -590,6 +590,8 @@ body.reveal-viewport,
 // Only the forms that genuinely read better when larger. A bordered text
 // block or a table stretched to fill just draws a long empty rule.
 .reveal .slides > section > .diagram,
+.reveal .slides > section > .nargrid,
+.reveal .slides > section > .reflist,
 .reveal .slides > section > .roadmap,
 .reveal .slides > section > .secshot,
 .reveal .slides > section > .adds,
@@ -607,12 +609,29 @@ body.reveal-viewport,
   align-content: space-evenly;
 }
 
-// Grids keep their cards at natural height but sit centred in the free space,
-// rather than stretching a two-line card down the whole slide.
+// Grids used to keep their cards at natural height and sit centred, which
+// left a dead band under the title on every card slide. The rows claim the
+// height; each card centres its own content so a two-line card still reads as
+// deliberate rather than stretched.
 .reveal .slides > section > .grid-2,
 .reveal .slides > section > .grid-3,
-.reveal .slides > section > .grid-2-1 {
-  align-content: center;
+.reveal .slides > section > .grid-2-1,
+.reveal .slides > section > .nargrid {
+  align-content: stretch;
+  grid-auto-rows: 1fr;
+  // the base grids set align-items:start, which pins each card to the top of
+  // a row that is now full height — the cards have to stretch with it
+  align-items: stretch;
+}
+
+.reveal .slides > section > .grid-2 > .card,
+.reveal .slides > section > .grid-3 > .card,
+.reveal .slides > section > .grid-2-1 > .card {
+  display: flex;
+  flex-direction: column;
+  // top-aligned, not centred: two cards of different content length have to
+  // line up with each other, and a card with room under it reads as a card
+  justify-content: flex-start;
 }
 
 // Footer: the caption sits on the bottom edge, which is what makes the body
@@ -785,7 +804,7 @@ body.reveal-viewport,
   // they take the deck's own ink.
   color: var(--ink);
   cursor: pointer;
-  font-size: 0.55em;
+  font-size: 0.62em;
   font-weight: 700;
   line-height: 1.24;
   list-style: none;
@@ -822,7 +841,7 @@ body.reveal-viewport,
 
 .qgrid code {
   display: block;
-  font-size: 0.42em;
+  font-size: 0.52em;
   margin: 0.16em 0 0;
   padding: 0.18em 0.4em;
   line-height: 1.26;
@@ -847,6 +866,7 @@ body.reveal-viewport,
 }
 
 .nargrid .qcard {
+  justify-content: center;
   counter-increment: q;
   display: flex;
   gap: 0.55em;
@@ -1586,4 +1606,27 @@ body.reveal-viewport,
 .reveal .slides > section.divider > .roadmap .leg {
   font-size: 1.05em;
   padding: 0.5em 0.9em;
+}
+
+// ------------------------------------------------- the plain section break
+// The appendix break has no art, so its title sat at the top with the whole
+// frame empty beneath. Centre it: a pause should look held, not unfinished.
+.reveal .slides > section.divider:not(.divider-img) > h2 {
+  margin: auto 0 0;
+}
+
+.reveal .slides > section.divider:not(.divider-img) > .cap {
+  margin-top: auto;
+}
+
+// A dark section break on a light page is deliberate — a chapter card — but
+// the deck's hairline border around it reads as a leftover rather than a
+// frame. In light mode the plate sits on a soft shadow instead.
+:root[data-theme="light"] .reveal .slides > section.divider-img,
+:root[data-theme="light"] .reveal .slides > section.quarto-title-block {
+  box-shadow: 0 2px 18px rgb(16 24 40 / 0.18);
+}
+
+:root[data-theme="light"] .divider-img > .secshot img {
+  border: 0;
 }

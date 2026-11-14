@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 520" role="img" aria-labelledby="lu-title lu-desc">
   <title id="lu-title">The two places Luna is used: it writes the plan, and it screens each edit</title>
-  <desc id="lu-desc">Two columns. On the left, step one: Luna writes the plan, which is a list of three to eight obligations. One of them is shown in plain words — cover legality and reliability, in about 140 words, using evidence c003, c011 and c014 — and an arrow runs down from it to the sentence Sol actually wrote from it in the submitted answer: for any platform listing, verify whether the host is registered with the city or qualifies for the applicable Class B status before paying. On the right, step two: Luna screens each proposed edit against five checks, each answered true or false — support, meaning the evidence actually says it; atomicity, one fact and not three; materiality, it changes the answer; redundancy, it is not already said; and replacement safety, nothing is lost by swapping. All five must pass or local code drops the edit. A note says Luna never writes a sentence of the answer.</desc>
+  <desc id="lu-desc">Two columns. On the left, before Sol writes, Luna plans: a list of obligations, three of them shown — legality and reliability at 140 words using evidence c003, c011 and c014; what it really costs at 160 words; space for a child and work at 120 words — with a note that there are three to eight per answer totalling 850 to 950 words, and that the word targets shown are illustrative. An arrow runs down to the sentence Sol actually wrote from the first one in the submitted answer: for any platform listing, verify whether the host is registered with the city. On the right, step two: Luna screens each proposed edit against five checks, each answered true or false — support, meaning the evidence actually says it; atomicity, one fact and not three; materiality, it changes the answer; redundancy, it is not already said; and replacement safety, nothing is lost by swapping. All five must pass or local code drops the edit. A note says Luna never writes a sentence of the answer.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25}}
@@ -10,6 +10,8 @@
     .lu-quote{font-size:25px}
     .lu-check{font-size:25px;font-weight:720}
     .lu-gloss{font-size:22px;fill:var(--muted)}
+    .lu-row{font-size:25px;font-weight:720}
+    .lu-meta{font-size:21px;fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .lu-note{font-size:22px;fill:var(--muted)}
     .lu-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#lua)}
     .lu-ico{fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
@@ -23,22 +25,24 @@
   <!-- 1. the plan, and what Sol made of it -->
   <text class="lu-kick" x="24" y="36" style="fill:var(--gen)">BEFORE SOL WRITES · LUNA PLANS</text>
 
-  <rect x="24" y="56" width="580" height="150" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
-  <text class="lu-body" x="48" y="96">cover <tspan font-weight="800">legality and reliability</tspan></text>
-  <text class="lu-note" x="452" y="36">3 to 8 of these</text>
-  <text class="lu-body" x="48" y="134">in <tspan font-weight="800">140 words</tspan> of the 850–950 total</text>
-  <text class="lu-body" x="48" y="172">using evidence <tspan font-weight="800">c003 · c011 · c014</tspan></text>
+  <rect x="24" y="56" width="580" height="200" rx="12" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3"/>
+  <text class="lu-row"  x="48" y="92">legality and reliability</text>
+  <text class="lu-meta" x="48" y="118">140 words · c003 c011 c014</text>
+  <text class="lu-row"  x="48" y="158">what it really costs</text>
+  <text class="lu-meta" x="48" y="184">160 words · c021 c034</text>
+  <text class="lu-row"  x="48" y="224">space for a child and work</text>
+  <text class="lu-meta" x="48" y="250">120 words · c008 c015</text>
 
-  <path class="lu-flow" d="M314 206 V244"/>
-  <text class="lu-kick" x="24" y="278" style="fill:var(--ret)">SOL WRITES FROM IT</text>
+  <text class="lu-note" x="24" y="288">3 to 8 per answer · 850–950 words total</text>
 
-  <rect x="24" y="296" width="580" height="162" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
-  <text class="lu-quote" x="48" y="336">“For any platform listing, verify</text>
-  <text class="lu-quote" x="48" y="372">whether the host is registered with</text>
-  <text class="lu-quote" x="48" y="408">the city or qualifies for the</text>
-  <text class="lu-quote" x="48" y="444">applicable Class B status.”</text>
+  <path class="lu-flow" d="M314 302 V334"/>
+  <text class="lu-kick" x="24" y="366" style="fill:var(--ret)">SOL WRITES FROM THE FIRST ONE</text>
 
-  <text class="lu-note" x="24" y="492">Every obligation gets its own word target. Luna writes no prose.</text>
+  <rect x="24" y="382" width="580" height="86" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="lu-quote" x="48" y="416">“For any platform listing, verify whether</text>
+  <text class="lu-quote" x="48" y="450">the host is registered with the city.”</text>
+
+  <text class="lu-note" x="24" y="500">Luna writes no prose. Word targets are illustrative.</text>
 
   <!-- 2. the screen -->
   <text class="lu-kick" x="650" y="36" style="fill:var(--gen)">AFTER SOL WRITES · LUNA SCREENS EACH EDIT</text>

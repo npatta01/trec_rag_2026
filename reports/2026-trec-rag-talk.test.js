@@ -533,11 +533,16 @@ assert(!/Do not answer the topic/.test(qmd),
 // The slide is one picture: one obligation in plain words, an arrow, and the
 // sentence Sol actually wrote from it in the submitted answer.
 const luna = fs.readFileSync(path.join(root, "2026-trec-rag-talk/16-luna.svg"), "utf8");
-for (const fact of ["3 to 8 of these", "legality and reliability", "140 words",
-                    "c003 · c011 · c014", "SOL WRITES FROM IT",
-                    "registered with", "Class B status"]) {
+// "can u show multiple" - one obligation did not read as a list, so three are
+// shown. Word targets are illustrative and the figure says so.
+for (const fact of ["legality and reliability", "what it really costs",
+                    "140 words", "c003 c011 c014", "850–950 words",
+                    "SOL WRITES FROM THE FIRST ONE", "registered with",
+                    "illustrative"]) {
   assert(luna.includes(fact), `the Luna figure should show: ${fact}`);
 }
+assert((luna.match(/class="lu-row"/g) || []).length === 3,
+  "the plan must show more than one obligation");
 // Five named checks, each with its own gloss - "what are the five" was the
 // question the chip row never answered.
 for (const gate of ["support", "atomicity", "materiality", "redundancy",
