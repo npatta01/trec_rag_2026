@@ -1,0 +1,105 @@
+<template>
+  <style>
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: Inter, sans-serif;
+      color: #07394a;
+    }
+    #ti-eyebrow {
+      position: absolute;
+      left: 150px;
+      top: 232px;
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: #0d6f84;
+    }
+    /* The title card's hero fills the frame's width rather than floating in
+       the middle of it, and the rule under it is the masthead's, not a
+       decorative border. */
+    #ti-name {
+      position: absolute;
+      left: 150px;
+      top: 278px;
+      font-size: 184px;
+      font-weight: 900;
+      letter-spacing: -0.035em;
+      line-height: 0.96;
+    }
+    #ti-rule {
+      position: absolute;
+      left: 150px;
+      top: 494px;
+      width: 1620px;
+      height: 5px;
+      border-radius: 3px;
+      background: #0d6f84;
+      transform-origin: left center;
+    }
+    #ti-task {
+      position: absolute;
+      left: 150px;
+      top: 522px;
+      font-size: 40px;
+      font-weight: 700;
+    }
+    .ti-what {
+      position: absolute;
+      left: 150px;
+      width: 1480px;
+      font-size: 38px;
+      font-weight: 400;
+      line-height: 1.45;
+      color: #3d5c66;
+    }
+    #ti-w1 { top: 606px; }
+    #ti-w2 { top: 696px; }
+    .ti-what b { font-weight: 700; color: #07394a; }
+    #ti-team {
+      position: absolute;
+      left: 150px;
+      top: 876px;
+      font-size: 34px;
+      font-weight: 700;
+    }
+    #ti-team span {
+      display: block;
+      margin-top: 8px;
+      font-size: 30px;
+      font-weight: 400;
+      color: #3d5c66;
+    }
+  </style>
+
+  <div id="root" data-composition-id="title" data-width="1920" data-height="1080">
+    <!-- Frame 0 is the thumbnail, so the name and the track are simply there. -->
+    <div id="ti-eyebrow" class="clip" data-start="0" data-duration="8">Text REtrieval Conference · NIST</div>
+    <h1 id="ti-name" class="clip" data-start="0" data-duration="8">TREC RAG 2026</h1>
+    <div id="ti-rule" class="clip" data-start="0" data-duration="8"></div>
+    <div id="ti-task" class="clip" data-start="0" data-duration="8">Retrieval-Augmented Generation track</div>
+
+    <div id="ti-w1" class="ti-what clip" data-start="1.3" data-duration="6.7">An open evaluation: every team answers the same <b>119</b> information needs.</div>
+    <div id="ti-w2" class="ti-what clip" data-start="2.9" data-duration="5.1">One fixed corpus, <b>ClimbMix</b>. At most <b>1,024</b> words. A source named for every statement.</div>
+
+    <div id="ti-team" class="clip" data-hold data-start="4.4" data-duration="3.6">NP Labs<span>Nidhin Pattaniyil · Tanwir Zaman · Semih Yagli</span></div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.set("#ti-eyebrow", { opacity: 1, y: 0 }, 0);
+    tl.set("#ti-name", { opacity: 1, y: 0 }, 0);
+    tl.set("#ti-task", { opacity: 1, y: 0 }, 0);
+    // the masthead rule draws itself under the name, the one move at the top
+    tl.fromTo("#ti-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.9, ease: "power3.out" }, 0.3);
+
+    tl.fromTo("#ti-w1", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 1.3);
+    tl.fromTo("#ti-w2", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 2.9);
+    tl.fromTo("#ti-team", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.47, ease: "power2.out" }, 4.4);
+
+    window.__timelines = window.__timelines || {};
+    window.__timelines["title"] = tl;
+  </script>
+</template>

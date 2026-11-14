@@ -9,7 +9,7 @@ GOAL:    the viewer can say, in their own words, how one request becomes a
          cited answer — and that every sentence points at a passage that was
          actually retrieved.
 OUTPUT:  HyperFrames, 1920 x 1080, 30 fps
-TIME:    79 s x 30 = 2370 frames. The stages are the clock; the bed follows them.
+TIME:    87 s x 30 = 2610 frames. The stages are the clock; the bed follows them.
 ```
 
 ## LOOK
@@ -67,7 +67,8 @@ later. Nothing drifts after it lands.
 
 | # | Frames | Hero move | What is read | Hands off by |
 | - | ------ | --------- | ------------ | ------------ |
-| 1 | 0–210 | the request sheet settles, its words already there | the real narrative, then "One request. 119 of them." | the sheet's text splitting along its seams |
+| 0 | 0–240 | the masthead rule draws under the track's name | TREC RAG 2026, what the track asks, and the team | the request arriving on the same paper |
+| 1 | 240–510 | the request sheet settles, its words already there | the real narrative, then "One request. 119 of them." | the sheet's text splitting along its seams |
 | 2 | 210–480 | the sentence splits into 8 angle strips, staggered | "It asks eight separate things" · 1–8 subnarratives | each strip growing a query block |
 | 3 | 480–720 | query blocks extrude from each strip | "Each angle becomes 1–3 BM25 queries" · at most 25 searches | the queries firing into the field |
 | 4 | 720–960 | the document field floods in under them | "Up to 1,000 documents per query" | the field cropping to one query's share |
@@ -79,11 +80,12 @@ later. Nothing drifts after it lands.
 
 ## SOUND
 
-One retrieved catalog bed, entered at its first real onset (16.158 s into the
-track, skipping a quiet pad) at volume 0.8, fading in over 1.4 s and out over
-the last 4.5 s under the closing line. Its peak lands at 50 s, on the boundary
-between the claims and the writing, and it tails from 72.8 s so the last line
-sits in the decay. No effects: this film is cards arriving on paper, and three
+One retrieved catalog bed of 98 s under an 87 s film, so it enters at 10.5 s:
+the track's quiet pad plays under the title card and its first onset lands at
+5.7 s, as the card gives way to the request. Volume 0.8, fading in over 1.4 s
+and out over the last 4.5 s. Its peak lands at 56 s, on the boundary between
+the claims and the writing, and it tails from 78.5 s so the closing line sits
+in the decay. No effects: this film is cards arriving on paper, and three
 borrowed hits would read as a template rather than as causes on screen.
 
 ## BANNED

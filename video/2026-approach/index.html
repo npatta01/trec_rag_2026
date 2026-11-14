@@ -62,57 +62,62 @@
       id="root"
       data-composition-id="main"
       data-start="0"
-      data-duration="79"
+      data-duration="87"
       data-width="1920"
       data-height="1080"
     >
       <div id="ground"></div>
 
+      <div id="title" data-composition-id="title" data-composition-src="compositions/title.html"
+           data-start="0" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
       <div id="request" data-composition-id="request" data-composition-src="compositions/request.html"
-           data-start="0" data-duration="9" data-track-index="1" data-track-kind="graphics"
+           data-start="8" data-duration="9" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
       <div id="angles" data-composition-id="angles" data-composition-src="compositions/angles.html"
-           data-start="9" data-duration="9" data-track-index="1" data-track-kind="graphics"
+           data-start="17" data-duration="9" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
       <div id="queries" data-composition-id="queries" data-composition-src="compositions/queries.html"
-           data-start="18" data-duration="8" data-track-index="1" data-track-kind="graphics"
-           data-width="1920" data-height="1080" style="z-index: 10"></div>
-
-      <div id="search" data-composition-id="search" data-composition-src="compositions/search.html"
            data-start="26" data-duration="8" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
-      <div id="rerank" data-composition-id="rerank" data-composition-src="compositions/rerank.html"
+      <div id="search" data-composition-id="search" data-composition-src="compositions/search.html"
            data-start="34" data-duration="8" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
+      <div id="rerank" data-composition-id="rerank" data-composition-src="compositions/rerank.html"
+           data-start="42" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
       <div id="select" data-composition-id="select" data-composition-src="compositions/select.html"
-           data-start="42" data-duration="7" data-track-index="1" data-track-kind="graphics"
+           data-start="50" data-duration="7" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
       <div id="nuggets" data-composition-id="nuggets" data-composition-src="compositions/nuggets.html"
-           data-start="49" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-start="57" data-duration="8" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
       <div id="generation" data-composition-id="generation" data-composition-src="compositions/generation.html"
-           data-start="57" data-duration="12" data-track-index="1" data-track-kind="graphics"
+           data-start="65" data-duration="12" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
       <div id="answer" data-composition-id="answer" data-composition-src="compositions/answer.html"
-           data-start="69" data-duration="10" data-track-index="1" data-track-kind="graphics"
+           data-start="77" data-duration="10" data-track-index="1" data-track-kind="graphics"
            data-width="1920" data-height="1080" style="z-index: 10"></div>
 
       <div id="grain"></div>
 
-      <!-- The catalog track opens on 16 s of quiet pad; the film enters at its
-           first real onset instead, and the last four seconds fade under the
-           closing line. The raw mp3 is not committed: the query that fetched it
-           is in audio_request.json, and the render carries the licensed mix. -->
+      <!-- 98 s of track under an 87 s film, so it starts at 10.5 s: the
+           track's quiet pad plays under the title card and its first onset
+           lands as the request arrives. The last four and a half seconds fade
+           under the closing line. The raw mp3 is not committed: the query that
+           fetched it is in audio_request.json, and the render carries the mix. -->
       <audio id="bed" src="assets/bgm/track.mp3"
-             data-start="0" data-duration="79"
-             data-media-start="16.158"
+             data-start="0" data-duration="87"
+             data-media-start="10.5"
              data-volume="0.8" data-fade-in="1.4" data-fade-out="4.5"></audio>
     </div>
     <script>
