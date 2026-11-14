@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 548" role="img" aria-labelledby="ms-title ms-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 604" role="img" aria-labelledby="ms-title ms-desc">
   <title id="ms-title">Multi-stage: the work changes hands seven times</title>
   <desc id="ms-desc">A three-lane strip fed by the same sealed evidence handoff. Time runs left to right and the lane says who did it: Luna marked with a crescent moon, Sol marked with a sun, and local code marked with angle brackets and a dashed outline. The path zigzags between the lanes seven times. One, Luna plans. Two, Sol drafts. Three, Luna audits. Four, local code merges. Five, Sol proposes. Six, Luna screens. Seven, local code applies. A band at the foot gives the bounds: Luna plans 3 to 8 obligations, audits each group returning at most 6 cards per group, Sol proposes at most 3 edits, and all five of Luna's checks must pass or local code applies only what passed. The result is 119 answers from one pass through the stages, not a repeating loop, and if revision fails the draft that already passed validation stands. Luna is openai/gpt-5.6-luna and Sol is openai/gpt-5.6-sol.</desc>
   <style>
@@ -80,9 +80,11 @@
   <text class="ms-step" x="1286" y="338" style="fill:var(--muted)">7</text>
   <text class="ms-step" x="797" y="338" style="fill:var(--muted)">4</text>
 
-  <rect x="220" y="406" width="1150" height="68" rx="10" fill="var(--panel)" stroke="var(--ok)" stroke-width="2.6"/>
-  <text class="ms-foot" x="244" y="434">3–8 obligations · ≤6 cards per group · at most 3 edits · all five must pass</text>
-  <text class="ms-foot" x="244" y="462">code applies only what passed · 119 answers · one pass, not a repeating loop</text>
+  <rect x="220" y="406" width="1150" height="124" rx="10" fill="var(--panel)" stroke="var(--ok)" stroke-width="2.6"/>
+  <text class="ms-foot" x="244" y="434">3–8 obligations · ≤6 cards per group</text>
+  <text class="ms-foot" x="244" y="462">at most 3 edits · all five must pass</text>
+  <text class="ms-foot" x="244" y="490">code applies only what passed · 119 answers</text>
+  <text class="ms-foot" x="244" y="518">one pass, not a repeating loop</text>
 
-  <text class="ms-prov" x="24" y="528">openai/gpt-5.6-luna · openai/gpt-5.6-sol</text>
+  <text class="ms-prov" x="24" y="584">openai/gpt-5.6-luna · openai/gpt-5.6-sol</text>
 </svg>

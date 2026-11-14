@@ -1,10 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 520" role="img" aria-labelledby="co-title co-desc">
   <title id="co-title">Cost per narrative, in model calls: what both runs share, and what only one of them pays</title>
-  <desc id="co-desc">Three figures, read left to right. First, shared by both runs: retrieval costs 4 to 9 model calls per narrative — one planner call plus one nuggetizer call for each of its 3 to 8 subnarratives. Then the part that differs, drawn as two bars on the same scale: single-pass writing costs 1 call per narrative, multi-stage writing costs 7 to 12. A band at the foot states the totals across all 119 narratives: 810 shared calls, then 121 against 1,167, about 9.6 times as many.</desc>
+  <desc id="co-desc">Three figures, read left to right. First, shared by both runs: retrieval costs 4 to 9 model calls per narrative — one planner call plus one nuggetizer call for each of its 3 to 8 subnarratives. Then the part that differs, drawn as two bars on the same scale: single-pass writing costs 1 call per narrative, multi-stage writing costs 7 to 12. Both figures are writing calls per narrative. A band at the foot states the totals across all 119 narratives: 810 shared calls, then 121 against 1,167, about 9.6 times as many.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25}}
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .co-unit{font-size:25px;fill:var(--muted)}
     .co-kick{font-size:24px;font-weight:800;letter-spacing:.05em}
     .co-huge{font-size:56px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .co-name{font-size:28px;font-weight:760}
@@ -26,14 +27,15 @@
   <!-- only one of them pays -->
   <rect x="480" y="64" width="896" height="300" rx="14" fill="var(--gen-soft)" stroke="var(--gen)" stroke-width="3.5"/>
   <text class="co-kick" x="508" y="110" style="fill:var(--gen)">ONLY THE WRITING DIFFERS</text>
+  <text class="co-unit" x="508" y="140">writing calls per narrative</text>
 
-  <text class="co-name" x="508" y="170">Single-pass</text>
-  <rect x="508" y="196" width="60" height="34" rx="6" fill="var(--ret)"/>
-  <text class="co-huge" x="600" y="233" style="fill:var(--ret)">1</text>
+  <text class="co-name" x="508" y="196">Single-pass</text>
+  <rect x="508" y="222" width="60" height="34" rx="6" fill="var(--ret)"/>
+  <text class="co-huge" x="600" y="259" style="fill:var(--ret)">1</text>
 
-  <text class="co-name" x="508" y="278">Multi-stage</text>
-  <rect x="508" y="304" width="600" height="34" rx="6" fill="var(--gen)"/>
-  <text class="co-huge" x="1140" y="341" style="fill:var(--gen)">7–12</text>
+  <text class="co-name" x="508" y="300">Multi-stage</text>
+  <rect x="508" y="326" width="600" height="34" rx="6" fill="var(--gen)"/>
+  <text class="co-huge" x="1140" y="363" style="fill:var(--gen)">7–12</text>
 
   <!-- the totals, once, at the foot -->
   <rect x="24" y="392" width="1352" height="100" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.4"/>

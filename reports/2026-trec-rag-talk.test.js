@@ -56,7 +56,7 @@ assert(fetched.length === 0,
 // halves of each pair are described: only one is ever displayed, and
 // display:none takes the other out of the a11y tree with it.
 const figAlts = qmd.match(/fig-alt="/g) || [];
-assert(figAlts.length === 24, `expected 24 fig-alt figures, found ${figAlts.length}`);
+assert(figAlts.length === 25, `expected 25 fig-alt figures, found ${figAlts.length}`);
 assert(!/\{\.story|\{\.plain/.test(qmd), "the old look-specific art classes are gone");
 const day = (qmd.match(/\{\.art-day /g) || []).length;
 const night = (qmd.match(/\{\.art-night /g) || []).length;
@@ -183,8 +183,16 @@ const sections = html.match(/<section[^>]*class="[^"]*slide/g) || [];
 // 29 since the Cost break came off: the slide straight after it was the
 // comparison, so the break only previewed its own section. Cost keeps its
 // place in the contents legend.
-assert(sections.length === 29,
-  `expected 29 content slides, found ${sections.length}`);
+assert(sections.length === 30,
+  `expected 30 content slides, found ${sections.length}`);
+// Nuggetizing is its own slide, after reranking and before generation: the
+// lane figure bounded it in one line but never said what a nugget is for.
+const nugAt = qmd.indexOf("## Nuggets: what the writer is given");
+assert(nugAt > qmd.indexOf("## Reranking:") && nugAt < qmd.indexOf("## Answer Generation"),
+  "the nuggets slide belongs between reranking and generation");
+// And the coverage figure is a result, so it sits inside Results.
+assert(qmd.indexOf("## Nugget coverage") > qmd.indexOf("## Results {.divider}"),
+  "nugget coverage is a result and belongs after the Results break");
 assert(!/^## Cost/m.test(qmd), "the Cost section break should not be back");
 
 // Four sections, named the way the work is actually divided. The contents are

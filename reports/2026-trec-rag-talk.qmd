@@ -147,6 +147,12 @@ Two of the eight — the other six look the same, and all of them are in the app
 ![](2026-trec-rag-talk/02b-rerank.svg){fig-alt="One retrieved document, drawn with two more stacked behind it because BM25 returned up to a thousand, is cut into four overlapping windows of 3,500 characters with 350 of overlap, drawn as cards that overlap each other. The reranker mxbai-rerank-base-v2 then scores each window against this lane's query: window two scores 0.81 and window one 0.74 and both are kept, while window three at 0.22 and window four at 0.09 are dropped. A note says what moves on is windows, not documents, at most 100 per query."}
 :::
 
+## Nuggets: what the writer is given
+
+::: {.diagram}
+![](2026-trec-rag-talk/02c-nuggets.svg){fig-alt="Three steps left to right. From reranking, at most 100 passages per query, each a scored window of a document. Select: near duplicates are dropped at cosine 0.92 or above and the rest spread with MMR at lambda 0.7, leaving at most 40 selected passages. Nuggetize: one model call per subnarrative, 691 across the run, turning those into at most 20 claims, drawn with a dashed edge. A band at the foot states the boundary — a passage is evidence and every statement cites one, while a claim is only a hint about what to cover and is never cited."}
+:::
+
 ## Answer Generation {.divider}
 
 ::: {.secshot}
@@ -201,6 +207,14 @@ The example · rag2026-18
 ::: {.cap}
 Same evidence, same ceiling. Multi-stage made **16 more statements**.
 :::
+## Results {.divider}
+
+::: {.secshot}
+![](2026-trec-rag-talk/story-score.jpg){.art-day fig-alt="Two answer cards side by side on a table, labelled SINGLE-PASS and MULTI-STAGE. The left card carries a sun for Sol, which wrote it alone; the right carries a moon and a sun, for Luna and Sol together. Along the bottom of each, six circles for the facts it was checked for having: three filled gold on the left card, five on the right. The same question, and one answer covered more of it."}
+![](2026-trec-rag-talk/story-score-night.jpg){.art-night fig-alt="The same two answer cards side by side at night, labelled SINGLE-PASS and MULTI-STAGE. The left carries a sun, the right a moon and a sun. Along the bottom of each, six circles for the facts it was checked for having: three filled amber on the left, five on the right."}
+:::
+
+
 ## Nugget coverage, all 42 scored topics
 
 ::: {.diagram}
@@ -214,14 +228,6 @@ hazards**, ask whether the temporary unit has been made lead-safe."*
 The request said *repairs* and *a child* in different sentences.
 "Lead" never appears in the single-pass answer.
 :::
-
-## Results {.divider}
-
-::: {.secshot}
-![](2026-trec-rag-talk/story-score.jpg){.art-day fig-alt="Two answer cards side by side on a table, labelled SINGLE-PASS and MULTI-STAGE. The left card carries a sun for Sol, which wrote it alone; the right carries a moon and a sun, for Luna and Sol together. Along the bottom of each, six circles for the facts it was checked for having: three filled gold on the left card, five on the right. The same question, and one answer covered more of it."}
-![](2026-trec-rag-talk/story-score-night.jpg){.art-night fig-alt="The same two answer cards side by side at night, labelled SINGLE-PASS and MULTI-STAGE. The left carries a sun, the right a moon and a sun. Along the bottom of each, six circles for the facts it was checked for having: three filled amber on the left, five on the right."}
-:::
-
 
 ## What the organizers said about rag2026-18
 

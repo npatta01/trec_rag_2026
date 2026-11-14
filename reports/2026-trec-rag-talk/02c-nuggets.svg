@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="ng-title ng-desc">
+  <title id="ng-title">How the reranked passages become the nuggets the writer is given</title>
+  <desc id="ng-desc">Three steps left to right. First, what reranking hands over: at most 100 passages per query. Second, selecting: near duplicates are dropped by cosine similarity of 0.92 or above using all MiniLM L6 v2, and the rest are spread with maximal marginal relevance at lambda 0.7, leaving at most 40 selected passages. Third, nuggetizing: one model call per subnarrative, 691 across the run, turning those passages into at most 20 short claims. A band at the foot states the boundary: the answer cites a passage and never a claim, because a claim is a hint about what to cover while the passage is the evidence.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--hairline:rgb(94 109 102 / 0.28);--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7;--ok:#277a45;--ok-soft:#ddf2e3}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--hairline:rgb(156 173 163 / 0.34);--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616;--ok:#82dda0;--ok-soft:#173c25}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .ng-kick{font-size:25px;font-weight:800;letter-spacing:.06em}
+    .ng-num{font-size:44px;font-weight:800}
+    .ng-unit{font-size:26px;fill:var(--muted)}
+    .ng-how{font-size:25px}
+    .ng-foot{font-size:28px;font-weight:720}
+    .ng-flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#nga)}
+  </style>
+  <defs>
+    <marker id="nga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker>
+  </defs>
+
+  <rect width="1600" height="620" fill="var(--bg)"/>
+
+  <!-- 1. what reranking handed over -->
+  <rect x="24" y="60" width="420" height="250" rx="12" fill="var(--panel)" stroke="var(--line)" stroke-width="2.6"/>
+  <text class="ng-kick" x="52" y="104" style="fill:var(--muted)">FROM RERANKING</text>
+  <text class="ng-num"  x="52" y="170">≤100</text>
+  <text class="ng-unit" x="52" y="206">passages per query</text>
+  <text class="ng-how"  x="52" y="256">windows of a document,</text>
+  <text class="ng-how"  x="52" y="288">each scored against the query</text>
+
+  <path class="ng-flow" d="M460 185 H540"/>
+
+  <!-- 2. select -->
+  <rect x="560" y="60" width="440" height="250" rx="12" fill="var(--ret-soft)" stroke="var(--ret)" stroke-width="3"/>
+  <text class="ng-kick" x="588" y="104" style="fill:var(--ret)">SELECT</text>
+  <text class="ng-num"  x="588" y="170">≤40</text>
+  <text class="ng-unit" x="588" y="206">selected passages</text>
+  <text class="ng-how"  x="588" y="256">drop near duplicates at cosine ≥0.92,</text>
+  <text class="ng-how"  x="588" y="288">then spread the rest with MMR, λ 0.7</text>
+
+  <path class="ng-flow" d="M1016 185 H1096"/>
+
+  <!-- 3. nuggetize -->
+  <rect x="1116" y="60" width="460" height="250" rx="12" fill="var(--adv-soft)" stroke="var(--adv)" stroke-width="3" stroke-dasharray="9 6"/>
+  <text class="ng-kick" x="1144" y="104" style="fill:var(--adv)">NUGGETIZE</text>
+  <text class="ng-num"  x="1144" y="170">≤20</text>
+  <text class="ng-unit" x="1144" y="206">claims</text>
+  <text class="ng-how"  x="1144" y="256">one model call per subnarrative,</text>
+  <text class="ng-how"  x="1144" y="288">691 across the whole run</text>
+
+  <!-- the boundary that matters -->
+  <rect x="24" y="360" width="1552" height="150" rx="12" fill="var(--panel)" stroke="var(--ok)" stroke-width="3"/>
+  <text class="ng-kick" x="52" y="404" style="fill:var(--ok)">WHAT THE ANSWER MAY CITE</text>
+  <text class="ng-foot" x="52" y="450">A passage is evidence, and every statement cites one.</text>
+  <text class="ng-foot" x="52" y="488">A claim is only a hint about what to cover — it is never cited.</text>
+
+  <text class="ng-unit" x="24" y="570">The dashed edge marks the claims for that reason: they shape the answer without ever appearing in it.</text>
+  <text class="ng-unit" x="24" y="604">sentence-transformers/all-MiniLM-L6-v2 · the nuggetizer is a hosted model call</text>
+</svg>
