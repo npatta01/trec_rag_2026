@@ -539,11 +539,11 @@ body.reveal-viewport,
   margin-bottom: 0.3em;
 }
 
-// Appendix divider
-.divider {
-  border-top: 2px solid var(--line);
-  margin: 0.6em 0 0.4em;
-}
+// No rule above a section break. This used to draw a 2px line across the top
+// of every .divider slide -- the contents slide, the Appendix break and the
+// four picture breaks -- while the other 25 slides had nothing, so the deck
+// looked like it had two kinds of header. The picture breaks keep their own
+// edge from the plate's colour and radius; the plain ones need none.
 
 // Respect reduced-motion preferences.
 @media (prefers-reduced-motion: reduce) {

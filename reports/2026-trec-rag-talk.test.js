@@ -838,6 +838,16 @@ for (const stage of ["Search", "Rerank", "Select", "Nuggets"]) {
   assert(lane.includes(`>${stage}</text>`), `the lane figure should keep the stage: ${stage}`);
 }
 
+// ------------------------------------------------------ one kind of header
+// A `.divider { border-top: 2px }` rule drew a line across the top of all
+// six section-break slides and none of the other 25, so the deck looked like
+// it had two kinds of header. Nothing at slide level may draw a border.
+const dividerRule = theme.match(/^\.divider\s*\{([^}]*)\}/m);
+assert(!dividerRule || !/border/.test(dividerRule[1]),
+  "a section break must not draw a rule the content slides do not have");
+assert(!/\.divider[^{}]*\{[^}]*border-top/.test(theme),
+  "no border-top on a divider slide");
+
 // ------------------------------------------------- type inside the artwork
 // The title words ran the full width of the slide, across the bookshelf on
 // one side and the window on the other. Both pictures keep a band down the
