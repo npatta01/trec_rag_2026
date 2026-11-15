@@ -25,8 +25,7 @@ const required = [
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
   "reports/2026-trec-rag-talk.html",
   "## How the system works",
-  // the compact landscape view, not the report's tall whole-system figure
-  "reports/2026-competition-architecture/00-system-at-a-glance.svg",
+  "reports/2026-competition-architecture/01-whole-system.svg",
   "2026-competition-architecture.html",
   "## What is in the repo",
   "## Checks",
@@ -40,14 +39,30 @@ for (const value of required) {
 // The film and the system diagram are the two pictures; the film comes first
 // because it is the thing somebody can watch without deciding to read.
 assert(
-  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("00-system-at-a-glance.svg"),
+  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("01-whole-system.svg"),
   "the film should sit above the architecture diagram",
 );
-// A README figure has to be glanceable. The report's own whole-system diagram
-// is 800x1180 and runs ~900px down a README column before anything else shows.
+
+// A README column is about 600px wide, so a portrait figure runs most of a
+// screen before anything below it exists — which is how the first version of
+// this figure buried its own conclusion. Keep it wider than it is tall, and
+// keep its alt text a real description rather than a label.
+const figure = fs.readFileSync(
+  path.join(root, "reports/2026-competition-architecture/01-whole-system.svg"),
+  "utf8",
+);
+const viewBox = /viewBox="0 0 (\d+) (\d+)"/.exec(figure);
+assert(viewBox, "the README figure should declare a viewBox");
+const [, fw, fh] = viewBox.map(Number);
 assert(
-  !source.includes("01-whole-system.svg"),
-  "the README takes the landscape figure; the tall one belongs to the report",
+  fw / fh >= 1.4,
+  `the README figure is ${fw}x${fh}; a figure here has to be wider than it is tall`,
+);
+const readmeAlt = /!\[([^\]]+)\]\(reports\/2026-competition-architecture\/01-whole-system\.svg\)/.exec(source);
+assert(readmeAlt, "the README figure needs alt text");
+assert(
+  readmeAlt[1].length >= 180,
+  `the README figure's alt text is ${readmeAlt[1].length} characters; it has to stand in for the figure`,
 );
 assert(
   source.indexOf("Project site") < source.indexOf("## What is in the repo"),
