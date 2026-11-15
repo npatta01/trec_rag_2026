@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 860" role="img" aria-labelledby="pipe-title pipe-desc">
+  <title id="pipe-title">One request, end to end, with the ceiling on every stage</title>
+  <desc id="pipe-desc">The whole run on one page. The upper band follows a single narrative left to right through the source retrieval run, with the configured ceiling printed under each stage: one planning call adds at most eight subnarratives; each subnarrative carries one to three BM25 queries, for at most 25 searches per topic; each query returns at most 1,000 documents from the climbmix-400b index; documents become 3,500-character chunks overlapping by 350 characters, which the mxbai-rerank-base-v2 cross-encoder scores, keeping at most 100 passages per query; near-duplicates at cosine 0.92 or above are dropped and MMR at lambda 0.7 spreads what remains, to at most 40 selected passages; a one-shot Nuggetizer writes at most 20 advisory claim hints beside them, which are never cited. All of that freezes into one authenticated source. The lower band shows the two branches that derive from it and never read each other: a cache-first replay emits three Retrieval TSVs of 4,246 rows at depth 1 to 121, and a sealed selected-evidence handoff feeds single-pass and multi-stage generation, emitting two RAG JSONLs of 119 cited reports each. A dashed connector between the two branches is cut by a stop bar. All five files were accepted by Evalbase.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--hair:#cdd8d1;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7;--stop:#b3261e;--stop-soft:#fbe4e2}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--hair:#2f3b35;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616;--stop:#f2b8b5;--stop-soft:#42211f}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .h{font-size:25px;font-weight:700}
+    .u{font-size:20px;font-weight:700}
+    .lab{font-size:18px;font-weight:650}
+    .s{font-size:16px;fill:var(--muted)}
+    .tiny{font-size:14px;fill:var(--muted)}
+    .mono{font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
+    .panel{fill:var(--panel);stroke:var(--hair);stroke-width:2}
+    .ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:2.5}
+    .gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:2.5}
+    .ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:2.5}
+    .adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:2.5}
+    .flow{fill:none;stroke:var(--line);stroke-width:2.5;marker-end:url(#a)}
+    .retflow{stroke:var(--ret)}
+    .genflow{stroke:var(--gen)}
+    .advflow{stroke:var(--adv);stroke-dasharray:7 5}
+    .barred{fill:none;stroke:var(--stop);stroke-width:2.5;stroke-dasharray:7 5}
+    .stopbar{stroke:var(--stop);stroke-width:5;stroke-linecap:round}
+    .sep{stroke:var(--hair);stroke-width:2}
+    .bound{stroke:var(--ret);stroke-width:3;stroke-dasharray:10 6}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+
+  <rect width="1280" height="860" fill="var(--bg)"/>
+  <text class="h" x="40" y="52">One request, end to end</text>
+  <text class="s" x="40" y="84">Every stage has a ceiling, and the ceiling is the design.</text>
+  <text class="u" x="40" y="136" fill="var(--ret)">ONE SOURCE RUN</text>
+  <rect class="panel" x="40" y="170" width="178" height="112" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="129" y="212" text-anchor="middle">narrative</text>
+  <text class="tiny" x="129" y="240" text-anchor="middle">one of 119</text>
+  <text class="tiny" x="129" y="264" text-anchor="middle">left untouched</text>
+  <rect class="adv" x="240" y="170" width="178" height="112" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="329" y="212" text-anchor="middle">plan</text>
+  <text class="tiny" x="329" y="240" text-anchor="middle">1 model call</text>
+  <text class="tiny" x="329" y="264" text-anchor="middle">≤ 8 angles</text>
+  <path class="flow" d="M218 226H236" vector-effect="non-scaling-stroke"/>
+  <rect class="ret" x="440" y="170" width="178" height="112" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="529" y="212" text-anchor="middle">search</text>
+  <text class="tiny" x="529" y="240" text-anchor="middle">1–3 queries each</text>
+  <text class="tiny" x="529" y="264" text-anchor="middle">≤ 25 per topic</text>
+  <path class="flow" d="M418 226H436" vector-effect="non-scaling-stroke"/>
+  <rect class="ret" x="640" y="170" width="178" height="112" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="729" y="212" text-anchor="middle">retrieve</text>
+  <text class="tiny" x="729" y="240" text-anchor="middle">BM25 over ClimbMix</text>
+  <text class="tiny" x="729" y="264" text-anchor="middle">≤ 1,000 docs/query</text>
+  <path class="flow" d="M618 226H636" vector-effect="non-scaling-stroke"/>
+  <rect class="ret" x="840" y="170" width="178" height="112" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="929" y="212" text-anchor="middle">score</text>
+  <text class="tiny" x="929" y="240" text-anchor="middle">3,500-char chunks</text>
+  <text class="tiny" x="929" y="264" text-anchor="middle">≤ 100 passages/query</text>
+  <path class="flow" d="M818 226H836" vector-effect="non-scaling-stroke"/>
+  <rect class="ret" x="1040" y="170" width="178" height="112" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="1129" y="212" text-anchor="middle">select</text>
+  <text class="tiny" x="1129" y="240" text-anchor="middle">drop dupes ≥ 0.92</text>
+  <text class="tiny" x="1129" y="264" text-anchor="middle">MMR 0.7 · ≤ 40 kept</text>
+  <path class="flow" d="M1018 226H1036" vector-effect="non-scaling-stroke"/>
+  <path class="flow advflow" d="M1129 282V318" vector-effect="non-scaling-stroke"/>
+  <rect class="adv" x="1020" y="318" width="218" height="62" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="1129" y="348" text-anchor="middle">≤ 20 claim hints</text>
+  <text class="tiny" x="1129" y="370" text-anchor="middle">advisory · never cited</text>
+  <path class="flow retflow" d="M640 282V398" vector-effect="non-scaling-stroke"/>
+  <rect class="adv" x="360" y="404" width="560" height="96" rx="12" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="640" y="444" text-anchor="middle">one authenticated frozen source</text>
+  <text class="mono" x="640" y="476" text-anchor="middle">facet-deepseek-b40-v3</text>
+  <text class="tiny" x="40" y="448">nothing is added</text>
+  <text class="tiny" x="40" y="470">after it freezes</text>
+  <text class="u" x="952" y="448" fill="var(--gen)">TWO BRANCHES</text>
+  <text class="tiny" x="952" y="470">that never read each other</text>
+  <path class="flow retflow" d="M640 500V556H380V590" vector-effect="non-scaling-stroke"/>
+  <path class="flow genflow" d="M640 500V556H900V590" vector-effect="non-scaling-stroke"/>
+  <rect class="ret" x="160" y="596" width="440" height="116" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="380" y="634" text-anchor="middle">Retrieval · cache-first replay</text>
+  <text class="tiny" x="380" y="664" text-anchor="middle">one candidate core, ordered three ways</text>
+  <text class="tiny" x="380" y="688" text-anchor="middle">3 TSVs · 4,246 rows · depth 1–121</text>
+  <rect class="gen" x="680" y="596" width="440" height="116" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="900" y="634" text-anchor="middle">RAG · sealed evidence only</text>
+  <text class="tiny" x="900" y="664" text-anchor="middle">single-pass Sol, multi-stage Luna + Sol</text>
+  <text class="tiny" x="900" y="688" text-anchor="middle">2 JSONLs · 119 cited reports each</text>
+  <path class="barred" d="M600 654H680" vector-effect="non-scaling-stroke"/>
+  <line class="stopbar" x1="640" y1="639" x2="640" y2="669" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="640" y="578" text-anchor="middle" fill="var(--stop)">no path</text>
+  <path class="flow retflow" d="M380 712V738H560V754" vector-effect="non-scaling-stroke"/>
+  <path class="flow genflow" d="M900 712V738H720V754" vector-effect="non-scaling-stroke"/>
+  <rect class="ok" x="440" y="760" width="400" height="62" rx="31" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="640" y="799" text-anchor="middle">✓ five files accepted</text>
+</svg>
