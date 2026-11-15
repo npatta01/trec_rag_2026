@@ -2,6 +2,32 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
+## Where the tests run
+
+The pipeline was built and run on Linux, and parts of it require Linux by
+design. `pytest` is green there. On macOS most of the suite passes, but these
+failures are expected and are not regressions:
+
+- **Publication needs Linux.** `competition_retrieval._rename_directory_noreplace`
+  needs `renameat2`, and `competition_debug_bundle` refuses a non-Linux host
+  outright, both so a directory can be published without replacing anything
+  already at the destination. macOS offers `renameatx_np` with `RENAME_EXCL`,
+  which nothing here uses yet.
+- **The reranker needs a Linux x86_64 host.** `transformers` and
+  `sentence-transformers` carry
+  `sys_platform == 'linux' and platform_machine == 'x86_64'` markers in
+  `pyproject.toml`, so they are never installed elsewhere and tests that import
+  them fail.
+- **Some tests read `/proc/self/fd` themselves** to name the file behind a
+  descriptor. The equivalent on macOS is `fcntl` `F_GETPATH`.
+- **Temporary paths cross a symlink.** macOS puts `tmp_path` under `/var`,
+  which is a link to `/private/var`, and the bundle validators reject any path
+  component that is a symbolic link.
+
+Opening a topic database is not on that list: `topic_records` reaches the
+hashed inode through `/proc/self/fd` where it exists and `/dev/fd` otherwise,
+so the same inode binding holds on both platforms.
+
 ## Reusable tracing modules
 
 `trec_rag.tracing` contains the reusable trace model and Phoenix-export
