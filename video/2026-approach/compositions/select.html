@@ -1,0 +1,40 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; font-family: Inter, sans-serif; color: #07394a; }
+    #select-label { position: absolute; left: 150px; top: 118px; font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #0d6f84; }
+    #select-head { position: absolute; left: 150px; top: 166px; font-size: 60px; font-weight: 900; letter-spacing: -.02em; line-height: 1.04; max-width: 1620px; }
+    #select-sub { position: absolute; left: 150px; top: 266px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #select-foot { position: absolute; left: 150px; top: 936px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #select-foot b { font-weight: 700; color: #07394a; }
+    #se-grid { position: absolute; left: 150px; top: 356px; width: 1620px; height: 400px; }
+    .se-b { position: absolute; width: 150px; height: 44px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-radius: 8px; border-left: 4px solid #0d6f84; padding: 9px 10px 0 12px; }
+       .se-b u { display: block; height: 6px; border-radius: 3px; background: rgba(7,57,74,.22); text-decoration: none; }
+       .se-b u + u { margin-top: 6px; width: 64%; }
+       .se-dup u { background: rgba(181,86,63,.45); }
+    .se-dup { border-left-color: #b5563f; }
+    #se-n1 { position: absolute; right: 150px; top: 790px; text-align: right; font-size: 92px; font-weight: 900; color: #0d6f84; line-height: 1; letter-spacing: -.03em; }
+    #se-n1 span { display: block; font-size: 30px; font-weight: 400; color: #3d5c66; letter-spacing: 0; }
+  </style>
+
+  <div id="root" data-composition-id="select" data-width="1920" data-height="1080">
+    <div id="select-label" class="clip" data-start="0.1" data-duration="6.9">Step 5 · selection</div>
+    <h1 id="select-head" class="clip" data-start="0.15" data-duration="6.9">Near-duplicates drop out, and the rest are spread.</h1>
+    <div id="select-sub" class="clip" data-start="0.35" data-duration="6.9">all-MiniLM-L6-v2 drops anything at cosine 0.92 or above; MMR at λ 0.7 keeps what is left varied.</div>
+    <div id="se-grid" class="clip" data-layout-ignore data-start="0.6" data-duration="6.4"><i class="se-b se-dup" id="se-b0" style="left:0px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b1" style="left:164px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b2" style="left:328px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b3" style="left:492px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b4" style="left:656px;top:0px"><u></u><u></u></i><i class="se-b se-dup" id="se-b5" style="left:820px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b6" style="left:984px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b7" style="left:1148px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b8" style="left:1312px;top:0px"><u></u><u></u></i><i class="se-b" id="se-b9" style="left:1476px;top:0px"><u></u><u></u></i><i class="se-b se-dup" id="se-b10" style="left:0px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b11" style="left:164px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b12" style="left:328px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b13" style="left:492px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b14" style="left:656px;top:58px"><u></u><u></u></i><i class="se-b se-dup" id="se-b15" style="left:820px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b16" style="left:984px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b17" style="left:1148px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b18" style="left:1312px;top:58px"><u></u><u></u></i><i class="se-b" id="se-b19" style="left:1476px;top:58px"><u></u><u></u></i><i class="se-b se-dup" id="se-b20" style="left:0px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b21" style="left:164px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b22" style="left:328px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b23" style="left:492px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b24" style="left:656px;top:116px"><u></u><u></u></i><i class="se-b se-dup" id="se-b25" style="left:820px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b26" style="left:984px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b27" style="left:1148px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b28" style="left:1312px;top:116px"><u></u><u></u></i><i class="se-b" id="se-b29" style="left:1476px;top:116px"><u></u><u></u></i><i class="se-b se-dup" id="se-b30" style="left:0px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b31" style="left:164px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b32" style="left:328px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b33" style="left:492px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b34" style="left:656px;top:174px"><u></u><u></u></i><i class="se-b se-dup" id="se-b35" style="left:820px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b36" style="left:984px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b37" style="left:1148px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b38" style="left:1312px;top:174px"><u></u><u></u></i><i class="se-b" id="se-b39" style="left:1476px;top:174px"><u></u><u></u></i><i class="se-b se-dup" id="se-b40" style="left:0px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b41" style="left:164px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b42" style="left:328px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b43" style="left:492px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b44" style="left:656px;top:232px"><u></u><u></u></i><i class="se-b se-dup" id="se-b45" style="left:820px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b46" style="left:984px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b47" style="left:1148px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b48" style="left:1312px;top:232px"><u></u><u></u></i><i class="se-b" id="se-b49" style="left:1476px;top:232px"><u></u><u></u></i></div>
+    <div id="se-n1" class="clip" data-start="3.6" data-duration="3.4">≤ 40<span>selected passages, per request</span></div>
+    <div id="select-foot" class="clip" data-hold data-start="2.8" data-duration="4.2">This set is <b>sealed</b>. Nothing is added to it after this point.</div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#select-label", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .1);
+    tl.fromTo("#select-head", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .15);
+    tl.fromTo("#select-sub", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .35);
+    tl.fromTo("#se-grid .se-b", { opacity: 0, scale: .8 }, { opacity: 1, scale: 1, duration: .4, stagger: .018, ease: "power2.out" }, 0.6);
+    tl.to("#se-grid .se-dup", { opacity: .12, scale: .84, duration: .5, stagger: .03, ease: "power2.in" }, 2.5);
+    tl.fromTo("#se-n1", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 3.6);
+    tl.fromTo("#select-foot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 2.8);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["select"] = tl;
+  </script>
+</template>

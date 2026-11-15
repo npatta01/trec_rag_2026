@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <style>
+      /* The deck's own printing: the drawings' cream plate, deep teal ink, and
+         one accent per stage. Not a palette — the same rules the talk's SVG
+         figures follow, so the film and the slides read as one thing. */
+      :root {
+        --ground: #fdf1da;
+        --ink: #07394a;
+        --muted: #3d5c66;
+        --panel: #fffaf0;
+        --hairline: rgba(7, 57, 74, 0.18);
+        --ret: #0d6f84;
+        --adv: #855a06;
+        --gen: #9c4514;
+        --ok: #39702f;
+        --font-display: Inter, sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--ground);
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+        font-family: var(--font-display);
+        color: var(--ink);
+      }
+      /* Untimed full-bleed children need their own absolute box. */
+      #ground {
+        position: absolute;
+        inset: 0;
+        background: var(--ground);
+        z-index: 0;
+      }
+      /* 1.5% paper fibre. A fixed turbulence seed, so every render matches. */
+      #grain {
+        position: absolute;
+        inset: 0;
+        z-index: 90;
+        pointer-events: none;
+        opacity: 0.015;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='f'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' seed='7'/></filter><rect width='180' height='180' filter='url(%23f)'/></svg>");
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="87"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div id="ground"></div>
+
+      <div id="title" data-composition-id="title" data-composition-src="compositions/title.html"
+           data-start="0" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="request" data-composition-id="request" data-composition-src="compositions/request.html"
+           data-start="8" data-duration="9" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="angles" data-composition-id="angles" data-composition-src="compositions/angles.html"
+           data-start="17" data-duration="9" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="queries" data-composition-id="queries" data-composition-src="compositions/queries.html"
+           data-start="26" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="search" data-composition-id="search" data-composition-src="compositions/search.html"
+           data-start="34" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="rerank" data-composition-id="rerank" data-composition-src="compositions/rerank.html"
+           data-start="42" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="select" data-composition-id="select" data-composition-src="compositions/select.html"
+           data-start="50" data-duration="7" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="nuggets" data-composition-id="nuggets" data-composition-src="compositions/nuggets.html"
+           data-start="57" data-duration="8" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="generation" data-composition-id="generation" data-composition-src="compositions/generation.html"
+           data-start="65" data-duration="12" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="answer" data-composition-id="answer" data-composition-src="compositions/answer.html"
+           data-start="77" data-duration="10" data-track-index="1" data-track-kind="graphics"
+           data-width="1920" data-height="1080" style="z-index: 10"></div>
+
+      <div id="grain"></div>
+
+      <!-- 98 s of track under an 87 s film, so it starts at 10.5 s: the
+           track's quiet pad plays under the title card and its first onset
+           lands as the request arrives. The last four and a half seconds fade
+           under the closing line. The raw mp3 is not committed: the query that
+           fetched it is in audio_request.json, and the render carries the mix. -->
+      <audio id="bed" src="assets/bgm/track.mp3"
+             data-start="0" data-duration="87"
+             data-media-start="10.5"
+             data-volume="0.8" data-fade-in="1.4" data-fade-out="4.5"></audio>
+    </div>
+    <script>
+      // The root holds only scene hosts and the paper. Every move lives in the
+      // scene that owns it, so each one can be edited on its own.
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

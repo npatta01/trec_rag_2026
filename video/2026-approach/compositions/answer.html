@@ -1,0 +1,45 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; font-family: Inter, sans-serif; color: #07394a; }
+    #aw-label { position: absolute; left: 150px; top: 118px; font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #39702f; }
+    #aw-head { position: absolute; left: 150px; top: 166px; font-size: 60px; font-weight: 900; letter-spacing: -.02em; line-height: 1.04; max-width: 1620px; }
+    #aw-sheet { position: absolute; left: 150px; top: 290px; width: 1620px; padding: 30px 36px 34px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-left: 5px solid #39702f; border-radius: 12px; box-shadow: 0 2px 0 rgba(7,57,74,.06); font-size: 31px; line-height: 1.5; }
+    .aw-line { padding: 9px 0; border-top: 1px solid rgba(7,57,74,.12); }
+    .aw-line:first-child { border-top: 0; }
+    .aw-c { font-size: 22px; font-weight: 700; vertical-align: super; color: #39702f; }
+    #aw-close { position: absolute; left: 150px; top: 836px; font-size: 56px; font-weight: 900; letter-spacing: -.02em; max-width: 1620px; line-height: 1.08; }
+    #aw-foot { position: absolute; left: 150px; top: 966px; font-size: 30px; color: #3d5c66; }
+  </style>
+
+  <div id="root" data-composition-id="answer" data-width="1920" data-height="1080">
+    <div id="aw-label" class="clip" data-start="0.1" data-duration="9.9">The answer</div>
+    <h1 id="aw-head" class="clip" data-start="0.15" data-duration="9.85">Under 1,024 words, and every statement carries its source.</h1>
+
+    <div id="aw-sheet" class="clip" data-start="0.6" data-duration="9.4">
+      <div class="aw-line" id="aw-l1">New York City requires most rentals under 30 days to have the host present.<span class="aw-c" data-layout-ignore>[4]</span></div>
+      <div class="aw-line" id="aw-l2">A six-week stay is therefore legal in a hotel or corporate unit, but not in most whole-apartment listings.<span class="aw-c" data-layout-ignore>[4,11]</span></div>
+      <div class="aw-line" id="aw-l3">Extended-stay rates fall sharply at the 30-day mark, where occupancy tax stops applying.<span class="aw-c" data-layout-ignore>[19]</span></div>
+      <div class="aw-line" id="aw-l4">Ask for the registration number before paying; unregistered listings are the ones that get cancelled.<span class="aw-c" data-layout-ignore>[7,22]</span></div>
+    </div>
+
+    <div id="aw-close" class="clip" data-hold data-start="4.6" data-duration="5.4">Every sentence points at a passage that was actually retrieved.</div>
+    <div id="aw-foot" class="clip" data-hold data-hold data-start="6.2" data-duration="3.8">npatta01.github.io/trec_rag_2026</div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#aw-label", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .1);
+    tl.fromTo("#aw-head", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .15);
+    tl.fromTo("#aw-sheet", { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: .6, ease: "power3.out" }, 0.6);
+    for (let i = 1; i <= 4; i += 1) {
+      tl.fromTo(`#aw-l${i}`, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .4, ease: "power2.out" }, 1.1 + (i - 1) * 0.4);
+    }
+    // the markers light last and in order: the guarantee, shown rather than said
+    tl.fromTo(".aw-c", { color: "#07394a", scale: 1 }, { color: "#39702f", scale: 1.18, duration: .3, stagger: .18, ease: "power2.out" }, 3.0);
+    tl.to(".aw-c", { scale: 1, duration: .25, stagger: .18, ease: "power2.inOut" }, 3.3);
+    tl.fromTo("#aw-close", { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: .6, ease: "power3.out" }, 4.6);
+    tl.fromTo("#aw-foot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 6.2);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["answer"] = tl;
+  </script>
+</template>

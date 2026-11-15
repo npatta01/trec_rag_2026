@@ -25,7 +25,38 @@ for (const href of internalHrefs) {
   assert(fs.existsSync(path.resolve(root, target)), `internal link should resolve: ${href}`);
 }
 
-assert((html.match(/<article class="link-card /g) || []).length === 7, "artifact hub should render seven cards");
+assert((html.match(/<article class="link-card /g) || []).length === 8, "artifact hub should render eight cards");
+
+// The paper and the talk are what most people arrive for, so they are the
+// first card and each has to resolve. The PDF lives under output/, which is
+// not the ignored outputs/ work directory.
+for (const [label, href] of [
+  ["Paper (PDF)", "output/pdf/2026-trec-rag-paper.pdf"],
+  ["Paper source", "reports/2026-trec-rag-paper.tex"],
+  ["Conference talk slides", "reports/2026-trec-rag-talk.html"],
+]) {
+  assert(html.includes(`href="${href}"`), `artifact hub should link ${href}`);
+  assert(html.includes(`>${label}</a>`), `artifact hub should label ${label}`);
+  assert(fs.existsSync(path.join(root, href)), `artifact hub target should exist: ${href}`);
+}
+assert(
+  html.indexOf('class="link-card paper"') < html.indexOf('class="link-card architecture"'),
+  "paper and talk should be the first card",
+);
+
+// The approach video plays on the page itself, above the link map, with a
+// poster so the card is not a black rectangle before anyone presses play.
+assert(html.includes('<section class="film"'), "artifact hub should carry the approach film");
+assert(
+  html.indexOf('<section class="film"') < html.indexOf('class="link-grid"'),
+  "the film should sit above the link map",
+);
+for (const asset of ["reports/2026-trec-rag-approach.mp4", "reports/2026-trec-rag-approach-poster.jpg"]) {
+  assert(html.includes(asset), `artifact hub should reference ${asset}`);
+  assert(fs.existsSync(path.join(root, asset)), `artifact hub asset should exist: ${asset}`);
+}
+assert(/<video[^>]*\bcontrols\b/.test(html), "the film must be playable, not autoplaying");
+assert(/<video[^>]*\bposter=/.test(html), "the film needs a poster frame");
 for (const landmark of ["<main", "<header", "<section", "<footer", "aria-label="]) {
   assert(html.includes(landmark), `artifact hub should expose ${landmark}`);
 }

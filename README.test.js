@@ -3,7 +3,7 @@ const path = require("node:path");
 
 const root = __dirname;
 const source = fs.readFileSync(path.join(root, "README.md"), "utf8");
-const hubLabel = "View the project artifact hub";
+const hubLabel = "View the project site";
 const hubUrl = "https://npatta01.github.io/trec_rag_2026/";
 const required = [
   "# NP Labs · TREC RAG 2026",
@@ -18,6 +18,13 @@ const required = [
   "| Retrieval runs | 3 |",
   "| RAG runs | 2 |",
   "| Evalbase-accepted organizer files | 5 |",
+  // The paper, the talk and the scores are the four links under the site
+  // link; they are what a reader arrives for and must not drift out again.
+  "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
+  "reports/2026-trec-rag-talk.html",
+  "reports/2026-trec-rag-approach.mp4",
+  "reports/2026-organizer-score-explorer.html",
+  "[Run archive](docs/run-archive.md)",
   "Architecture Report",
   "Retrieval Quality Report",
   "RAGDoll Evaluation — Single-pass RAG",
@@ -38,6 +45,16 @@ for (const value of required) {
 }
 if (source.indexOf(hubLabel) > source.indexOf("SUBMISSION_LEDGER.md")) {
   throw new Error("primary hub link must precede repository detail links");
+}
+
+// The README is the front door, not the manual. The long run-archive recipes
+// moved to docs/run-archive.md; keep the front door short enough to read.
+const lines = source.split("\n").length;
+if (lines > 110) {
+  throw new Error(`README should stay under 110 lines, found ${lines}`);
+}
+if (source.includes("tar --zstd")) {
+  throw new Error("archive extraction recipes belong in docs/run-archive.md");
 }
 for (const match of source.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)]+)\)/g)) {
   if (!fs.existsSync(path.join(root, match[1]))) {

@@ -1,0 +1,52 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; font-family: Inter, sans-serif; color: #07394a; }
+    #rerank-label { position: absolute; left: 150px; top: 118px; font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #0d6f84; }
+    #rerank-head { position: absolute; left: 150px; top: 166px; font-size: 60px; font-weight: 900; letter-spacing: -.02em; line-height: 1.04; max-width: 1620px; }
+    #rerank-sub { position: absolute; left: 150px; top: 266px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #rerank-foot { position: absolute; left: 150px; top: 936px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #rerank-foot b { font-weight: 700; color: #07394a; }
+    #rr-doc { position: absolute; left: 150px; top: 356px; width: 520px; height: 330px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-radius: 10px; box-shadow: 0 2px 0 rgba(7,57,74,.06); border-left: 5px solid #0d6f84; padding: 22px 26px; }
+    #rr-doc .rr-t { font-size: 28px; font-weight: 700; margin-bottom: 14px; }
+    #rr-doc .rr-l { height: 10px; border-radius: 5px; background: rgba(7,57,74,.16); margin-bottom: 11px; }
+    .rr-arrow { position: absolute; left: 706px; top: 506px; font-size: 44px; font-weight: 900; color: #3d5c66; }
+    .rr-p { position: absolute; left: 790px; width: 1030px; height: 72px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-radius: 10px; box-shadow: 0 2px 0 rgba(7,57,74,.06); border-left: 5px solid #0d6f84; display: flex; align-items: center; gap: 20px; padding: 0 24px; font-size: 28px; font-weight: 400; }
+    .rr-score { margin-left: auto; font-weight: 700; color: #0d6f84; font-variant-numeric: tabular-nums; }
+    .rr-meter { width: 220px; height: 12px; border-radius: 6px; background: rgba(7,57,74,.12); overflow: hidden; }
+    .rr-fill { display: block; height: 100%; background: #0d6f84; transform-origin: left center; }
+  </style>
+
+  <div id="root" data-composition-id="rerank" data-width="1920" data-height="1080">
+    <div id="rerank-label" class="clip" data-start="0.1" data-duration="7.9">Step 4 · reranking</div>
+    <h1 id="rerank-head" class="clip" data-start="0.15" data-duration="7.9">A document becomes passages.</h1>
+    <div id="rerank-sub" class="clip" data-start="0.35" data-duration="7.9">Windows of 3,500 characters, overlapping by 350, each scored against the query by mxbai-rerank-base-v2.</div>
+    <div id="rr-doc" class="clip" data-start="0.6" data-duration="7.4"><div class="rr-t">One document</div>
+      <div class="rr-l" style="width:94%"></div><div class="rr-l" style="width:88%"></div><div class="rr-l" style="width:96%"></div><div class="rr-l" style="width:72%"></div><div class="rr-l" style="width:90%"></div><div class="rr-l" style="width:84%"></div><div class="rr-l" style="width:58%"></div></div>
+    <div class="rr-arrow clip" id="rr-ar" data-start="1.2" data-duration="6.8">&rarr;</div>
+    <div class="rr-p clip" id="rr-p1" style="top: 356px; opacity: 1" data-start="1.40" data-duration="6.60">a window on illegal listings<span class="rr-meter"><i class="rr-fill" id="rr-f1" style="width: 100%"></i></span><span class="rr-score">0.91</span></div>
+    <div class="rr-p clip" id="rr-p2" style="top: 442px; opacity: 1" data-start="1.53" data-duration="6.47">a window on cancellation terms<span class="rr-meter"><i class="rr-fill" id="rr-f2" style="width: 100%"></i></span><span class="rr-score">0.74</span></div>
+    <div class="rr-p clip" id="rr-p3" style="top: 528px; opacity: 0.45" data-start="1.67" data-duration="6.33">a window on the building's address<span class="rr-meter"><i class="rr-fill" id="rr-f3" style="width: 100%"></i></span><span class="rr-score">0.38</span></div>
+    <div class="rr-p clip" id="rr-p4" style="top: 614px; opacity: 0.4" data-start="1.80" data-duration="6.20">a window on an unrelated city<span class="rr-meter"><i class="rr-fill" id="rr-f4" style="width: 100%"></i></span><span class="rr-score">0.12</span></div>
+    <div id="rerank-foot" class="clip" data-hold data-start="4.6" data-duration="3.4">At most <b>100 passages</b> survive per query. The low scorers stop here.</div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#rerank-label", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .1);
+    tl.fromTo("#rerank-head", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .15);
+    tl.fromTo("#rerank-sub", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .35);
+    tl.fromTo("#rr-doc", { opacity: 0, x: -34 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 0.6);
+    tl.fromTo("#rr-ar", { opacity: 0 }, { opacity: 1, duration: .4, ease: "power2.out" }, 1.2);
+    tl.fromTo("#rr-p1", { opacity: 0, x: 34 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 1.40);
+    tl.fromTo("#rr-f1", { scaleX: 0 }, { scaleX: 0.91, duration: .5, ease: "power3.out" }, 1.70);
+    tl.fromTo("#rr-p2", { opacity: 0, x: 34 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 1.53);
+    tl.fromTo("#rr-f2", { scaleX: 0 }, { scaleX: 0.74, duration: .5, ease: "power3.out" }, 1.83);
+    tl.fromTo("#rr-p3", { opacity: 0, x: 34 }, { opacity: 0.45, x: 0, duration: .47, ease: "power2.out" }, 1.67);
+    tl.fromTo("#rr-f3", { scaleX: 0 }, { scaleX: 0.38, duration: .5, ease: "power3.out" }, 1.97);
+    tl.fromTo("#rr-p4", { opacity: 0, x: 34 }, { opacity: 0.4, x: 0, duration: .47, ease: "power2.out" }, 1.80);
+    tl.fromTo("#rr-f4", { scaleX: 0 }, { scaleX: 0.12, duration: .5, ease: "power3.out" }, 2.10);
+    tl.fromTo("#rerank-foot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 4.6);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["rerank"] = tl;
+  </script>
+</template>

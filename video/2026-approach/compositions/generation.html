@@ -1,0 +1,64 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; font-family: Inter, sans-serif; color: #07394a; }
+    #gn-label { position: absolute; left: 150px; top: 118px; font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #9c4514; }
+    #gn-head { position: absolute; left: 150px; top: 166px; font-size: 60px; font-weight: 900; letter-spacing: -.02em; line-height: 1.04; max-width: 1620px; }
+    #gn-sub { position: absolute; left: 150px; top: 266px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    .gn-col { position: absolute; top: 352px; width: 780px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-radius: 10px; box-shadow: 0 2px 0 rgba(7,57,74,.06); padding: 24px 28px 26px; }
+    #gn-ss { left: 150px; border-left: 5px solid #9c4514; }
+    #gn-ms { left: 990px; border-left: 5px solid #39702f; }
+    .gn-k { font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 14px; }
+    .gn-step { display: flex; align-items: center; gap: 16px; font-size: 30px; font-weight: 400; padding: 9px 0; border-top: 1px solid rgba(7,57,74,.14); }
+    .gn-step:first-of-type { border-top: 0; }
+    .gn-who { font-size: 28px; font-weight: 700; margin-left: auto; color: #3d5c66; }
+    .gn-ref { color: #b5563f; font-weight: 700; }
+    #gn-calls { position: absolute; left: 150px; top: 872px; font-size: 34px; font-weight: 700; }
+    #gn-calls span { font-weight: 400; color: #3d5c66; }
+    #gn-foot { position: absolute; left: 150px; top: 942px; font-size: 30px; color: #3d5c66; }
+    #gn-foot b { font-weight: 700; color: #07394a; }
+  </style>
+
+  <div id="root" data-composition-id="generation" data-width="1920" data-height="1080">
+    <div id="gn-label" class="clip" data-start="0.1" data-duration="11.9">Step 7 · writing the answer</div>
+    <h1 id="gn-head" class="clip" data-start="0.15" data-duration="11.85">Two submissions write from the same sealed evidence.</h1>
+    <div id="gn-sub" class="clip" data-start="0.35" data-duration="11.65">One writes once. The other has a second model check the draft against those same passages.</div>
+
+    <div class="gn-col clip" id="gn-ss" data-start="0.8" data-duration="11.2">
+      <div class="gn-k" style="color:#9c4514">Single-pass · rag26-ss1</div>
+      <div class="gn-step">Sol writes the cited answer<span class="gn-who">1 call</span></div>
+      <div class="gn-step">… and that is the submission<span class="gn-who">done</span></div>
+    </div>
+
+    <div class="gn-col clip" id="gn-ms" data-start="2.0" data-duration="10.0">
+      <div class="gn-k" style="color:#39702f">Multi-stage · rag26-ms1-final</div>
+      <div class="gn-step" id="gn-m1">Luna plans the groups<span class="gn-who">1 call</span></div>
+      <div class="gn-step" id="gn-m2">Sol drafts<span class="gn-who">1 call</span></div>
+      <div class="gn-step" id="gn-m3">Luna audits each group against the passages<span class="gn-who">3–8 calls</span></div>
+      <div class="gn-step" id="gn-m4">Sol proposes at most three edits<span class="gn-who">1 call</span></div>
+      <div class="gn-step" id="gn-m5">Luna screens them — <span class="gn-ref">one refused</span><span class="gn-who">1 call</span></div>
+      <div class="gn-step" id="gn-m6">Local code applies only what passed<span class="gn-who">no call</span></div>
+    </div>
+
+    <div id="gn-calls" class="clip" data-start="7.6" data-duration="4.4">7 to 12 model calls per request <span>— 1,167 across the whole run</span></div>
+    <div id="gn-foot" class="clip" data-hold data-start="8.6" data-duration="3.4">One pass, not repeated rounds. The validated draft is always the <b>fallback</b>.</div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#gn-label", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .1);
+    tl.fromTo("#gn-head", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .15);
+    tl.fromTo("#gn-sub", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .35);
+    tl.fromTo("#gn-ss", { opacity: 0, x: -34 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 0.8);
+    tl.fromTo("#gn-ms", { opacity: 0, x: 34 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 2.0);
+    // the stages arrive one at a time, so the viewer counts the calls with it
+    for (let i = 1; i <= 6; i += 1) {
+      tl.fromTo(`#gn-m${i}`, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .4, ease: "power2.out" }, 2.4 + (i - 1) * 0.74);
+    }
+    // the refusal is the point of the second column, so it lands on its own
+    tl.fromTo("#gn-m5 .gn-ref", { color: "#07394a" }, { color: "#b5563f", duration: .4, ease: "power2.out" }, 6.5);
+    tl.fromTo("#gn-calls", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 7.6);
+    tl.fromTo("#gn-foot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 8.6);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["generation"] = tl;
+  </script>
+</template>

@@ -1,0 +1,51 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; font-family: Inter, sans-serif; color: #07394a; }
+    #queries-label { position: absolute; left: 150px; top: 118px; font-size: 28px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #0d6f84; }
+    #queries-head { position: absolute; left: 150px; top: 166px; font-size: 64px; font-weight: 900; letter-spacing: -.02em; line-height: 1.04; }
+    #queries-sub { position: absolute; left: 150px; top: 258px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #queries-foot { position: absolute; left: 150px; top: 930px; font-size: 30px; font-weight: 400; color: #3d5c66; }
+    #queries-foot b { font-weight: 700; color: #07394a; }
+    .q-card { position: absolute; left: 150px; width: 1620px; padding: 20px 26px 22px; background: #fffaf0; border: 1px solid rgba(7,57,74,.18); border-left: 5px solid #0d6f84; border-radius: 10px; box-shadow: 0 2px 0 rgba(7,57,74,.06); }
+    .q-ask { font-size: 32px; font-weight: 700; margin-bottom: 12px; }
+    .q-str { display: block; font-size: 28px; font-weight: 400; color: #07394a; background: #fdf1da; border: 1px solid rgba(7,57,74,.18); border-radius: 6px; padding: 9px 14px; margin-top: 8px; }
+  </style>
+
+  <div id="root" data-composition-id="queries" data-width="1920" data-height="1080">
+    <div id="queries-label" class="clip" data-start="0.1" data-duration="7.9">Step 2 · queries</div>
+    <h1 id="queries-head" class="clip" data-start="0.15" data-duration="7.85">Each angle becomes its own BM25 searches.</h1>
+    <div id="queries-sub" class="clip" data-start="0.35" data-duration="7.65">One to three per angle. Three of the eight are shown; the planner wrote sixteen.</div>
+    <div class="q-card clip" id="q-c1" style="top: 330px" data-start="0.70" data-duration="7.30">
+      <div class="q-ask">What options exist?</div>
+      <code class="q-str">furnished temporary housing New York City family three six weeks</code>
+      <code class="q-str">short term furnished rental NYC family child</code>
+    </div>
+    <div class="q-card clip" id="q-c2" style="top: 528px" data-start="0.96" data-duration="7.04">
+      <div class="q-ask">Which listings are illegal?</div>
+      <code class="q-str">illegal short term rental NYC avoid scams</code>
+      <code class="q-str">unreliable temporary housing New York City red flags</code>
+    </div>
+    <div class="q-card clip" id="q-c3" style="top: 726px" data-start="1.22" data-duration="6.78">
+      <div class="q-ask">What does it really cost?</div>
+      <code class="q-str">real cost comparison short term rental NYC fees taxes</code>
+      <code class="q-str">hidden costs temporary housing New York City</code>
+    </div>
+    <div id="queries-foot" class="clip" data-hold data-start="4.4" data-duration="3.6">Keyword search over <b>ClimbMix</b>, through the organizers’ hosted Pyserini index.</div>
+  </div>
+
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#queries-label", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .1);
+    tl.fromTo("#queries-head", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .15);
+    tl.fromTo("#queries-sub", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, .35);
+    tl.fromTo("#q-c1", { opacity: 0, x: -44 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 0.70);
+    tl.fromTo("#q-c1 .q-str", { opacity: 0, x: 26 }, { opacity: 1, x: 0, duration: .4, stagger: .133, ease: "power2.out" }, 0.87);
+    tl.fromTo("#q-c2", { opacity: 0, x: -44 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 0.96);
+    tl.fromTo("#q-c2 .q-str", { opacity: 0, x: 26 }, { opacity: 1, x: 0, duration: .4, stagger: .133, ease: "power2.out" }, 1.13);
+    tl.fromTo("#q-c3", { opacity: 0, x: -44 }, { opacity: 1, x: 0, duration: .47, ease: "power2.out" }, 1.22);
+    tl.fromTo("#q-c3 .q-str", { opacity: 0, x: 26 }, { opacity: 1, x: 0, duration: .4, stagger: .133, ease: "power2.out" }, 1.39);
+    tl.fromTo("#queries-foot", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: .47, ease: "power2.out" }, 4.4);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["queries"] = tl;
+  </script>
+</template>
