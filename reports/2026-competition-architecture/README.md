@@ -22,6 +22,13 @@ data or evidence. Dashed arrows carry advisory, fallback, or validation flow.
 | `08-multistage-rag.svg` | How does the multi-stage run bound planning and revision? | `competition_rag_multistage.py`; `narrative_blueprint.py`; `bounded_splice.py`; `operation_screen.py` | Luna plans, audits, and screens; Sol drafts and proposes a bounded splice. Local code applies only safe operations or preserves the validated draft. |
 | `09-accepted-submissions.svg` | What proves the exact files are delivery-ready? | submission ledger; validation skill; bundle metadata | Three Retrieval files pass structural validation, two RAG files pass organizer AutoJudge, all hashes match, and Evalbase accepted all five. |
 
+`00-system-at-a-glance.svg` is not one of the nine. It is a compact landscape
+view of figure 01 for places that cannot afford a tall figure — the repository
+README, where the full whole-system diagram ran nine hundred pixels down the
+page before anything else was visible. It carries the same palette and grammar,
+drops the intermediate stages, and keeps only the shape: one narrative, one
+frozen source, two branches, five accepted files.
+
 ## Visual grammar
 
 - Teal rectangles: source or submission Retrieval.
