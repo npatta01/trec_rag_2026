@@ -7,10 +7,10 @@
     text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
     .h{font-size:25px;font-weight:700}
     .u{font-size:20px;font-weight:700}
-    .lab{font-size:18px;font-weight:650}
-    .s{font-size:16px;fill:var(--muted)}
-    .tiny{font-size:14px;fill:var(--muted)}
-    .mono{font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
+    .lab{font-size:20px;font-weight:650}
+    .s{font-size:18px;fill:var(--muted)}
+    .tiny{font-size:17px;fill:var(--muted)}
+    .mono{font-size:17px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
     .panel{fill:var(--panel);stroke:var(--hair);stroke-width:2}
     .ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:2.5}
     .gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:2.5}
