@@ -25,6 +25,10 @@ from test_retrieval_export import (
     _config_and_topics,
     _write_sealed_topic,
 )
+from platform_support import (
+    REQUIRES_LINUX_PUBLICATION,
+    REQUIRES_PROCFS,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -198,7 +202,10 @@ def test_runner_refuses_incomplete_merge_before_dependency_construction(
 @pytest.mark.parametrize(
     ("execution_policy", "sentence_read_only", "similarity_cache_only"),
     (
-        ("offline-cache-only", True, True),
+        # Only the offline policy publishes a topic, so only it needs Linux.
+        pytest.param(
+            "offline-cache-only", True, True, marks=REQUIRES_LINUX_PUBLICATION
+        ),
         ("cached-upstream-rescore", False, False),
     ),
 )
@@ -533,7 +540,12 @@ def test_offline_document_admission_writes_only_to_the_private_stage(
     assert DocumentStore(stage_root).read_text(receipt.content_sha256) == text
 
 
-@pytest.mark.parametrize("cache_hit", [True, False], ids=("hit", "miss"))
+@pytest.mark.parametrize(
+    "cache_hit",
+    # Only the cache hit reaches publication, so only it needs Linux.
+    [pytest.param(True, marks=REQUIRES_LINUX_PUBLICATION), False],
+    ids=("hit", "miss"),
+)
 def test_offline_stage_uses_versioned_source_cas_and_bypasses_cache_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -837,6 +849,7 @@ def test_offline_stage_refuses_a_partial_existing_topic(
         )
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_offline_publication_preserves_a_concurrent_empty_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -874,6 +887,7 @@ def test_offline_publication_preserves_a_concurrent_empty_destination(
     assert tuple(job.topic_root.iterdir()) == ()
 
 
+@REQUIRES_PROCFS
 def test_offline_create_only_publication_fsyncs_tree_and_both_rename_parents(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -922,6 +936,7 @@ def test_offline_create_only_publication_fsyncs_tree_and_both_rename_parents(
     )
 
 
+@REQUIRES_PROCFS
 def test_offline_create_only_publication_durably_creates_destination_ancestors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -955,6 +970,7 @@ def test_offline_create_only_publication_durably_creates_destination_ancestors(
     assert experiment in fsynced
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_offline_create_only_publication_accepts_a_concurrent_parent_creator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -987,6 +1003,7 @@ def test_offline_create_only_publication_accepts_a_concurrent_parent_creator(
     assert (destination / "sealed.txt").read_text(encoding="utf-8") == "sealed"
 
 
+@REQUIRES_PROCFS
 def test_durable_mkdirs_fsyncs_a_parent_when_child_appears_before_lstat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -2,6 +2,51 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
+## Where the tests run
+
+The pipeline was built and run on Linux, and parts of it require Linux by
+design. `pytest` is green on both Linux and macOS; what cannot run on macOS is
+skipped rather than failed, and each skip names what is missing.
+[`code/tests/platform_support.py`](../tests/platform_support.py) holds those
+conditions, and every one of them is false on a Linux host, so nothing is
+hidden there.
+
+- **`REQUIRES_LINUX_PUBLICATION`.** `competition_retrieval._rename_directory_noreplace`
+  needs `renameat2`, and `competition_debug_bundle` refuses a non-Linux host
+  outright, both so a directory can be published without replacing anything
+  already at the destination. macOS offers `renameatx_np` with `RENAME_EXCL`,
+  which nothing here uses yet.
+- **`REQUIRES_RERANKER_DEPENDENCIES`.** `transformers` and
+  `sentence-transformers` carry
+  `sys_platform == 'linux' and platform_machine == 'x86_64'` markers in
+  `pyproject.toml`, so local reranking is only installable on a Linux x86_64
+  host.
+- **`REQUIRES_BASH_4`.** The shard wrapper scripts under `code/tools/` use
+  `declare -A`, which needs bash 4. macOS ships bash 3.2, so these are the one
+  group you can recover locally: install a newer bash and put it ahead of
+  `/bin` on `PATH`.
+- **`REQUIRES_PROCFS`.** A few tests name the file behind a descriptor by
+  reading `/proc/self/fd`. The macOS equivalent is `fcntl` `F_GETPATH`.
+- **`REQUIRES_FORK_START_METHOD`.** Two tests need a child to inherit state.
+  macOS defaults `multiprocessing` to `spawn`, and forking a process that
+  already holds threads segfaults there.
+
+Two things are deliberately *not* on that list, because they were real bugs
+rather than platform limits.
+
+`topic_records` reaches the hashed inode through `/proc/self/fd` where it
+exists and `/dev/fd` otherwise, so the same inode binding holds on both
+platforms.
+
+`cached_segmentation_result_bundle` and `competition_cache_bundle` each create
+a temporary directory and then validate paths derived from it — one by
+rejecting a symlinked path component, the other with `relative_to`. `tempfile`
+reports a macOS temporary directory under `/var`, a symlink to `/private/var`,
+so both modules failed their own validation on the spelling of a path they
+created themselves. Each now resolves that root once, through a local
+`_temporary_root`, and the validators are unchanged: a symlink inside the tree
+is still rejected exactly as before.
+
 ## Reusable tracing modules
 
 `trec_rag.tracing` contains the reusable trace model and Phoenix-export

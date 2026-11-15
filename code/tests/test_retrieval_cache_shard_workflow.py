@@ -23,6 +23,7 @@ from trec_rag.hf_bucket_listing import (
     require_bundle_listing,
     require_empty_listing,
 )
+from platform_support import REQUIRES_BASH_4
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +89,7 @@ def test_rag25_config_matches_rag26_algorithm_after_normalizing_bindings() -> No
     assert rag25 == rag26
 
 
+@REQUIRES_BASH_4
 def test_wrapper_preflight_accepts_numeric_rag25_topic() -> None:
     result = subprocess.run(
         [
@@ -132,6 +134,7 @@ def _run_rag25_wrapper_preflight(*topic_ids: str) -> subprocess.CompletedProcess
     )
 
 
+@REQUIRES_BASH_4
 def test_wrapper_preflight_supports_two_unique_topics() -> None:
     result = _run_rag25_wrapper_preflight("14", "37")
 
@@ -152,6 +155,7 @@ def test_wrapper_preflight_supports_two_unique_topics() -> None:
         ) in result.stdout
 
 
+@REQUIRES_BASH_4
 def test_wrapper_rejects_duplicate_topic_selectors() -> None:
     result = _run_rag25_wrapper_preflight("14", "14")
 
@@ -693,6 +697,7 @@ def _live_processes_in_group(pgid: int) -> set[int]:
     return members
 
 
+@REQUIRES_BASH_4
 def test_wrapper_live_single_topic_behavior_is_preserved(tmp_path: Path) -> None:
     result, _, runtime, _ = _run_fake_live_wrapper(tmp_path, topic_ids=("31",))
 
@@ -705,6 +710,7 @@ def test_wrapper_live_single_topic_behavior_is_preserved(tmp_path: Path) -> None
     }
 
 
+@REQUIRES_BASH_4
 def test_wrapper_live_accepts_clean_transport_checkout_without_upstream(
     tmp_path: Path,
 ) -> None:
@@ -730,6 +736,7 @@ def test_wrapper_live_accepts_clean_transport_checkout_without_upstream(
     }
 
 
+@REQUIRES_BASH_4
 def test_wrapper_topic_14_ignores_a_preexisting_144_sibling(tmp_path: Path) -> None:
     result, _, runtime, run_id = _run_fake_live_wrapper(
         tmp_path,
@@ -752,6 +759,7 @@ def test_wrapper_topic_14_ignores_a_preexisting_144_sibling(tmp_path: Path) -> N
     } == {expected_run_path}
 
 
+@REQUIRES_BASH_4
 def test_wrapper_concurrent_topics_14_and_144_publish_exact_subtrees(
     tmp_path: Path,
 ) -> None:
@@ -777,6 +785,7 @@ def test_wrapper_concurrent_topics_14_and_144_publish_exact_subtrees(
     )
 
 
+@REQUIRES_BASH_4
 def test_wrapper_runs_two_isolated_parallel_topic_jobs_after_shared_setup(
     tmp_path: Path,
 ) -> None:
@@ -829,6 +838,7 @@ def test_wrapper_runs_two_isolated_parallel_topic_jobs_after_shared_setup(
         }
 
 
+@REQUIRES_BASH_4
 def test_failed_topic_does_not_prevent_successful_sibling_publication(
     tmp_path: Path,
 ) -> None:
@@ -853,6 +863,7 @@ def test_failed_topic_does_not_prevent_successful_sibling_publication(
     ]
 
 
+@REQUIRES_BASH_4
 def test_wrapper_termination_stops_and_reaps_all_topic_workers_before_publication(
     tmp_path: Path,
 ) -> None:
@@ -900,6 +911,7 @@ def test_wrapper_termination_stops_and_reaps_all_topic_workers_before_publicatio
         (127, "generated per-topic experiment ID exceeds 128 characters"),
     ],
 )
+@REQUIRES_BASH_4
 def test_wrapper_preflight_enforces_generated_experiment_id_boundary(
     topic_id_length: int,
     expected_message: str,
@@ -1054,6 +1066,7 @@ def test_dstack_shard_task_names_only_the_four_authorized_secrets() -> None:
     assert not any("TOKEN=" in entry and "secrets." not in entry for entry in env)
 
 
+@REQUIRES_BASH_4
 def test_wrapper_preflight_is_credential_free_and_reports_exact_nested_argv() -> None:
     before = subprocess.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
@@ -1123,6 +1136,7 @@ def test_wrapper_preflight_is_credential_free_and_reports_exact_nested_argv() ->
     )
 
 
+@REQUIRES_BASH_4
 def test_wrapper_preflight_rejects_a_topic_absent_from_the_config() -> None:
     result = subprocess.run(
         [
@@ -1146,6 +1160,7 @@ def test_wrapper_preflight_rejects_a_topic_absent_from_the_config() -> None:
     assert "absent from the configured topics" in result.stderr
 
 
+@REQUIRES_BASH_4
 def test_wrapper_preflight_rejects_nonignored_untracked_transport_files() -> None:
     candidate = REPO_ROOT / ".dstack-preflight-untracked-test"
     candidate.write_text("transport audit fixture\n", encoding="utf-8")
@@ -1180,6 +1195,7 @@ def test_wrapper_preflight_rejects_nonignored_untracked_transport_files() -> Non
         "configs/local/ignored-retrieval-config.yaml",
     ],
 )
+@REQUIRES_BASH_4
 def test_wrapper_rejects_configs_that_cannot_enter_the_committed_snapshot(
     config_arg: str,
 ) -> None:
@@ -1215,6 +1231,7 @@ def test_wrapper_rejects_configs_that_cannot_enter_the_committed_snapshot(
     assert "tracked, repository-relative config" in result.stderr
 
 
+@REQUIRES_BASH_4
 def test_wrapper_preflight_uses_only_the_locked_project_hf_cli(tmp_path: Path) -> None:
     restricted_bin = tmp_path / "bin"
     restricted_bin.mkdir()
@@ -1247,6 +1264,7 @@ def test_wrapper_preflight_uses_only_the_locked_project_hf_cli(tmp_path: Path) -
     assert "preflight=ok" in result.stdout
 
 
+@REQUIRES_BASH_4
 def test_wrapper_rejects_unlocked_uvx_hf_mode() -> None:
     env = os.environ.copy()
     env["HF_CLI_MODE"] = "uvx"
@@ -1424,6 +1442,7 @@ exec "$REAL_GIT" "$@"
     return fake_bin, observed
 
 
+@REQUIRES_BASH_4
 def test_launcher_couples_apply_to_a_clean_committed_only_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1572,6 +1591,7 @@ def test_dstack_transport_ignores_both_supported_secret_env_files() -> None:
         assert result.returncode == 0, f"{name} can enter dstack repo transport"
 
 
+@REQUIRES_BASH_4
 def test_wrapper_rejects_unsafe_identity_before_any_live_work() -> None:
     result = subprocess.run(
         [

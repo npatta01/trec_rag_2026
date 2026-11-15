@@ -4,6 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import trec_rag.facet_local_minilm_preflight as module
+from platform_support import REQUIRES_RERANKER_DEPENDENCIES
 
 
 class _Tokenizer:
@@ -70,6 +71,7 @@ def _candidate() -> dict[str, object]:
     }
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_preflight_uses_bounded_cache_lookup_for_window_hits() -> None:
     cache = _BoundedLookupCache()
 
