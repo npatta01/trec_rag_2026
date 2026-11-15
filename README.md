@@ -5,11 +5,11 @@ information needs over one fixed corpus, in at most 1,024 words, naming a source
 for every statement. Five of our files were accepted by Evalbase: three Retrieval
 runs and two Retrieval-Augmented Generation runs.
 
-<video src="https://github.com/user-attachments/assets/5f5ac373-8db3-4181-a78e-b0fc01096e75" controls></video>
+[![Watch the approach: one request split into eight angles, each becoming two BM25 queries, for sixteen searches in all.](reports/2026-trec-rag-approach-still.jpg)](https://npatta01.github.io/trec_rag_2026/#approach)
 
-**[▶ Watch it with sound](https://npatta01.github.io/trec_rag_2026/#approach)** —
-GitHub mutes video in a README. 87 seconds: what the track asks, then one real
-request all the way through the pipeline.
+**[▶ Watch the approach](https://npatta01.github.io/trec_rag_2026/#approach)** —
+87 seconds, with sound: what the track asks, then one real request all the way
+through the pipeline.
 
 ## [Project site →](https://npatta01.github.io/trec_rag_2026/)
 
@@ -18,7 +18,7 @@ request all the way through the pipeline.
 
 ## How the system works
 
-[![The NP Labs TREC RAG 2026 system: bounded source retrieval creates one authenticated source, which branches into three Retrieval submissions and two evidence-grounded RAG submissions.](reports/2026-competition-architecture/01-whole-system.svg)](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
+[![One official narrative becomes one authenticated frozen source, facet-deepseek-b40-v3, which branches into three Retrieval TSVs and two RAG JSONLs — the five files Evalbase accepted.](reports/2026-competition-architecture/00-system-at-a-glance.svg)](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
 
 One planning call splits a narrative into up to eight angles, and each angle
 becomes one to three BM25 queries over ClimbMix — at most 25 searches per topic.
