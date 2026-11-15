@@ -1,23 +1,115 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1120" role="img" aria-labelledby="matrix-title matrix-desc">
-  <title id="matrix-title">One targeted score matrix feeds three Retrieval orderings</title>
-  <desc id="matrix-desc">The shared candidate core is chunked and scored against the original narrative and every subnarrative. Cache-first Mixedbread scores form a complete targeted matrix and tied percentiles. Three ranking heads emit narrative plus subnarrative, evidence breadth, and narrative-only TSVs over identical document sets.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 716" role="img" aria-labelledby="runs-title runs-desc">
+  <title id="runs-title">Three orderings over one identical document set</title>
+  <desc id="runs-desc">One column on the left holds a narrative's candidate core as nine numbered documents. Three columns to the right hold the combo, breadth and narrative-only runs. Each right-hand column contains the same nine numbers in a different vertical order. Two documents are traced across all four columns with connecting lines to show that the membership never changes, only the rank. Every run emits 4,246 rows, and within a narrative the three files list the same documents.</desc>
   <style>
-    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7}
-    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616}}
-    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:33px;font-weight:700}.label{font-size:25px;font-weight:700}.body{font-size:21px}.small{font-size:18px}.muted{fill:var(--muted)}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}.adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.flow{fill:none;stroke:var(--ret);stroke-width:3;marker-end:url(#arrow)}
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--hair:#cdd8d1;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--hair:#2f3b35;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .h{font-size:25px;font-weight:700}
+    .col{font-size:19px;font-weight:700}
+    .s{font-size:16px;fill:var(--muted)}
+    .mono{font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--muted)}
+    .chip{fill:var(--panel);stroke:var(--hair);stroke-width:2}
+    .chipnum{font-size:16px;font-weight:650;fill:var(--muted)}
+    .t1{stroke:var(--ret);stroke-width:3;fill:var(--ret-soft)}
+    .t1n{font-size:16px;font-weight:800;fill:var(--ret)}
+    .t2{stroke:var(--adv);stroke-width:3;fill:var(--adv-soft)}
+    .t2n{font-size:16px;font-weight:800;fill:var(--adv)}
+    .trace1{fill:none;stroke:var(--ret);stroke-width:2;opacity:.55}
+    .trace2{fill:none;stroke:var(--adv);stroke-width:2;stroke-dasharray:6 4;opacity:.65}
+    .rule{stroke:var(--hair);stroke-width:2}
   </style>
-  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
-  <rect width="800" height="1120" fill="var(--bg)"/><text class="title" x="400" y="54" text-anchor="middle">Eligibility stays fixed; only order changes</text>
-  <rect class="ret" x="105" y="100" width="590" height="100" rx="9"/><text class="label" x="400" y="143" text-anchor="middle">Shared candidate core</text><text class="body muted" x="400" y="177" text-anchor="middle">4,246 topic–document pairs across 119 narratives</text>
-  <path class="flow" d="M400 200V255" vector-effect="non-scaling-stroke"/>
-  <rect class="stage" x="75" y="265" width="650" height="130" rx="9"/><text class="label" x="400" y="310" text-anchor="middle">Targeted candidate × semantic-unit matrix</text><text class="body" x="400" y="350" text-anchor="middle">original narrative + every subnarrative</text><text class="small muted" x="400" y="378" text-anchor="middle">documents → overlapping passages</text>
-  <path class="flow" d="M400 395V450" vector-effect="non-scaling-stroke"/>
-  <rect class="adv" x="75" y="460" width="650" height="130" rx="9"/><text class="label" x="400" y="505" text-anchor="middle">Cache-first Mixedbread completion</text><text class="body" x="400" y="545" text-anchor="middle">167,597 cached query–passage scores</text><text class="small muted" x="400" y="573" text-anchor="middle">zero misses • zero model batches</text>
-  <path class="flow" d="M400 590V650" vector-effect="non-scaling-stroke"/>
-  <rect class="stage" x="105" y="660" width="590" height="100" rx="9"/><text class="label" x="400" y="704" text-anchor="middle">Passage aggregation + tied percentiles</text><text class="small muted" x="400" y="738" text-anchor="middle">same candidate set remains eligible</text>
-  <path class="flow" d="M400 760V820H140V855M400 820V855M400 820H660V855" vector-effect="non-scaling-stroke"/>
-  <rect class="ret" x="25" y="865" width="230" height="180" rx="9"/><text class="label" x="140" y="910" text-anchor="middle">Combo</text><text class="small" x="140" y="950" text-anchor="middle">narrative + facets</text><text class="small muted" x="140" y="985" text-anchor="middle">r26-narr-facet-v1</text><text class="small muted" x="140" y="1018" text-anchor="middle">4,246 rows</text>
-  <rect class="ret" x="285" y="865" width="230" height="180" rx="9"/><text class="label" x="400" y="910" text-anchor="middle">Breadth</text><text class="small" x="400" y="950" text-anchor="middle">facets + strong passages</text><text class="small muted" x="400" y="985" text-anchor="middle">r26-facet-breadth-v1</text><text class="small muted" x="400" y="1018" text-anchor="middle">4,246 rows</text>
-  <rect class="ret" x="545" y="865" width="230" height="180" rx="9"/><text class="label" x="660" y="910" text-anchor="middle">Narrative</text><text class="small" x="660" y="950" text-anchor="middle">original percentile</text><text class="small muted" x="660" y="985" text-anchor="middle">r26-narrative-v1</text><text class="small muted" x="660" y="1018" text-anchor="middle">4,246 rows</text>
-  <text class="body" x="400" y="1090" text-anchor="middle">Three accepted TSVs • identical per-narrative document sets</text>
+
+  <rect width="980" height="716" fill="var(--bg)"/>
+  <text class="h" x="40" y="46">The order changes. The set does not.</text>
+  <text class="s" x="40" y="78">Every candidate is scored against the untouched narrative and every subnarrative; the three heads read that one matrix.</text>
+  <text class="col" x="120" y="122" text-anchor="middle">the candidate core</text>
+  <text class="s" x="120" y="146" text-anchor="middle">one narrative</text>
+  <rect class="chip" x="45" y="168" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="120" y="194" text-anchor="middle">document 1</text>
+  <rect class="chip" x="45" y="218" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="120" y="244" text-anchor="middle">document 2</text>
+  <rect class="chip t1" x="45" y="268" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t1n" x="120" y="294" text-anchor="middle">document 3</text>
+  <rect class="chip" x="45" y="318" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="120" y="344" text-anchor="middle">document 4</text>
+  <rect class="chip" x="45" y="368" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="120" y="394" text-anchor="middle">document 5</text>
+  <rect class="chip" x="45" y="418" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="120" y="444" text-anchor="middle">document 6</text>
+  <rect class="chip t2" x="45" y="468" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t2n" x="120" y="494" text-anchor="middle">document 7</text>
+  <rect class="chip" x="45" y="518" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="120" y="544" text-anchor="middle">document 8</text>
+  <rect class="chip" x="45" y="568" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="120" y="594" text-anchor="middle">document 9</text>
+  <text class="col" x="400" y="122" text-anchor="middle">combo</text>
+  <text class="mono" x="400" y="146" text-anchor="middle">r26-narr-facet-v1</text>
+  <rect class="chip t1" x="325" y="168" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t1n" x="400" y="194" text-anchor="middle">document 3</text>
+  <rect class="chip" x="325" y="218" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="400" y="244" text-anchor="middle">document 1</text>
+  <rect class="chip" x="325" y="268" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="400" y="294" text-anchor="middle">document 6</text>
+  <rect class="chip" x="325" y="318" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="400" y="344" text-anchor="middle">document 2</text>
+  <rect class="chip" x="325" y="368" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="400" y="394" text-anchor="middle">document 9</text>
+  <rect class="chip" x="325" y="418" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="400" y="444" text-anchor="middle">document 4</text>
+  <rect class="chip t2" x="325" y="468" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t2n" x="400" y="494" text-anchor="middle">document 7</text>
+  <rect class="chip" x="325" y="518" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="400" y="544" text-anchor="middle">document 5</text>
+  <rect class="chip" x="325" y="568" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="400" y="594" text-anchor="middle">document 8</text>
+  <text class="col" x="620" y="122" text-anchor="middle">breadth</text>
+  <text class="mono" x="620" y="146" text-anchor="middle">r26-facet-breadth-v1</text>
+  <rect class="chip" x="545" y="168" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="620" y="194" text-anchor="middle">document 6</text>
+  <rect class="chip t1" x="545" y="218" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t1n" x="620" y="244" text-anchor="middle">document 3</text>
+  <rect class="chip" x="545" y="268" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="620" y="294" text-anchor="middle">document 9</text>
+  <rect class="chip" x="545" y="318" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="620" y="344" text-anchor="middle">document 1</text>
+  <rect class="chip t2" x="545" y="368" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t2n" x="620" y="394" text-anchor="middle">document 7</text>
+  <rect class="chip" x="545" y="418" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="620" y="444" text-anchor="middle">document 2</text>
+  <rect class="chip" x="545" y="468" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="620" y="494" text-anchor="middle">document 4</text>
+  <rect class="chip" x="545" y="518" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="620" y="544" text-anchor="middle">document 8</text>
+  <rect class="chip" x="545" y="568" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="620" y="594" text-anchor="middle">document 5</text>
+  <text class="col" x="840" y="122" text-anchor="middle">narrative</text>
+  <text class="mono" x="840" y="146" text-anchor="middle">r26-narrative-v1</text>
+  <rect class="chip" x="765" y="168" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="840" y="194" text-anchor="middle">document 1</text>
+  <rect class="chip t1" x="765" y="218" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t1n" x="840" y="244" text-anchor="middle">document 3</text>
+  <rect class="chip" x="765" y="268" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="840" y="294" text-anchor="middle">document 2</text>
+  <rect class="chip" x="765" y="318" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="840" y="344" text-anchor="middle">document 5</text>
+  <rect class="chip" x="765" y="368" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="840" y="394" text-anchor="middle">document 4</text>
+  <rect class="chip" x="765" y="418" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="840" y="444" text-anchor="middle">document 9</text>
+  <rect class="chip" x="765" y="468" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="840" y="494" text-anchor="middle">document 6</text>
+  <rect class="chip t2" x="765" y="518" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="t2n" x="840" y="544" text-anchor="middle">document 7</text>
+  <rect class="chip" x="765" y="568" width="150" height="40" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="chipnum" x="840" y="594" text-anchor="middle">document 8</text>
+  <path class="trace1" d="M195 288.0 C235 288.0 285 188.0 325 188.0" vector-effect="non-scaling-stroke"/>
+  <path class="trace1" d="M475 188.0 C515 188.0 505 238.0 545 238.0" vector-effect="non-scaling-stroke"/>
+  <path class="trace1" d="M695 238.0 C735 238.0 725 238.0 765 238.0" vector-effect="non-scaling-stroke"/>
+  <path class="trace2" d="M195 488.0 C235 488.0 285 488.0 325 488.0" vector-effect="non-scaling-stroke"/>
+  <path class="trace2" d="M475 488.0 C515 488.0 505 388.0 545 388.0" vector-effect="non-scaling-stroke"/>
+  <path class="trace2" d="M695 388.0 C735 388.0 725 538.0 765 538.0" vector-effect="non-scaling-stroke"/>
+  <line class="rule" x1="40" y1="630" x2="940" y2="630" vector-effect="non-scaling-stroke"/>
+  <text class="s" x="40" y="654">Two documents are traced across the three runs. Their rank moves; their membership does not.</text>
+  <text class="s" x="40" y="682">4,246 rows per run · identical per-narrative document sets · depth 1–121</text>
 </svg>

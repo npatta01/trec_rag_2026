@@ -375,14 +375,49 @@ for (const figure of figures) {
   assert(html.includes(figure), `Rendered report should link directly to ${figure}`);
 }
 
-assert(
-  (qmd.match(/\*\*Text equivalent:\*\*/g) || []).length === 9,
-  "QMD should contain nine visible text equivalents",
-);
-assert(
-  (html.match(/<strong>Text equivalent:<\/strong>/g) || []).length === 9,
-  "Rendered report should contain nine visible text equivalents",
-);
+// Each figure used to be followed by a "Text equivalent" paragraph that said
+// the same thing as its alt text, nine times over. The alt text is the text
+// equivalent — a screen reader reaches it and a sighted reader never has to
+// read the diagram twice — so the contract is on the alt text itself: every
+// figure carries one, it describes the mechanism rather than naming the
+// picture, and the rendered page keeps it.
+for (const figure of figures) {
+  const image = new RegExp(
+    `!\\[([^\\]]+)\\]\\(2026-competition-architecture/${escapeRegExp(figure)}\\)\\{([^}]*)\\}`,
+  ).exec(qmd);
+  assert(image, `${figure} should be introduced by a markdown image with attributes`);
+  const caption = image[1].replace(/\s+/g, " ").trim();
+  const figAlt = /fig-alt="([^"]+)"/.exec(image[2]);
+  assert(figAlt, `${figure} should carry an explicit fig-alt text equivalent`);
+  const alt = figAlt[1].replace(/\s+/g, " ").trim();
+
+  assert(
+    alt.length >= 180,
+    `${figure} fig-alt is ${alt.length} characters; it has to stand in for the figure, not label it`,
+  );
+  assert(
+    !/^(a |an |the )?(diagram|figure|image|chart)\b/i.test(alt),
+    `${figure} fig-alt should describe what happens, not announce a diagram`,
+  );
+  assert(
+    caption.length <= 90,
+    `${figure} caption is ${caption.length} characters; the long description belongs in fig-alt`,
+  );
+  // The rendered alt attribute is HTML-escaped and may be smart-quoted, so an
+  // apostrophe in the source comes back as &#39; or a curly quote. Compare with
+  // entities decoded and quotes normalised.
+  const plain = (v) =>
+    v
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"');
+  assert(
+    plain(html).includes(plain(alt).slice(0, 60)),
+    `${figure} fig-alt should survive into the rendered report`,
+  );
+}
 assert(
   (qmd.match(/<details>/g) || []).length >= 9 &&
     (qmd.match(/<summary>Implementation notes and sources<\/summary>/g) || []).length >= 9,
