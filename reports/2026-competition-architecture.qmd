@@ -32,11 +32,9 @@ provider response, or generated answer.
 [Open the project artifact hub](../index.html) or go straight to the
 [submission ledger](../submissions/trec-rag-2026/SUBMISSION_LEDGER.md).
 
-One thing is worth saying before anything else, because it is the shape of the
-whole system and it is easy to assume otherwise: **The Retrieval TSV is not
-Generation input.** We froze a single retrieval run. One branch replays it to
-rank documents. A separate branch hands sealed evidence to the answer writers.
-Neither branch opens the other's output.
+**The Retrieval TSV is not Generation input.** We froze one retrieval run. One
+branch replays it to rank documents; the other hands sealed evidence to the
+answer writers. Neither opens the other's output.
 
 ### How to read every image {.unnumbered}
 
@@ -54,28 +52,21 @@ all of them.
 
 # Frozen source, two submission branches {#whole-system}
 
-::: {.takeaway}
-**Takeaway:** One retrieval run is the fork in the road. What comes out of it are
-two sibling submissions, not a pipeline that runs Retrieval first and feeds RAG
-second.
-:::
-
 ![One source retrieval run, two sibling submission branches.](2026-competition-architecture/01-whole-system.svg){#fig-whole-system fig-alt="An official narrative enters bounded source retrieval and produces the authenticated facet-deepseek-b40-v3 source. One branch creates a robust variable-depth candidate core and three Retrieval TSVs. A separate sealed selected-evidence handoff feeds single-pass and multi-stage RAG, producing two JSONLs. All five files pass local validation and are accepted by Evalbase."}
 
 [Open the reusable whole-system SVG](2026-competition-architecture/01-whole-system.svg){.figure-source}
 
 The frozen source is called `facet-deepseek-b40-v3`. It holds what one retrieval
 run produced: the plan, the BM25 results, the neural passage scores, the passages
-we selected, and the claim hints generated beside them. Nothing was added to it
-afterwards.
+we selected, and the claim hints written beside them. Nothing was added after it
+froze.
 
-From there the two branches do different work. The Retrieval branch reopens only
-the authenticated lanes and the cached scores, and uses them to decide which
+The two branches then do different work with it. The Retrieval branch reopens the
+authenticated lanes and the cached scores, and uses them to decide which
 documents each narrative should rank and in what order. The RAG branch takes a
-separate, purpose-built handoff of selected evidence and never opens a finished
-Retrieval run at all.
+separate handoff of selected evidence and never opens a finished Retrieval run.
 
-They diverge because the two tasks ask different questions. Retrieval asks which
+They diverge because the tasks ask different questions. Retrieval asks which
 ClimbMix documents deserve to be ranked as useful evidence. RAG asks for a cited
 answer from a system that has already done its own retrieval. Sharing a source
 does not make one organizer file the other's runtime input.
@@ -95,33 +86,27 @@ does not make one organizer file the other's runtime input.
 
 # The search widens once, then stops {#source-retrieval}
 
-::: {.takeaway}
-**Takeaway:** The source run widens the search a single time, puts every query
-through the same ceilings, and freezes the passages it selected before either
-branch touches them.
-:::
-
 ![Every query lane crosses the same ceilings before the source freezes.](2026-competition-architecture/02-frozen-source-retrieval.svg){#fig-source-retrieval fig-alt="The untouched narrative and bounded DeepSeek subnarratives create query lanes. Every lane searches the climbmix-400b BM25 index through Pyserini, chunks returned documents, scores passages with the Mixedbread cross-encoder, selects exact evidence, and creates advisory hints before the source artifact is frozen."}
 
 [Open the reusable source-retrieval SVG](2026-competition-architecture/02-frozen-source-retrieval.svg){.figure-source}
 
-An official narrative is long — a paragraph of situation followed by several
-questions — and it is almost never one search. So the narrative itself always
-gets a lane, untouched, and one call to
-`deepseek/deepseek-v4-flash-20260423` may add up to eight focused
-subnarratives, each carrying one to three BM25 queries. That caps a topic at 25
-searches including the original lane. There is no loop back from results to
-planning.
+An official narrative is a paragraph of situation followed by several questions,
+and one query rarely covers it. The narrative always gets a lane of its own,
+untouched. One call to `deepseek/deepseek-v4-flash-20260423` may add up to eight
+focused subnarratives, each carrying one to three BM25 queries, which caps a
+topic at 25 searches including the original lane. Results never go back to the
+planner.
 
-Each query may pull at most 1,000 documents from the Pyserini REST
-`climbmix-400b` index. A document is not a unit a reranker can score, so
-documents become overlapping chunks of `3500 characters` with `350-character
-overlap`. The pinned `mixedbread-ai/mxbai-rerank-base-v2` cross-encoder scores
-each query–passage pair, and the run keeps at most 100 passages per focused
-query before local selection narrows them further. A one-shot Nuggetizer stage
-then writes advisory claim hints beside the evidence. Selected passages are
-factual authority. Canonical claim hints are advisory: they suggest what an
-answer should cover and are never citable themselves.
+Each query pulls at most 1,000 documents from the Pyserini REST `climbmix-400b`
+index. A reranker cannot score a whole document, so documents become overlapping
+chunks of `3500 characters` with `350-character overlap`. The pinned
+`mixedbread-ai/mxbai-rerank-base-v2` cross-encoder scores each query–passage
+pair, and the run keeps at most 100 passages per focused query. Local selection
+narrows those into the evidence that freezes.
+
+A one-shot Nuggetizer stage writes advisory claim hints beside that evidence.
+Selected passages are factual authority. Canonical claim hints are advisory: they
+suggest what an answer should cover and are never citable.
 
 <details><summary>Implementation notes and sources</summary>
 
@@ -141,25 +126,19 @@ answer should cover and are never citable themselves.
 
 # Planning stays one-shot {#planning}
 
-::: {.takeaway}
-**Takeaway:** DeepSeek V4 Flash may widen the search. It cannot start a second
-round, and it cannot remove the original narrative.
-:::
-
 ![One planner call, with no path from results back to planning.](2026-competition-architecture/03-bounded-deepseek-planning.svg){#fig-planning fig-alt="One DeepSeek V4 Flash request receives the complete narrative. The original lane remains. Zero to eight subnarratives may each propose one to three BM25 queries. Schema or semantic failure falls back to the original lane, and no retrieved result returns to the planner."}
 
 [Open the reusable bounded-planning SVG](2026-competition-architecture/03-bounded-deepseek-planning.svg){.figure-source}
 
 The planner's job is breadth: break a long information need into search-shaped
-pieces. It is good at that and it is not an authority on anything. The code owns
-the limits, keeps the original narrative whatever the planner returns, validates
-the structured plan, and falls back to the original lane alone when the plan does
-not parse or does not make sense.
+pieces. The code owns the limits around it. It keeps the original narrative
+whatever the planner returns, validates the structured plan, and falls back to
+the original lane alone when the plan does not parse or does not make sense.
 
 For the Retrieval replay, each authenticated `facet:<subnarrative>:text` lane
 counts as one pooled source. We do not treat the individual planned query strings
 as separate pools after the fact, because the frozen artifact did not keep their
-results apart. The replay only claims what the provenance can support.
+results apart. The replay claims only what the provenance supports.
 
 <details><summary>Implementation notes and sources</summary>
 
@@ -174,21 +153,14 @@ results apart. The replay only claims what the provenance can support.
 
 # How deep each Retrieval run goes {#candidate-core}
 
-::: {.takeaway}
-**Takeaway:** Depth comes from the evidence, not from a round number. Each lane
-admits its own outliers, the union becomes the candidate core, and nothing is
-padded to reach a cutoff.
-:::
-
 ![Each lane admits its own outliers; their union sets the depth.](2026-competition-architecture/04-variable-depth-candidate-core.svg){#fig-candidate-core fig-alt="Each authenticated source lane computes its median aggregate score and median absolute deviation. Documents above the robust lane threshold are admitted. The original and all subnarrative admissions form an inclusive union. An empty union would retain the best original-lane document. The observed final depth ranges from one to 121 documents."}
 
 [Open the reusable candidate-core SVG](2026-competition-architecture/04-variable-depth-candidate-core.svg){.figure-source}
 
-A fixed depth of 100 would be a guess about every narrative at once. Instead each
-lane asks which of its own documents stand out from its own distribution. For
-lane (u), with (A_u(d)) a document's finite aggregate score, (m_u) the lane
-median, and (mathrm{MAD}_u) the median absolute deviation, a document is admitted
-when:
+Depth is decided per narrative, by asking each lane which of its own documents
+stand out from its own distribution. For lane (u), with (A_u(d)) a document's
+finite aggregate score, (m_u) the lane median, and (mathrm{MAD}_u) the median
+absolute deviation, a document is admitted when:
 
 ```text
 MAD > 0: A(d) >= median + 2.5 × 1.4826 × MAD
@@ -217,22 +189,17 @@ Retrieval runs share one core per narrative.
 
 # Three orderings, one candidate set {#retrieval-runs}
 
-::: {.takeaway}
-**Takeaway:** The three Retrieval runs change the order of the same documents and
-nothing else, which is what makes comparing them mean anything.
-:::
-
 ![One scored matrix, three orderings over identical document sets.](2026-competition-architecture/05-targeted-scoring-and-runs.svg){#fig-retrieval-runs fig-alt="The shared candidate core is chunked and scored against the untouched narrative and every subnarrative. Cached Mixedbread scores complete one targeted matrix. Percentiles feed three orderings: narrative plus subnarrative, evidence breadth, and narrative only. All three emit the same narrative-specific document sets."}
 
 [Open the reusable targeted-scoring SVG](2026-competition-architecture/05-targeted-scoring-and-runs.svg){.figure-source}
 
 Every candidate document is scored against the untouched narrative and against
-every subnarrative. Overlapping passage scores are suppressed, then the best four
-retained passages are weighted 0.55, 0.25, 0.13, and 0.07 and turned into tied
-percentiles within each narrative and semantic unit. The replay needed 167,597
-cached query–passage scores and ran no model batches at all: zero cache misses.
+every subnarrative. Overlapping passage scores are suppressed, the best four
+retained passages are weighted 0.55, 0.25, 0.13 and 0.07, and the result becomes
+tied percentiles within each narrative and semantic unit. The replay read 167,597
+cached query–passage scores and ran no model batches: zero cache misses.
 
-The three accepted orderings are:
+Three orderings read that one matrix:
 
 1. **Narrative + subnarrative — `r26-narr-facet-v1`.** A 50/50 blend of the
    narrative percentile and a facet score built from the best two subnarrative
@@ -243,8 +210,9 @@ The three accepted orderings are:
 3. **Narrative only — `r26-narrative-v1`.** Narrative percentile, then source
    rank, then document ID.
 
-Each file has 4,246 rows. Within a narrative the three files list exactly the
-same documents; only the ranking moves.
+Each file has 4,246 rows. Within a narrative the three files list the same
+documents and only the ranking moves, which is what makes comparing them mean
+anything.
 
 <details><summary>Implementation notes and sources</summary>
 
@@ -259,27 +227,22 @@ same documents; only the ranking moves.
 
 # What Generation is allowed to see {#handoff}
 
-::: {.takeaway}
-**Takeaway:** The handoff is the trust boundary. Generation authenticates it and
-can open nothing else — not the sibling Retrieval files, not evaluation material.
-:::
-
 ![What the handoff carries, and the five artifacts it bars.](2026-competition-architecture/06-generation-handoff-contract.svg){#fig-handoff fig-alt="The sealed generation handoff contains the exact narrative, 691 evidence groups across 119 topics, selected passages, advisory hints, allowed ClimbMix citation IDs, source receipts, and hashes. Single-pass and multi-stage generation authenticate it. The Retrieval TSV, full-text ZIP, qrels, gold nuggets, and RAGDoll scores are barred."}
 
 [Open the reusable handoff-contract SVG](2026-competition-architecture/06-generation-handoff-contract.svg){.figure-source}
 
-`generation_handoff_manifest.json` and its topic payloads carry 119 topics and
-691 evidence groups. Each topic binds its exact narrative, the selected passages,
-the advisory claim hints, the allowed citation domain, and the source receipts,
-all through canonical serialization and hashes. Anything malformed,
-contradictory, non-canonical, or unauthenticated fails the load rather than
-degrading quietly.
+Generation opens one file. `generation_handoff_manifest.json` and its topic
+payloads hold 119 topics and 691 evidence groups; each topic carries its exact
+narrative, the passages selected for it, the advisory claim hints, the allowed
+citation domain, and the receipts from the source run. Canonical serialization
+and hashes bind those together, so a payload that is malformed, contradictory,
+non-canonical or unauthenticated fails the load instead of arriving with a piece
+missing.
 
-Five things are barred from Generation, and it is worth naming them: the accepted
-Retrieval TSV, the source full-text ZIP, qrels, gold nuggets, and RAGDoll scores.
-The first two are the sibling branch's own output. The last three are evaluation
-or gold material, and a system that reads them is no longer answering the
-question the track asked.
+Five artifacts are kept out of reach: the accepted Retrieval TSV, the source
+full-text ZIP, qrels, gold nuggets, and RAGDoll scores. The first two belong to
+the sibling branch. The last three are the answer key and a judgment of our own
+output.
 
 <details><summary>Implementation notes and sources</summary>
 
@@ -294,28 +257,24 @@ question the track asked.
 
 # Single-pass RAG {#single-pass}
 
-::: {.takeaway}
-**Takeaway:** Sol sees all of the authenticated evidence at once, writes one
-structured answer, and gets at most one more attempt if local validation rejects
-it.
-:::
-
 ![Sol writes once; local validation decides whether it ships.](2026-competition-architecture/07-single-pass-rag.svg){#fig-single-pass fig-alt="The authenticated handoff becomes one deterministic selected-evidence prompt for GPT-5.6 Sol. Sol uses medium reasoning, strict structured output, and a 12,000-token ceiling. Local validation checks exact narrative metadata, the allowed citation domain, reference uniqueness, exact-hint citations, and the 1,024-word ceiling before publishing rag26-ss1."}
 
 [Open the reusable single-pass SVG](2026-competition-architecture/07-single-pass-rag.svg){.figure-source}
 
-This is the simpler of the two strategies, and it is the one to understand first.
-`openai/gpt-5.6-sol` runs with medium reasoning, strict structured output, no
-explicit temperature, a **12,000-token ceiling**, and four topics in flight at a
-time. The handoff is rendered deterministically into one prompt, and Sol returns
-organizer-shaped answer objects citing raw allowed ClimbMix document IDs.
+One model sees all of the evidence at once. `openai/gpt-5.6-sol` runs with medium
+reasoning, strict structured output, no explicit temperature, a **12,000-token
+ceiling**, and four topics in flight. The handoff is rendered deterministically
+into one prompt, and Sol returns organizer-shaped answer objects citing raw
+allowed ClimbMix document IDs.
 
-Then local code checks the result: the exact topic and narrative, the required
+Local code then checks the result: the exact topic and narrative, the required
 metadata, the answer structure, unique references, the allowed citation domain,
-the exact-hint citation rules, and the **1,024-word ceiling**. Two of 119 topics
-needed the configured second attempt. The accepted `rag26-ss1` file took 121 Sol
-calls and cost $52.14302500 as reported by the provider. Its answers run from 203
-to 749 words with 10 to 40 references.
+the exact-hint citation rules, and the **1,024-word ceiling**. A rejection buys
+one more attempt and no more. Two of 119 topics used it.
+
+The accepted `rag26-ss1` file took 121 Sol calls and cost $52.14302500 as
+reported by the provider. Its answers run from 203 to 749 words with 10 to 40
+references.
 
 <details><summary>Implementation notes and sources</summary>
 
@@ -331,29 +290,24 @@ to 749 words with 10 to 40 references.
 
 # Multi-stage RAG {#multi-stage}
 
-::: {.takeaway}
-**Takeaway:** A second model spends bounded effort on coverage and on whether an
-edit is safe. If any of that work fails, the validated draft is what ships.
-:::
-
 ![Luna plans and screens, Sol writes, local code applies only what passed.](2026-competition-architecture/08-multistage-rag.svg){#fig-multi-stage fig-alt="Luna creates a narrative blueprint and audits each authenticated evidence group. Sol writes a structured draft, then may propose a bounded splice revision. Luna screens proposed operations for support, atomicity, materiality, redundancy, and replacement safety. Local code applies only accepted operations; malformed or rejected work preserves the validated draft. Final validation publishes rag26-ms1-final."}
 
 [Open the reusable multi-stage SVG](2026-competition-architecture/08-multistage-rag.svg){.figure-source}
 
-The same sealed evidence goes to two models instead of one.
-`openai/gpt-5.6-luna` writes a compact narrative blueprint, audits each
-authenticated evidence group once, and optionally screens proposed edits.
-`openai/gpt-5.6-sol` writes the draft and may propose one bounded splice
-revision. The normal ceiling is two Sol reservations, draft and revision, with a
-third allowed only to repair a deterministic validation failure.
+The same sealed evidence goes to two models. `openai/gpt-5.6-luna` writes a
+compact narrative blueprint, audits each authenticated evidence group once, and
+optionally screens the edits Sol proposes. `openai/gpt-5.6-sol` writes the draft
+and may propose one bounded splice revision. The normal ceiling is two Sol
+reservations, draft and revision; a third is allowed only to repair a
+deterministic validation failure.
 
-Every boundary belongs to local code, not to either model. The blueprint has to
-anchor its obligations to the narrative and to authenticated evidence. Revision
-operations are indexed against the immutable draft and have to fit hard
-insertion, replacement, citation, and word budgets. Luna's screen asks five
-questions of each operation — support, atomicity, materiality, redundancy,
-replacement safety — and only the operations that pass are applied. Anything
-malformed, ambiguous, or unsafe leaves the already validated draft standing.
+Every boundary belongs to local code. The blueprint must anchor its obligations
+to the narrative and to authenticated evidence. Revision operations are indexed
+against the immutable draft and must fit hard insertion, replacement, citation
+and word budgets. Luna's screen asks five questions of each operation — support,
+atomicity, materiality, redundancy, replacement safety — and only operations that
+pass all five are applied. Anything malformed, ambiguous or unsafe leaves the
+already validated draft standing.
 
 The accepted `rag26-ms1-final` run made 894 Luna calls and 264 Sol calls, 1,158
 provider calls in all, at a provider-reported cost of $50.423054730. Six planner
@@ -376,11 +330,6 @@ from 531 to 1,011 words with 14 to 136 references.
 </details>
 
 # Five accepted organizer files {#accepted-artifacts}
-
-::: {.takeaway}
-**Takeaway:** Each accepted file is tracked at the exact bytes we submitted, with
-one ledger tying run identity, validation result, priority, and SHA-256 together.
-:::
 
 ![Five files through task-specific validation and an exact-hash gate.](2026-competition-architecture/09-accepted-submissions.svg){#fig-accepted fig-alt="Three Retrieval TSV files and two RAG JSONL files pass task-specific validation. Retrieval checks cover six fields, exact topics, dense ranks, finite non-increasing scores, unique ClimbMix document IDs, and stable run IDs. RAG uses organizer AutoJudge for schema, topics, narratives, citations, and word limits. SHA-256 comparison protects the exact accepted bytes."}
 
@@ -452,17 +401,12 @@ hash matched the ledger and both bundle metadata records.
 
 # Final analysis reports {#final-analysis-reports}
 
-::: {.takeaway}
-**Takeaway:** Three analyses exist. None of them is an official score, and none of
-them changed what we submitted.
-:::
-
-There is one tracked 119-topic Retrieval quality analysis, and two separate
-119-topic RAGDoll citation-support reports, one per accepted RAG run. RAGDoll
-measures citation support, not official TREC correctness: it asks whether a
-statement is backed by the passage it points at. qrel/gold metrics are
-unavailable. The evaluation did not influence accepted priority — the accepted
-files and their recorded priorities are unchanged.
+Three analyses sit beside the accepted files: one tracked 119-topic Retrieval
+quality analysis, and two separate 119-topic RAGDoll citation-support reports,
+one per accepted RAG run. RAGDoll measures citation support, not official TREC
+correctness: it asks whether a statement is backed by the passage it points at.
+qrel/gold metrics are unavailable. The evaluation did not influence accepted
+priority — the accepted files and their recorded priorities are unchanged.
 
 ::: {.artifact-grid}
 ::: {.artifact-card}
@@ -498,15 +442,15 @@ the standalone HTML is generated from it with Quarto 1.9.38. The diagrams and
 their source map live in
 [`reports/2026-competition-architecture/`](2026-competition-architecture/README.md).
 
-Verified here: the architecture boundaries, the aggregate source and submission
-counts, the model and call identities recorded in checked-in metadata, the
-organizer-format validation, the exact accepted-file hashes, and which artifact
-belongs to which branch.
+What the repository can check, and this report therefore states: the architecture
+boundaries, the aggregate source and submission counts, the model and call
+identities recorded in checked-in metadata, the organizer-format validation, the
+exact accepted-file hashes, and which artifact belongs to which branch.
 
-Not claimed here: official effectiveness scores, that any of the five runs beats
-another, or fresh validation of the private handoff that is not in this
-repository. Acceptance means the files were delivered in valid form. It says
-nothing about how good they are.
+What it cannot check: official effectiveness scores, whether any of the five runs
+beats another, or the private handoff, which is not in this repository.
+Acceptance means the files were delivered in valid form. It says nothing about
+how good they are.
 
 The project is finished. The historical specifications and experiment reports are
 provenance worth keeping, not a list of work still to do.
