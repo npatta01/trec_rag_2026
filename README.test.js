@@ -25,7 +25,8 @@ const required = [
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
   "reports/2026-trec-rag-talk.html",
   "## How the system works",
-  "reports/2026-competition-architecture/01-whole-system.svg",
+  // the compact landscape view, not the report's tall whole-system figure
+  "reports/2026-competition-architecture/00-system-at-a-glance.svg",
   "2026-competition-architecture.html",
   "## What is in the repo",
   "## Checks",
@@ -39,8 +40,14 @@ for (const value of required) {
 // The film and the system diagram are the two pictures; the film comes first
 // because it is the thing somebody can watch without deciding to read.
 assert(
-  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("01-whole-system.svg"),
+  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("00-system-at-a-glance.svg"),
   "the film should sit above the architecture diagram",
+);
+// A README figure has to be glanceable. The report's own whole-system diagram
+// is 800x1180 and runs ~900px down a README column before anything else shows.
+assert(
+  !source.includes("01-whole-system.svg"),
+  "the README takes the landscape figure; the tall one belongs to the report",
 );
 assert(
   source.indexOf("Project site") < source.indexOf("## What is in the repo"),
