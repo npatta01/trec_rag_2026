@@ -25,7 +25,7 @@ const required = [
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
   "reports/2026-trec-rag-talk.html",
   "## How the system works",
-  "reports/2026-competition-architecture/01-whole-system.svg",
+  "reports/2026-competition-architecture/00-pipeline.svg",
   "2026-competition-architecture.html",
   "## What is in the repo",
   "## Checks",
@@ -39,7 +39,7 @@ for (const value of required) {
 // The film and the system diagram are the two pictures; the film comes first
 // because it is the thing somebody can watch without deciding to read.
 assert(
-  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("01-whole-system.svg"),
+  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("00-pipeline.svg"),
   "the film should sit above the architecture diagram",
 );
 
@@ -48,7 +48,7 @@ assert(
 // this figure buried its own conclusion. Keep it wider than it is tall, and
 // keep its alt text a real description rather than a label.
 const figure = fs.readFileSync(
-  path.join(root, "reports/2026-competition-architecture/01-whole-system.svg"),
+  path.join(root, "reports/2026-competition-architecture/00-pipeline.svg"),
   "utf8",
 );
 const viewBox = /viewBox="0 0 (\d+) (\d+)"/.exec(figure);
@@ -58,7 +58,7 @@ assert(
   fw / fh >= 1.4,
   `the README figure is ${fw}x${fh}; a figure here has to be wider than it is tall`,
 );
-const readmeAlt = /!\[([^\]]+)\]\(reports\/2026-competition-architecture\/01-whole-system\.svg\)/.exec(source);
+const readmeAlt = /!\[([^\]]+)\]\(reports\/2026-competition-architecture\/00-pipeline\.svg\)/.exec(source);
 assert(readmeAlt, "the README figure needs alt text");
 assert(
   readmeAlt[1].length >= 180,
