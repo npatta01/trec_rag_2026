@@ -1,65 +1,70 @@
+// The README is the front door, not the manual: it has to say what this is,
+// show the film, explain the system once, and hand the reader to the project
+// site. Everything else lives on the site, so this test caps both the length
+// and the number of ways out.
 const fs = require("node:fs");
 const path = require("node:path");
 
 const root = __dirname;
 const source = fs.readFileSync(path.join(root, "README.md"), "utf8");
-const hubLabel = "View the project site";
-const hubUrl = "https://npatta01.github.io/trec_rag_2026/";
+const site = "https://npatta01.github.io/trec_rag_2026/";
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
 const required = [
   "# NP Labs · TREC RAG 2026",
-  "NP Labs submission for TREC RAG 2026",
-  `[${hubLabel}](${hubUrl})`,
-  `[published artifact hub](${hubUrl})`,
-  "## The problem",
-  "[![The NP Labs TREC RAG 2026 system",
-  "reports/2026-competition-architecture/01-whole-system.svg",
-  "## Project at a glance",
-  "| Official narratives | 119 |",
-  "| Retrieval runs | 3 |",
-  "| RAG runs | 2 |",
-  "| Evalbase-accepted organizer files | 5 |",
-  // The paper, the talk and the scores are the four links under the site
-  // link; they are what a reader arrives for and must not drift out again.
+  "119",
+  "1,024 words",
+  "Five of our files were accepted by Evalbase",
+  `[▶ Watch it with sound](${site}#approach)`,
+  `## [Project site →](${site})`,
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
   "reports/2026-trec-rag-talk.html",
-  "reports/2026-trec-rag-approach.mp4",
-  "reports/2026-organizer-score-explorer.html",
-  "[Run archive](docs/run-archive.md)",
-  "Architecture Report",
-  "Retrieval Quality Report",
-  "RAGDoll Evaluation — Single-pass RAG",
-  "RAGDoll Evaluation — Multi-stage RAG",
-  "https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html",
-  "https://npatta01.github.io/trec_rag_2026/reports/2026-retrieval-nugget-coverage.html",
-  "https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html",
-  "https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ms1-final.html",
-  "submissions/trec-rag-2026/SUBMISSION_LEDGER.md",
-  "reports/2026-competition-architecture.qmd",
-  ".agents/skills/validate-trec-rag-2026-submissions/SKILL.md",
-  "code/trec_rag/README.md",
-  "## Developer notes",
+  "## How the system works",
+  "reports/2026-competition-architecture/01-whole-system.svg",
+  "2026-competition-architecture.html",
+  "## What is in the repo",
+  "## Checks",
+  "[`AGENTS.md`](AGENTS.md)",
 ];
 
 for (const value of required) {
-  if (!source.includes(value)) throw new Error(`README missing: ${value}`);
-}
-if (source.indexOf(hubLabel) > source.indexOf("SUBMISSION_LEDGER.md")) {
-  throw new Error("primary hub link must precede repository detail links");
+  assert(source.includes(value), `README missing: ${value}`);
 }
 
-// The README is the front door, not the manual. The long run-archive recipes
-// moved to docs/run-archive.md; keep the front door short enough to read.
+// The film and the system diagram are the two pictures; the film comes first
+// because it is the thing somebody can watch without deciding to read.
+assert(
+  source.indexOf("<video") < source.indexOf("01-whole-system.svg"),
+  "the film should sit above the architecture diagram",
+);
+assert(
+  source.indexOf("Project site") < source.indexOf("## What is in the repo"),
+  "the site link must come before the repository detail",
+);
+
 const lines = source.split("\n").length;
-if (lines > 110) {
-  throw new Error(`README should stay under 110 lines, found ${lines}`);
-}
-if (source.includes("tar --zstd")) {
-  throw new Error("archive extraction recipes belong in docs/run-archive.md");
-}
-for (const match of source.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)]+)\)/g)) {
-  if (!fs.existsSync(path.join(root, match[1]))) {
-    throw new Error(`README target missing: ${match[1]}`);
-  }
+assert(lines <= 75, `README should stay at or under 75 lines, found ${lines}`);
+
+const links = [...source.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)].map((m) => m[1]);
+assert(links.length <= 15, `README should carry at most 15 links, found ${links.length}`);
+assert(!source.includes("tar --zstd"), "archive recipes belong in docs/run-archive.md");
+
+for (const target of links) {
+  if (/^(https?:|#)/.test(target)) continue;
+  assert(fs.existsSync(path.join(root, target)), `README target missing: ${target}`);
 }
 
-console.log("README artifact-first contract passed");
+// GitHub renders <video> in a README only when the src is one of its own
+// uploaded attachments; every other source is stripped and would ship a blank
+// gap. Checked against api.github.com/markdown and a live rendered README.
+const videos = [...source.matchAll(/<video[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
+assert(videos.length === 1, `README should carry exactly one player, found ${videos.length}`);
+assert(
+  videos[0].startsWith("https://github.com/user-attachments/assets/"),
+  `a README <video> src must be a GitHub attachment, found ${videos[0]}`,
+);
+
+console.log("README front-door contract passed");

@@ -25,7 +25,7 @@ for (const href of internalHrefs) {
   assert(fs.existsSync(path.resolve(root, target)), `internal link should resolve: ${href}`);
 }
 
-assert((html.match(/<article class="link-card /g) || []).length === 8, "artifact hub should render eight cards");
+assert((html.match(/<article class="card /g) || []).length === 8, "artifact hub should render eight cards");
 
 // The paper and the talk are what most people arrive for, so they are the
 // first card and each has to resolve. The PDF lives under output/, which is
@@ -40,7 +40,7 @@ for (const [label, href] of [
   assert(fs.existsSync(path.join(root, href)), `artifact hub target should exist: ${href}`);
 }
 assert(
-  html.indexOf('class="link-card paper"') < html.indexOf('class="link-card architecture"'),
+  html.indexOf('data-card="paper"') < html.indexOf('data-card="architecture"'),
   "paper and talk should be the first card",
 );
 
@@ -48,7 +48,7 @@ assert(
 // poster so the card is not a black rectangle before anyone presses play.
 assert(html.includes('<section class="film"'), "artifact hub should carry the approach film");
 assert(
-  html.indexOf('<section class="film"') < html.indexOf('class="link-grid"'),
+  html.indexOf('<section class="film"') < html.indexOf('<section id="artifacts">'),
   "the film should sit above the link map",
 );
 for (const asset of ["reports/2026-trec-rag-approach.mp4", "reports/2026-trec-rag-approach-poster.jpg"]) {
@@ -60,9 +60,12 @@ assert(/<video[^>]*\bposter=/.test(html), "the film needs a poster frame");
 for (const landmark of ["<main", "<header", "<section", "<footer", "aria-label="]) {
   assert(html.includes(landmark), `artifact hub should expose ${landmark}`);
 }
-for (const behavior of ["focus-visible", "prefers-reduced-motion", "@media (max-width: 620px)", "@media print"]) {
-  assert(html.includes(behavior), `artifact hub should preserve ${behavior}`);
-}
+// The theme moved to the shared sheet, which assets/site.test.js checks for
+// the accessibility behaviours and for both hubs loading the same one.
+assert(
+  html.includes('<link rel="stylesheet" href="assets/site.css">'),
+  "artifact hub should use the shared stylesheet",
+);
 for (const forbidden of [
   "outputs/",
   "cache/",

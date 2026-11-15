@@ -1,78 +1,49 @@
 # NP Labs · TREC RAG 2026
 
-NP Labs submission for TREC RAG 2026: bounded retrieval over the ClimbMix
-corpus, cited answer generation from one authenticated evidence source, and the
-organizer evaluation that followed.
+Our submission to NIST's TREC RAG 2026 track. Every team answers the same 119
+information needs over one fixed corpus, in at most 1,024 words, naming a source
+for every statement. Five of our files were accepted by Evalbase: three Retrieval
+runs and two Retrieval-Augmented Generation runs.
 
-## [View the project site](https://npatta01.github.io/trec_rag_2026/)
+<video src="https://github.com/user-attachments/assets/5f5ac373-8db3-4181-a78e-b0fc01096e75" controls></video>
+
+**[▶ Watch it with sound](https://npatta01.github.io/trec_rag_2026/#approach)** —
+GitHub mutes video in a README. 87 seconds: what the track asks, then one real
+request all the way through the pipeline.
+
+## [Project site →](https://npatta01.github.io/trec_rag_2026/)
 
 [Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf) ·
-[Conference talk](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-talk.html) ·
-[Approach video](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-approach.mp4) ·
-[Architecture walkthrough](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html) ·
-[Organizer scores](https://npatta01.github.io/trec_rag_2026/reports/2026-organizer-score-explorer.html)
+[Conference talk](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-talk.html)
 
-## The problem
-
-TREC RAG 2026 asks systems to answer complex information needs using the
-ClimbMix corpus. A useful system has to retrieve trustworthy evidence for every
-part of an official narrative, turn that evidence into a clear answer, and keep
-each factual claim traceable to an allowed source. Our submission addresses both
-sides: variable-depth Retrieval rankings, and cited RAG answers derived from one
-authenticated evidence source.
+## How the system works
 
 [![The NP Labs TREC RAG 2026 system: bounded source retrieval creates one authenticated source, which branches into three Retrieval submissions and two evidence-grounded RAG submissions.](reports/2026-competition-architecture/01-whole-system.svg)](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
 
-*The guided walkthrough of this diagram is in the [published artifact hub](https://npatta01.github.io/trec_rag_2026/).*
+One planning call splits a narrative into up to eight angles, and each angle
+becomes one to three BM25 queries over ClimbMix — at most 25 searches per topic.
+What comes back is chunked, reranked, de-duplicated, and sealed into a single
+authenticated evidence source. Everything after that derives from that one
+source: three Retrieval rankings ordered from the same candidate core, and two
+sets of cited answers that never re-open the index. The planning is one-shot,
+not a search loop.
 
-## Project at a glance
+The [architecture walkthrough](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
+explains the diagram stage by stage, with the exact limits at each step.
 
-| Verified scope | Count |
-| --- | ---: |
-| Official narratives | 119 |
-| Retrieval runs | 3 |
-| RAG runs | 2 |
-| Evalbase-accepted organizer files | 5 |
+## What is in the repo
 
-### Reports for reviewers
+| Path | What it holds |
+| --- | --- |
+| [`submissions/trec-rag-2026/`](submissions/trec-rag-2026/SUBMISSION_LEDGER.md) | the five accepted files, their hashes, priorities, and Evalbase confirmations |
+| [`code/trec_rag/`](code/trec_rag/README.md) | the retrieval and generation runners, and how to reproduce them |
+| [`reports/`](reports/index.html) | the published reports and their canonical sources |
+| [`configs/`](configs/) | the checked-in run configurations |
+| [`docs/`](docs/) | design notes, agent process records, and the [run archive](docs/run-archive.md) |
 
-- [Architecture Report](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
-  — the final system from bounded source retrieval through all five accepted files.
-- [Retrieval Quality Report](https://npatta01.github.io/trec_rag_2026/reports/2026-retrieval-nugget-coverage.html)
-  — evidence coverage across the 119 official narratives.
-- [RAGDoll Evaluation — Single-pass RAG](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ss1.html)
-  — citation-support analysis for `rag26-ss1`.
-- [RAGDoll Evaluation — Multi-stage RAG](https://npatta01.github.io/trec_rag_2026/reports/2026-ragdoll-rag26-ms1-final.html)
-  — citation-support analysis for `rag26-ms1-final`.
+## Checks
 
-### Repository references
-
-- [Submission ledger](submissions/trec-rag-2026/SUBMISSION_LEDGER.md) — accepted
-  files, hashes, priorities, and Evalbase confirmations.
-- [Architecture source](reports/2026-competition-architecture.qmd) — canonical
-  Quarto source for the rendered walkthrough.
-- [Submission validator](.agents/skills/validate-trec-rag-2026-submissions/SKILL.md)
-  — Retrieval format and organizer AutoJudge preflight.
-- [Implementation reference](code/trec_rag/README.md) — pipeline behavior,
-  commands, and reproduction boundaries.
-- [Run archive](docs/run-archive.md) — the Hugging Face backup, the Luna planner
-  receipts, and the per-topic trace CSV.
-
-## Developer notes
-
-### Repository layout
-
-- `submissions/trec-rag-2026/` — immutable accepted organizer artifacts, their
-  provenance records, and the organizer-released scores.
-- `reports/` — the public artifact hub and supporting source-backed reports.
-- `code/` — reusable evaluation, retrieval, generation, and validation code.
-- `configs/` — checked-in experiment and reproduction configurations.
-- `docs/superpowers/` — design specifications and implementation plans.
-- `.agents/skills/` — repository-local validation and analysis workflows.
-
-### Clone and initialize
-
-Official TREC RAG data and task guidance are tracked as git submodules. The
+Official TREC RAG data and task guidance are tracked as git submodules; the
 repository ships hooks that keep them synchronized after checkout and merge.
 
 ```bash
@@ -81,14 +52,12 @@ git config core.hooksPath .githooks
 code/tools/setup_env.sh
 ```
 
-### Verification
-
 ```bash
 .venv/bin/python -m pytest -q
 ```
 
 ```bash
-node README.test.js && node index.test.js && node reports/index.test.js
+git ls-files '*.test.js' | xargs -n1 node
 ```
 
 Shared instructions for Codex, Claude, and future coding agents live in
