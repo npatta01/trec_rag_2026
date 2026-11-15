@@ -18,7 +18,9 @@ const required = [
   "119",
   "1,024 words",
   "Five of our files were accepted by Evalbase",
-  `[▶ Watch it with sound](${site}#approach)`,
+  // the film, as a still that links to the player on the site
+  "reports/2026-trec-rag-approach-still.jpg",
+  `[▶ Watch the approach](${site}#approach)`,
   `## [Project site →](${site})`,
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
   "reports/2026-trec-rag-talk.html",
@@ -37,7 +39,7 @@ for (const value of required) {
 // The film and the system diagram are the two pictures; the film comes first
 // because it is the thing somebody can watch without deciding to read.
 assert(
-  source.indexOf("<video") < source.indexOf("01-whole-system.svg"),
+  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("01-whole-system.svg"),
   "the film should sit above the architecture diagram",
 );
 assert(
@@ -57,14 +59,11 @@ for (const target of links) {
   assert(fs.existsSync(path.join(root, target)), `README target missing: ${target}`);
 }
 
-// GitHub renders <video> in a README only when the src is one of its own
-// uploaded attachments; every other source is stripped and would ship a blank
-// gap. Checked against api.github.com/markdown and a live rendered README.
-const videos = [...source.matchAll(/<video[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
-assert(videos.length === 1, `README should carry exactly one player, found ${videos.length}`);
-assert(
-  videos[0].startsWith("https://github.com/user-attachments/assets/"),
-  `a README <video> src must be a GitHub attachment, found ${videos[0]}`,
-);
+// A GitHub-hosted attachment does render as a <video> here, but the player is
+// muted by force, opens on a black box because GitHub strips poster, and sizes
+// itself to whatever metadata it has managed to load. A still that links to the
+// player on the project site shows the film, keeps the sound, and works in any
+// renderer — so the README embeds one and no <video> tag.
+assert(!/<video[\s>]/.test(source), "the README embeds a still that links to the film, not a player");
 
 console.log("README front-door contract passed");
