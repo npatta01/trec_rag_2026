@@ -1,11 +1,9 @@
 """Guards on the platform markers themselves.
 
-A marker that skips a test is a test that stops reporting, so the two ways
-these could quietly go wrong are worth pinning: a condition that is true
-everywhere would hide the test on Linux too, and a non-strict xfail would let
-the suspected portability bug behind
-`XFAIL_SYMLINKED_TEMPORARY_DIRECTORY` turn into expected behaviour the day
-somebody fixes it.
+A marker that skips a test is a test that stops reporting, so the way these
+could quietly go wrong is a condition that is true everywhere: it would hide
+the test on Linux too. Each condition must therefore be read off the host and
+must be false on Linux.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from platform_support import (
     REQUIRES_LINUX_PUBLICATION,
     REQUIRES_PROCFS,
     REQUIRES_RERANKER_DEPENDENCIES,
-    XFAIL_SYMLINKED_TEMPORARY_DIRECTORY,
 )
 
 ALL_MARKERS = (
@@ -29,7 +26,6 @@ ALL_MARKERS = (
     REQUIRES_LINUX_PUBLICATION,
     REQUIRES_PROCFS,
     REQUIRES_RERANKER_DEPENDENCIES,
-    XFAIL_SYMLINKED_TEMPORARY_DIRECTORY,
 )
 
 
@@ -49,34 +45,26 @@ def test_every_marker_explains_itself() -> None:
         assert len(reason) >= 60, f"{marker} needs a reason that says what is missing"
 
 
-def test_the_suspected_bug_stays_strict() -> None:
-    """A fix must turn this xfail into a failure, not into silence."""
-    assert XFAIL_SYMLINKED_TEMPORARY_DIRECTORY.kwargs["strict"] is True
-
-
 def test_conditions_hold_on_a_linux_host() -> None:
-    """Every condition must be false on Linux, or it hides tests there too.
+    """Every platform condition must be false on Linux.
 
-    The markers freeze their conditions at import, so this re-derives each one
-    the way a Linux host would see it: procfs present, `fork` available, a real
-    temporary directory, and `transformers` installed from the Linux x86_64
-    pin. Only the bash version is a property of the local install rather than
-    of the platform.
+    Only the bash version is a property of the local install rather than of the
+    platform, so it is excluded: a Linux host with bash 3 would legitimately
+    skip those.
     """
-    linux_view = {
+    platform_conditions = {
+        "publication": sys.platform != "linux",
         "procfs": not pathlib.Path("/proc/self/fd").is_dir(),
         "fork": platform_support.multiprocessing.get_start_method() != "fork",
-        "symlinked tmp": platform_support._temporary_directory_is_symlinked(),
     }
     if sys.platform == "linux":
-        assert not any(linux_view.values()), (
-            f"a Linux host must not satisfy any skip condition: {linux_view}"
+        assert not any(platform_conditions.values()), (
+            f"a Linux host must not satisfy any platform condition: "
+            f"{platform_conditions}"
         )
     else:
-        # Off Linux the conditions are expected to fire; assert they are the
-        # reason the markers exist rather than silently inverted.
-        assert REQUIRES_PROCFS.args[0] == linux_view["procfs"]
-        assert REQUIRES_FORK_START_METHOD.args[0] == linux_view["fork"]
-        assert (
-            XFAIL_SYMLINKED_TEMPORARY_DIRECTORY.args[0] == linux_view["symlinked tmp"]
-        )
+        # Off Linux they are expected to fire; assert the markers read the same
+        # facts rather than having been inverted or pinned to a constant.
+        assert REQUIRES_LINUX_PUBLICATION.args[0] == platform_conditions["publication"]
+        assert REQUIRES_PROCFS.args[0] == platform_conditions["procfs"]
+        assert REQUIRES_FORK_START_METHOD.args[0] == platform_conditions["fork"]

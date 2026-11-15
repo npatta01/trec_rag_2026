@@ -31,17 +31,21 @@ hidden there.
   macOS defaults `multiprocessing` to `spawn`, and forking a process that
   already holds threads segfaults there.
 
-One group is marked `xfail(strict=True)` rather than skipped, because it looks
-like a real bug rather than a platform limit: the bundle and segmentation
-validators reject any path component that is a symbolic link and compare
-`realpath` output against an unresolved root, so they fail wherever the
-temporary directory sits behind a symlink — macOS puts it under `/var`, a link
-to `/private/var`. Strict keeps it honest: fixing it turns the marker into a
-failure instead of silence.
+Two things are deliberately *not* on that list, because they were real bugs
+rather than platform limits.
 
-Opening a topic database is on neither list: `topic_records` reaches the hashed
-inode through `/proc/self/fd` where it exists and `/dev/fd` otherwise, so the
-same inode binding holds on both platforms.
+`topic_records` reaches the hashed inode through `/proc/self/fd` where it
+exists and `/dev/fd` otherwise, so the same inode binding holds on both
+platforms.
+
+`cached_segmentation_result_bundle` and `competition_cache_bundle` each create
+a temporary directory and then validate paths derived from it — one by
+rejecting a symlinked path component, the other with `relative_to`. `tempfile`
+reports a macOS temporary directory under `/var`, a symlink to `/private/var`,
+so both modules failed their own validation on the spelling of a path they
+created themselves. Each now resolves that root once, through a local
+`_temporary_root`, and the validators are unchanged: a symlink inside the tree
+is still rejected exactly as before.
 
 ## Reusable tracing modules
 

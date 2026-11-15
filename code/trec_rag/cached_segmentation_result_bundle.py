@@ -278,6 +278,19 @@ def _source(path: Path, root: Path, archive_path: str) -> _SourceMember:
     return _SourceMember(archive_path, path, size, digest)
 
 
+def _temporary_root(temporary: str) -> Path:
+    """Return the real path of a temporary directory this module created.
+
+    `tempfile` reports a macOS temporary directory under `/var`, which is a
+    symlink to `/private/var`.  Every root derived from one is compared against
+    resolved paths and passed through :func:`_source_root`, which rejects a
+    symlinked path component, so an unresolved root makes this module fail its
+    own validation on a host whose temporary directory sits behind a link.
+    Resolving once, here, keeps one spelling throughout.
+    """
+    return Path(temporary).resolve()
+
+
 def _source_root(path: Path, label: str) -> Path:
     source = Path(path)
     if not source.is_absolute():
@@ -755,7 +768,7 @@ def _verify(bundle_dir: Path, *, expected_kind: str) -> VerifiedResultBundle:
     if verified.bundle_kind != expected_kind:
         raise ResultBundleIntegrityError("bundle kind changed")
     with tempfile.TemporaryDirectory(prefix="segmentation-bundle-semantic-") as temp:
-        extraction = Path(temp)
+        extraction = _temporary_root(temp)
         _extract_verified(root / ARCHIVE_NAME, complete, extraction)
         if expected_kind == "baseline":
             _verify_baseline_semantics(verified, extraction)

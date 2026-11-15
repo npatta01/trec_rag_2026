@@ -28,7 +28,6 @@ from trec_rag.retrieval_nugget_coverage import (
     CoverageRunConfig,
     run_coverage_evaluation,
 )
-from platform_support import XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 
 
 TOPICS = ("14", "31")
@@ -515,7 +514,6 @@ def test_baseline_pack_rejects_missing_completed_topic(tmp_path: Path) -> None:
         )
 
 
-@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_result_bundle_roundtrip_binds_run_revision_topics_and_excludes_locks(
     tmp_path: Path,
 ) -> None:
@@ -537,7 +535,6 @@ def test_result_bundle_roundtrip_binds_run_revision_topics_and_excludes_locks(
     assert any("concurrency-decision.json" in member.path for member in verified.members)
 
 
-@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_diagnostic_bundle_preserves_failed_semantic_evidence_and_is_nonpromotable(
     tmp_path: Path,
 ) -> None:
@@ -582,7 +579,6 @@ def test_diagnostic_bundle_preserves_failed_semantic_evidence_and_is_nonpromotab
         bundle_module.verify_result_bundle(bundle)
 
 
-@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_diagnostic_bundle_tolerates_partial_interruption_and_keeps_completed_phase(
     tmp_path: Path,
 ) -> None:
@@ -615,7 +611,6 @@ def test_diagnostic_bundle_tolerates_partial_interruption_and_keeps_completed_ph
     assert all(not path.startswith("run/31/") for path in paths)
 
 
-@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_diagnostic_bundle_preserves_canary_comparison_after_handoff_expansion(
     tmp_path: Path,
 ) -> None:
@@ -924,7 +919,6 @@ def test_result_pack_rejects_concurrency_decision_from_another_run(
         )
 
 
-@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_result_pack_accepts_measured_twenty_worker_decision(tmp_path: Path) -> None:
     import trec_rag.cached_segmentation_result_bundle as bundle_module
 

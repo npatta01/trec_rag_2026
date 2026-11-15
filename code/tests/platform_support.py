@@ -1,4 +1,4 @@
-"""Markers for tests that cannot run, or are known to fail, off Linux.
+"""Markers for tests that cannot run off Linux.
 
 The pipeline was built and run on Linux and parts of it require Linux by
 design, so a macOS checkout cannot execute every test.  Each marker here names
@@ -17,7 +17,6 @@ import multiprocessing
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 
 import pytest
 
@@ -51,15 +50,6 @@ def _reranker_dependencies_installed() -> bool:
     return True
 
 
-@cache
-def _temporary_directory_is_symlinked() -> bool:
-    """True when the temporary root reaches its real path through a symlink.
-
-    macOS resolves ``/var`` to ``/private/var``, so a path built from
-    :func:`tempfile.gettempdir` and the same path after ``resolve()`` disagree.
-    """
-    root = Path(tempfile.gettempdir())
-    return root.resolve() != root
 
 
 REQUIRES_LINUX_PUBLICATION = pytest.mark.skipif(
@@ -107,20 +97,5 @@ REQUIRES_FORK_START_METHOD = pytest.mark.skipif(
         "this test relies on a child process inheriting state, which needs "
         "the `fork` start method; macOS defaults to `spawn` and segfaults "
         "when forking a process that already holds threads."
-    ),
-)
-
-# Not a platform limit: the production code compares a resolved path against an
-# unresolved root, so any host whose temporary directory sits behind a symlink
-# fails. Kept strict so the marker turns into a failure the day it is fixed.
-XFAIL_SYMLINKED_TEMPORARY_DIRECTORY = pytest.mark.xfail(
-    _temporary_directory_is_symlinked(),
-    strict=True,
-    reason=(
-        "suspected portability bug, not a platform limit: the bundle and "
-        "segmentation validators reject a path component that is a symbolic "
-        "link and compare realpath output against an unresolved root, so they "
-        "fail wherever the temporary directory is symlinked (macOS puts it "
-        "under /var, a link to /private/var)."
     ),
 )
