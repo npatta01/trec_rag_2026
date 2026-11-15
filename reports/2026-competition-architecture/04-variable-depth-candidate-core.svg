@@ -1,21 +1,127 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1100" role="img" aria-labelledby="core-title core-desc">
-  <title id="core-title">Robust lane admission creates a variable-depth candidate core</title>
-  <desc id="core-desc">Authenticated original and subnarrative source lanes compute a median and median absolute deviation threshold. Admitted documents form an inclusive union. If empty, the best original-lane document survives. Observed final depth ranges from one to 121 documents.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 672" role="img" aria-labelledby="core-title core-desc">
+  <title id="core-title">Each lane admits its own outliers, and the union sets the depth</title>
+  <desc id="core-desc">Four score axes, one per authenticated source lane. Each axis carries that lane's retrieved documents placed by aggregate score, most of them low with a thin tail of high scorers. A dashed gate sits at the lane's own median plus 2.5 times 1.4826 times its median absolute deviation, so it falls in a different place on every axis. Documents to the right of a gate are filled and admitted; the rest stay hollow. The candidate core is the union of every lane's admissions, which across 119 narratives runs from 1 to 121 documents over 61 distinct depths and 4,246 topic-document pairs. Lane geometry is illustrative; the aggregate counts are observed.</desc>
   <style>
-    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7}
-    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616}}
-    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:33px;font-weight:700}.label{font-size:26px;font-weight:700}.body{font-size:22px}.small{font-size:19px}.muted{fill:var(--muted)}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}.adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.flow{fill:none;stroke:var(--ret);stroke-width:3;marker-end:url(#arrow)}.dash{stroke:var(--adv);stroke-dasharray:12 8}
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--hair:#cdd8d1;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--hair:#2f3b35;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .h{font-size:25px;font-weight:700}
+    .lane{font-size:19px;font-weight:650}
+    .n{font-size:19px;font-weight:700;fill:var(--ret)}
+    .s{font-size:17px;fill:var(--muted)}
+    .mono{font-size:17px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
+    .axis{stroke:var(--hair);stroke-width:2}
+    .gate{stroke:var(--ret);stroke-width:2.5;stroke-dasharray:7 5}
+    .out{fill:none;stroke:var(--line);stroke-width:2}
+    .in{fill:var(--ret)}
+    .band{fill:var(--ret-soft);stroke:var(--ret);stroke-width:2}
   </style>
-  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
-  <rect width="800" height="1100" fill="var(--bg)"/><text class="title" x="400" y="54" text-anchor="middle">Robust admission chooses narrative-specific k</text>
-  <rect class="ret" x="35" y="105" width="225" height="120" rx="9"/><text class="label" x="147" y="152" text-anchor="middle">Original lane</text><text class="small muted" x="147" y="190" text-anchor="middle">aggregate scores</text>
-  <rect class="ret" x="288" y="105" width="225" height="120" rx="9"/><text class="label" x="400" y="152" text-anchor="middle">Facet lane 1</text><text class="small muted" x="400" y="190" text-anchor="middle">pooled subnarrative</text>
-  <rect class="ret" x="540" y="105" width="225" height="120" rx="9"/><text class="label" x="652" y="152" text-anchor="middle">Facet lane n</text><text class="small muted" x="652" y="190" text-anchor="middle">authenticated source</text>
-  <path class="flow" d="M147 225V300H400M400 225V300M652 225V300H400V335" vector-effect="non-scaling-stroke"/>
-  <rect class="stage" x="80" y="345" width="640" height="165" rx="9"/><text class="label" x="400" y="392" text-anchor="middle">Robust gate inside every lane</text><text class="body" x="400" y="435" text-anchor="middle">MAD &gt; 0: score ≥ median + 2.5 × 1.4826 × MAD</text><text class="body" x="400" y="475" text-anchor="middle">MAD = 0: score &gt; median</text>
-  <path class="flow" d="M400 510V575" vector-effect="non-scaling-stroke"/>
-  <path class="ret" d="M400 575L655 680L400 785L145 680Z"/><text class="label" x="400" y="665" text-anchor="middle">Inclusive union</text><text class="body muted" x="400" y="705" text-anchor="middle">original ∪ every facet admission</text>
-  <path class="flow dash" d="M145 680H65V865H175" vector-effect="non-scaling-stroke"/><rect class="adv" x="175" y="820" width="450" height="90" rx="9"/><text class="label" x="400" y="858" text-anchor="middle">Empty-union fallback</text><text class="small muted" x="400" y="890" text-anchor="middle">best original-lane document • never needed</text>
-  <path class="flow" d="M400 785V950" vector-effect="non-scaling-stroke"/>
-  <rect class="ret" x="100" y="960" width="600" height="115" rx="9"/><text class="label" x="400" y="1008" text-anchor="middle">Shared candidate core Cₜ</text><text class="body" x="400" y="1048" text-anchor="middle">1–121 documents • no padding • same set in all runs</text>
+
+  <rect width="980" height="672" fill="var(--bg)"/>
+  <text class="h" x="40" y="46">Each lane admits its own outliers</text>
+  <text class="mono" x="40" y="80">admit d when A(d) ≥ median + 2.5 × 1.4826 × MAD   (MAD = 0: A(d) &gt; median)</text>
+  <text class="lane" x="40" y="154">the untouched narrative</text>
+  <line class="axis" x1="330" y1="148" x2="820" y2="148" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="329.0" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="344.5" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="360.0" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="375.5" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="391.0" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="406.5" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="427.9" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="449.3" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="472.1" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="499.4" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="526.1" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="551.0" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="581.6" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="609.9" cy="148" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="in" cx="633.9" cy="148" r="6.5"/>
+    <circle class="in" cx="668.7" cy="148" r="6.5"/>
+    <circle class="in" cx="697.5" cy="148" r="6.5"/>
+    <circle class="in" cx="737.2" cy="148" r="6.5"/>
+    <circle class="in" cx="769.9" cy="148" r="6.5"/>
+    <circle class="in" cx="799.4" cy="148" r="6.5"/>
+  <line class="gate" x1="633.8" y1="118" x2="633.8" y2="178" vector-effect="non-scaling-stroke"/>
+  <text class="s" x="633.8" y="108" text-anchor="middle" fill="var(--ret)">this lane’s gate</text>
+  <text class="n" x="838" y="154">6 admitted</text>
+  <text class="lane" x="40" y="242">subnarrative lane 1</text>
+  <line class="axis" x1="330" y1="236" x2="820" y2="236" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="328.5" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="344.0" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="359.5" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="375.0" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="390.5" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="406.2" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="429.5" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="446.7" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="470.8" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="498.9" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="524.1" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="550.9" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="578.4" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="606.7" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="640.9" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="668.6" cy="236" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="in" cx="701.4" cy="236" r="6.5"/>
+    <circle class="in" cx="733.3" cy="236" r="6.5"/>
+    <circle class="in" cx="769.4" cy="236" r="6.5"/>
+    <circle class="in" cx="798.7" cy="236" r="6.5"/>
+  <line class="gate" x1="673.0" y1="206" x2="673.0" y2="266" vector-effect="non-scaling-stroke"/>
+  <text class="n" x="838" y="242">4 admitted</text>
+  <text class="lane" x="40" y="330">subnarrative lane 2</text>
+  <line class="axis" x1="330" y1="324" x2="820" y2="324" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="332.2" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="347.7" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="363.2" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="378.7" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="394.2" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="409.7" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="425.5" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="447.7" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="472.5" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="499.9" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="526.2" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="549.9" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="581.8" cy="324" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="in" cx="606.3" cy="324" r="6.5"/>
+    <circle class="in" cx="633.5" cy="324" r="6.5"/>
+    <circle class="in" cx="667.3" cy="324" r="6.5"/>
+    <circle class="in" cx="697.9" cy="324" r="6.5"/>
+    <circle class="in" cx="730.1" cy="324" r="6.5"/>
+    <circle class="in" cx="768.3" cy="324" r="6.5"/>
+    <circle class="in" cx="803.7" cy="324" r="6.5"/>
+  <line class="gate" x1="584.8" y1="294" x2="584.8" y2="354" vector-effect="non-scaling-stroke"/>
+  <text class="n" x="838" y="330">7 admitted</text>
+  <text class="lane" x="40" y="418">subnarrative lane 3</text>
+  <line class="axis" x1="330" y1="412" x2="820" y2="412" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="335.8" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="351.3" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="366.8" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="382.3" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="397.8" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="413.3" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="428.8" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="445.4" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="471.2" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="494.3" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="526.2" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="549.9" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="576.2" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="605.4" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="641.3" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="667.7" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="out" cx="703.9" cy="412" r="5.5" vector-effect="non-scaling-stroke"/>
+    <circle class="in" cx="735.2" cy="412" r="6.5"/>
+    <circle class="in" cx="765.9" cy="412" r="6.5"/>
+    <circle class="in" cx="803.2" cy="412" r="6.5"/>
+  <line class="gate" x1="712.2" y1="382" x2="712.2" y2="442" vector-effect="non-scaling-stroke"/>
+  <text class="n" x="838" y="418">3 admitted</text>
+  <text class="s" x="330" y="454">lower aggregate score</text>
+  <text class="s" x="820" y="454" text-anchor="end">higher</text>
+  <text class="s" x="40" y="488">The gate lands somewhere different on every lane, so depth is decided per narrative.</text>
+  <text class="s" x="40" y="514">Lane geometry is illustrative; the counts below are observed.</text>
+  <rect class="band" x="40" y="560" width="900" height="84" rx="12" vector-effect="non-scaling-stroke"/>
+  <text class="lane" x="66" y="593">The candidate core is the union of those admissions</text>
+  <text class="s" x="66" y="623">1–121 documents across 119 narratives · 61 distinct depths · 4,246 topic–document pairs · no padding</text>
 </svg>

@@ -86,7 +86,7 @@ does not make one organizer file the other's runtime input.
 
 # The search widens once, then stops {#source-retrieval}
 
-![Every query lane crosses the same ceilings before the source freezes.](2026-competition-architecture/02-frozen-source-retrieval.svg){#fig-source-retrieval fig-alt="The untouched narrative and bounded DeepSeek subnarratives create query lanes. Every lane searches the climbmix-400b BM25 index through Pyserini, chunks returned documents, scores passages with the Mixedbread cross-encoder, selects exact evidence, and creates advisory hints before the source artifact is frozen."}
+![Every query lane crosses the same ceilings before the source freezes.](2026-competition-architecture/02-frozen-source-retrieval.svg){#fig-source-retrieval fig-alt="Three panels left to right, with the unit named above each. First, one BM25 query lane returns up to 1,000 documents from the climbmix-400b index, drawn as a field of bars falling by rank. Second, one of those documents is opened and cut into windows of 3,500 characters that overlap by 350 characters; the windows are drawn as translucent bands beside the document, and each overlap shows as a darker strip where two bands meet. Third, the mxbai-rerank-base-v2 cross-encoder scores each window against the query. The highest scoring windows are kept, at most 100 per query, and become the selected evidence that freezes; lower ones are dropped. A dashed amber card holds the one-shot Nuggetizer claim hints, which suggest coverage and are never citable."}
 
 [Open the reusable source-retrieval SVG](2026-competition-architecture/02-frozen-source-retrieval.svg){.figure-source}
 
@@ -153,7 +153,7 @@ results apart. The replay claims only what the provenance supports.
 
 # How deep each Retrieval run goes {#candidate-core}
 
-![Each lane admits its own outliers; their union sets the depth.](2026-competition-architecture/04-variable-depth-candidate-core.svg){#fig-candidate-core fig-alt="Each authenticated source lane computes its median aggregate score and median absolute deviation. Documents above the robust lane threshold are admitted. The original and all subnarrative admissions form an inclusive union. An empty union would retain the best original-lane document. The observed final depth ranges from one to 121 documents."}
+![Each lane admits its own outliers; their union sets the depth.](2026-competition-architecture/04-variable-depth-candidate-core.svg){#fig-candidate-core fig-alt="Four score axes, one per authenticated source lane. Each axis carries that lane's retrieved documents placed by aggregate score, most of them low with a thin tail of high scorers. A dashed gate sits at the lane's own median plus 2.5 times 1.4826 times its median absolute deviation, so it falls in a different place on every axis. Documents to the right of a gate are filled and admitted; the rest stay hollow. The candidate core is the union of every lane's admissions, which across 119 narratives runs from 1 to 121 documents over 61 distinct depths and 4,246 topic-document pairs. Lane geometry is illustrative; the aggregate counts are observed."}
 
 [Open the reusable candidate-core SVG](2026-competition-architecture/04-variable-depth-candidate-core.svg){.figure-source}
 
@@ -189,7 +189,7 @@ Retrieval runs share one core per narrative.
 
 # Three orderings, one candidate set {#retrieval-runs}
 
-![One scored matrix, three orderings over identical document sets.](2026-competition-architecture/05-targeted-scoring-and-runs.svg){#fig-retrieval-runs fig-alt="The shared candidate core is chunked and scored against the untouched narrative and every subnarrative. Cached Mixedbread scores complete one targeted matrix. Percentiles feed three orderings: narrative plus subnarrative, evidence breadth, and narrative only. All three emit the same narrative-specific document sets."}
+![One scored matrix, three orderings over identical document sets.](2026-competition-architecture/05-targeted-scoring-and-runs.svg){#fig-retrieval-runs fig-alt="One column on the left holds a narrative's candidate core as nine numbered documents. Three columns to the right hold the combo, breadth and narrative-only runs. Each right-hand column contains the same nine numbers in a different vertical order. Two documents are traced across all four columns with connecting lines to show that the membership never changes, only the rank. Every run emits 4,246 rows, and within a narrative the three files list the same documents."}
 
 [Open the reusable targeted-scoring SVG](2026-competition-architecture/05-targeted-scoring-and-runs.svg){.figure-source}
 

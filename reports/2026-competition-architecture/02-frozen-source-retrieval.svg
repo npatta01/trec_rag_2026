@@ -1,27 +1,107 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1180" role="img" aria-labelledby="source-title source-desc">
-  <title id="source-title">Bounded source retrieval freezes selected evidence</title>
-  <desc id="source-desc">The original narrative and one-shot DeepSeek subnarratives create bounded BM25 query lanes. Pyserini searches climbmix-400b, documents become overlapping chunks, Mixedbread scores passages, local selection retains exact evidence, and Nuggetizer creates advisory hints before the source artifact is frozen.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" role="img" aria-labelledby="src-title src-desc">
+  <title id="src-title">A document becomes overlapping chunks, and chunks become scored passages</title>
+  <desc id="src-desc">Three panels left to right, with the unit named above each. First, one BM25 query lane returns up to 1,000 documents from the climbmix-400b index, drawn as a field of bars falling by rank. Second, one of those documents is opened and cut into windows of 3,500 characters that overlap by 350 characters; the windows are drawn as translucent bands beside the document, and each overlap shows as a darker strip where two bands meet. Third, the mxbai-rerank-base-v2 cross-encoder scores each window against the query. The highest scoring windows are kept, at most 100 per query, and become the selected evidence that freezes; lower ones are dropped. A dashed amber card holds the one-shot Nuggetizer claim hints, which suggest coverage and are never citable.</desc>
   <style>
-    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7}
-    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616}}
-    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:34px;font-weight:700}.label{font-size:27px;font-weight:700}.body{font-size:22px}.small{font-size:19px}.muted{fill:var(--muted)}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}.adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.flow{fill:none;stroke:var(--ret);stroke-width:3;marker-end:url(#arrow)}.dash{stroke:var(--adv);stroke-dasharray:12 8}
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--hair:#cdd8d1;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--hair:#2f3b35;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .h{font-size:25px;font-weight:700}
+    .u{font-size:20px;font-weight:700}
+    .s{font-size:16px;fill:var(--muted)}
+    .tiny{font-size:14px;fill:var(--muted)}
+    .mono{font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
+    .page{fill:var(--panel);stroke:var(--line);stroke-width:2}
+    .win{fill:var(--ret);fill-opacity:.18;stroke:var(--ret);stroke-width:2}
+    .keep{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}
+    .drop{fill:var(--panel);stroke:var(--hair);stroke-width:2}
+    .bar{fill:var(--ret)}
+    .barout{fill:none;stroke:var(--line);stroke-width:2}
+    .hint{fill:var(--adv-soft);stroke:var(--adv);stroke-width:2;stroke-dasharray:6 4}
+    .arrow{fill:none;stroke:var(--line);stroke-width:2.5;marker-end:url(#a)}
+    .sep{stroke:var(--hair);stroke-width:2}
+    .tick{stroke:var(--ret);stroke-width:1.5;opacity:.6}
   </style>
-  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
-  <rect width="800" height="1180" fill="var(--bg)"/><text class="title" x="400" y="54" text-anchor="middle">Source retrieval widens once, then freezes</text>
-  <rect class="stage" x="55" y="95" width="300" height="110" rx="9"/><text class="label" x="205" y="142" text-anchor="middle">Untouched narrative</text><text class="body muted" x="205" y="180" text-anchor="middle">always one query lane</text>
-  <rect class="adv" x="445" y="95" width="300" height="110" rx="9"/><text class="label" x="595" y="142" text-anchor="middle">DeepSeek planning</text><text class="body muted" x="595" y="180" text-anchor="middle">0–8 subnarratives • one shot</text>
-  <path class="flow" d="M205 205V260H400" vector-effect="non-scaling-stroke"/><path class="flow dash" d="M595 205V260H400V290" vector-effect="non-scaling-stroke"/>
-  <rect class="ret" x="100" y="300" width="600" height="115" rx="9"/><text class="label" x="400" y="348" text-anchor="middle">1–25 bounded BM25 query lanes</text><text class="body muted" x="400" y="386" text-anchor="middle">original + 1–3 queries per subnarrative</text>
-  <path class="flow" d="M400 415V470" vector-effect="non-scaling-stroke"/>
-  <rect class="stage" x="100" y="480" width="600" height="115" rx="9"/><text class="label" x="400" y="528" text-anchor="middle">Pyserini REST • climbmix-400b</text><text class="body muted" x="400" y="566" text-anchor="middle">≤1,000 internal documents per query</text>
-  <path class="flow" d="M400 595V650" vector-effect="non-scaling-stroke"/>
-  <rect class="ret" x="55" y="660" width="210" height="125" rx="9"/><text class="label" x="160" y="707" text-anchor="middle">Documents</text><text class="small muted" x="160" y="744" text-anchor="middle">full ClimbMix text</text>
-  <rect class="ret" x="295" y="660" width="210" height="125" rx="9"/><text class="label" x="400" y="707" text-anchor="middle">Chunks</text><text class="small muted" x="400" y="744" text-anchor="middle">3500 chars • 350 overlap</text>
-  <rect class="ret" x="535" y="660" width="210" height="125" rx="9"/><text class="label" x="640" y="707" text-anchor="middle">Passages</text><text class="small muted" x="640" y="744" text-anchor="middle">Mixedbread ranked</text>
-  <path class="flow" d="M265 722H295M505 722H535" vector-effect="non-scaling-stroke"/>
-  <path class="flow" d="M640 785V840H400V875" vector-effect="non-scaling-stroke"/>
-  <rect class="ret" x="65" y="885" width="430" height="120" rx="9"/><text class="label" x="280" y="934" text-anchor="middle">Selected evidence</text><text class="body muted" x="280" y="974" text-anchor="middle">exact passages • factual authority</text>
-  <rect class="adv" x="525" y="885" width="220" height="120" rx="9"/><text class="label" x="635" y="934" text-anchor="middle">Advisory hints</text><text class="small muted" x="635" y="974" text-anchor="middle">one-shot Nuggetizer</text>
-  <path class="flow dash" d="M495 945H525" vector-effect="non-scaling-stroke"/><path class="flow" d="M280 1005V1060H400M635 1005V1060H400V1090" vector-effect="non-scaling-stroke"/>
-  <rect class="stage" x="115" y="1095" width="570" height="65" rx="9"/><text class="label" x="400" y="1137" text-anchor="middle">Frozen authenticated source artifact</text>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+
+  <rect width="1000" height="620" fill="var(--bg)"/>
+  <text class="h" x="40" y="44">The unit changes twice before anything is selected</text>
+  <text class="s" x="40" y="74">Every query lane crosses the same two ceilings, in the same order.</text>
+  <text class="u" x="40" y="118">documents</text>
+  <text class="s" x="40" y="144">≤ 1,000 per query</text>
+  <text class="tiny" x="40" y="166">climbmix-400b, through Pyserini</text>
+  <rect class="bar" x="42.0" y="272.0" width="5" height="128.0" opacity="0.8"/>
+  <rect class="bar" x="51.6" y="275.9" width="5" height="124.1" opacity="0.8"/>
+  <rect class="bar" x="61.2" y="279.8" width="5" height="120.2" opacity="0.8"/>
+  <rect class="bar" x="70.8" y="283.7" width="5" height="116.3" opacity="0.8"/>
+  <rect class="bar" x="80.4" y="287.6" width="5" height="112.4" opacity="0.8"/>
+  <rect class="bar" x="90.0" y="291.5" width="5" height="108.5" opacity="0.8"/>
+  <rect class="bar" x="99.6" y="295.4" width="5" height="104.6" opacity="0.8"/>
+  <rect class="bar" x="109.2" y="299.3" width="5" height="100.7" opacity="0.8"/>
+  <rect class="bar" x="118.8" y="303.2" width="5" height="96.8" opacity="0.8"/>
+  <rect class="bar" x="128.4" y="307.1" width="5" height="92.9" opacity="0.8"/>
+  <rect class="bar" x="138.0" y="311.0" width="5" height="89.0" opacity="0.8"/>
+  <rect class="bar" x="147.6" y="314.9" width="5" height="85.1" opacity="0.8"/>
+  <rect class="bar" x="157.2" y="318.8" width="5" height="81.2" opacity="0.8"/>
+  <rect class="bar" x="166.8" y="322.7" width="5" height="77.3" opacity="0.8"/>
+  <rect class="bar" x="176.4" y="326.6" width="5" height="73.4" opacity="0.8"/>
+  <rect class="bar" x="186.0" y="330.5" width="5" height="69.5" opacity="0.8"/>
+  <rect class="bar" x="195.6" y="334.4" width="5" height="65.6" opacity="0.8"/>
+  <rect class="bar" x="205.2" y="338.3" width="5" height="61.7" opacity="0.8"/>
+  <rect class="bar" x="214.8" y="342.2" width="5" height="57.8" opacity="0.8"/>
+  <rect class="bar" x="224.4" y="346.1" width="5" height="53.9" opacity="0.8"/>
+  <rect class="bar" x="234.0" y="350.0" width="5" height="50.0" opacity="0.8"/>
+  <rect class="bar" x="243.6" y="353.9" width="5" height="46.1" opacity="0.8"/>
+  <rect class="bar" x="253.2" y="357.8" width="5" height="42.2" opacity="0.8"/>
+  <rect class="bar" x="262.8" y="361.7" width="5" height="38.3" opacity="0.8"/>
+  <text class="tiny" x="40" y="424">ranked by BM25</text>
+  <path class="arrow" d="M286 330H322" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="304" y="316" text-anchor="middle">one of them</text>
+  <text class="u" x="344" y="118">chunks</text>
+  <text class="s" x="344" y="144">3,500 characters each</text>
+  <text class="tiny" x="344" y="166">overlapping by 350 characters</text>
+  <rect class="page" x="344" y="200" width="64" height="216" rx="5" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="220" x2="398" y2="220" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="244" x2="398" y2="244" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="268" x2="398" y2="268" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="292" x2="398" y2="292" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="316" x2="398" y2="316" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="340" x2="398" y2="340" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="364" x2="398" y2="364" vector-effect="non-scaling-stroke"/>
+  <line class="sep" x1="354" y1="388" x2="398" y2="388" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="376" y="440" text-anchor="middle">one document</text>
+  <rect class="win" x="452" y="200" width="168" height="72" rx="6" vector-effect="non-scaling-stroke"/>
+  <line class="tick" x1="408" y1="236.0" x2="452" y2="236.0" vector-effect="non-scaling-stroke"/>
+  <rect class="win" x="452" y="248" width="168" height="72" rx="6" vector-effect="non-scaling-stroke"/>
+  <line class="tick" x1="408" y1="284.0" x2="452" y2="284.0" vector-effect="non-scaling-stroke"/>
+  <rect class="win" x="452" y="296" width="168" height="72" rx="6" vector-effect="non-scaling-stroke"/>
+  <line class="tick" x1="408" y1="332.0" x2="452" y2="332.0" vector-effect="non-scaling-stroke"/>
+  <rect class="win" x="452" y="344" width="168" height="72" rx="6" vector-effect="non-scaling-stroke"/>
+  <line class="tick" x1="408" y1="380.0" x2="452" y2="380.0" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="536" y="464" text-anchor="middle">where two bands meet, the text is in both</text>
+  <path class="arrow" d="M632 330H664" vector-effect="non-scaling-stroke"/>
+  <text class="u" x="686" y="118">passages</text>
+  <text class="s" x="686" y="144">≤ 100 kept per query</text>
+  <text class="tiny" x="686" y="166">scored by mxbai-rerank-base-v2</text>
+  <rect class="keep" x="686" y="200" width="86" height="34" rx="5" vector-effect="non-scaling-stroke"/>
+  <text class="mono" x="784" y="223">0.81</text>
+  <rect class="bar" x="832" y="211" width="74.5" height="12" rx="3"/>
+  <rect class="keep" x="686" y="248" width="86" height="34" rx="5" vector-effect="non-scaling-stroke"/>
+  <text class="mono" x="784" y="271">0.74</text>
+  <rect class="bar" x="832" y="259" width="68.1" height="12" rx="3"/>
+  <rect class="drop" x="686" y="296" width="86" height="34" rx="5" vector-effect="non-scaling-stroke"/>
+  <text class="mono" x="784" y="319">0.22</text>
+  <rect class="barout" x="832" y="307" width="20.2" height="12" rx="3" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="862.2" y="318">dropped</text>
+  <rect class="drop" x="686" y="344" width="86" height="34" rx="5" vector-effect="non-scaling-stroke"/>
+  <text class="mono" x="784" y="367">0.09</text>
+  <rect class="barout" x="832" y="355" width="8.3" height="12" rx="3" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="850.3" y="366">dropped</text>
+  <text class="tiny" x="686" y="440">the kept windows are the selected evidence</text>
+  <rect class="hint" x="686" y="468" width="274" height="70" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="s" x="706" y="496" fill="var(--adv)">one-shot Nuggetizer · advisory hints</text>
+  <text class="tiny" x="706" y="520">suggest coverage · never citable</text>
+  <line class="sep" x1="40" y1="468" x2="640" y2="468" vector-effect="non-scaling-stroke"/>
+  <text class="s" x="40" y="498">Selected passages are factual authority.</text>
+  <text class="tiny" x="40" y="524">Scores are illustrative; the ceilings are the configured ones.</text>
+  <text class="tiny" x="40" y="548">All of it freezes together into the authenticated source artifact.</text>
 </svg>

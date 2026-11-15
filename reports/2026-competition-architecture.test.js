@@ -403,8 +403,18 @@ for (const figure of figures) {
     caption.length <= 90,
     `${figure} caption is ${caption.length} characters; the long description belongs in fig-alt`,
   );
+  // The rendered alt attribute is HTML-escaped and may be smart-quoted, so an
+  // apostrophe in the source comes back as &#39; or a curly quote. Compare with
+  // entities decoded and quotes normalised.
+  const plain = (v) =>
+    v
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"');
   assert(
-    html.includes(alt.slice(0, 60)),
+    plain(html).includes(plain(alt).slice(0, 60)),
     `${figure} fig-alt should survive into the rendered report`,
   );
 }
