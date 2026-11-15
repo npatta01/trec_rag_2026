@@ -5,7 +5,7 @@ information needs over one fixed corpus, in at most 1,024 words, naming a source
 for every statement. Five of our files were accepted by Evalbase: three Retrieval
 runs and two Retrieval-Augmented Generation runs.
 
-<video src="https://github.com/user-attachments/assets/d5f42c31-40c6-4a10-afe7-c920eb38a630" poster="reports/2026-trec-rag-approach-still.jpg" controls></video>
+<video src="https://github.com/user-attachments/assets/5f5ac373-8db3-4181-a78e-b0fc01096e75" controls></video>
 
 **[▶ Watch it with sound](https://npatta01.github.io/trec_rag_2026/#approach)** —
 GitHub mutes video in a README. 87 seconds: what the track asks, then one real

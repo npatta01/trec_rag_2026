@@ -18,9 +18,6 @@ const required = [
   "119",
   "1,024 words",
   "Five of our files were accepted by Evalbase",
-  // the film, as a still that links to the player on the site: GitHub strips
-  // <video> out of README markdown, so a clickable poster is the embed
-  "reports/2026-trec-rag-approach-still.jpg",
   `[▶ Watch it with sound](${site}#approach)`,
   `## [Project site →](${site})`,
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
@@ -40,7 +37,7 @@ for (const value of required) {
 // The film and the system diagram are the two pictures; the film comes first
 // because it is the thing somebody can watch without deciding to read.
 assert(
-  source.indexOf("2026-trec-rag-approach-still.jpg") < source.indexOf("01-whole-system.svg"),
+  source.indexOf("<video") < source.indexOf("01-whole-system.svg"),
   "the film should sit above the architecture diagram",
 );
 assert(
