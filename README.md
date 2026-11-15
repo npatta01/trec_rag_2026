@@ -18,7 +18,7 @@ through the pipeline.
 
 ## How the system works
 
-[![One official narrative becomes one authenticated frozen source, facet-deepseek-b40-v3, which branches into three Retrieval TSVs and two RAG JSONLs — the five files Evalbase accepted.](reports/2026-competition-architecture/00-system-at-a-glance.svg)](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
+[![One sealed source artifact on the left, facet-deepseek-b40-v3, holding the plan, the BM25 results, the passage scores, the selected passages and the claim hints. Two lanes leave it. The upper teal lane replays cached scores and emits three Retrieval TSVs, drawn as three ranked lists of the same documents in different order, 4,246 rows each at depth 1 to 121. The lower indigo lane takes a sealed selected-evidence handoff and emits two RAG JSONLs, drawn as answer sheets whose every line ends in a citation marker, 119 reports each. Between the two lanes a dashed red connector is cut by a stop bar: neither branch opens the other's output. All five files were accepted by Evalbase.](reports/2026-competition-architecture/01-whole-system.svg)](https://npatta01.github.io/trec_rag_2026/reports/2026-competition-architecture.html)
 
 One planning call splits a narrative into up to eight angles, and each angle
 becomes one to three BM25 queries over ClimbMix — at most 25 searches per topic.
