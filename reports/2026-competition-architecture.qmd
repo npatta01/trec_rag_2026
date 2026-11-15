@@ -52,7 +52,7 @@ all of them.
 
 # Frozen source, two submission branches {#whole-system}
 
-![One source retrieval run, two sibling submission branches.](2026-competition-architecture/01-whole-system.svg){#fig-whole-system fig-alt="An official narrative enters bounded source retrieval and produces the authenticated facet-deepseek-b40-v3 source. One branch creates a robust variable-depth candidate core and three Retrieval TSVs. A separate sealed selected-evidence handoff feeds single-pass and multi-stage RAG, producing two JSONLs. All five files pass local validation and are accepted by Evalbase."}
+![One frozen source; two branches that never read each other.](2026-competition-architecture/01-whole-system.svg){#fig-whole-system fig-alt="One sealed source artifact on the left, facet-deepseek-b40-v3, holding the plan, the BM25 results, the passage scores, the selected passages and the claim hints. Two lanes leave it. The upper teal lane replays cached scores and emits three Retrieval TSVs, drawn as three ranked lists of the same documents in different order, 4,246 rows each at depth 1 to 121. The lower indigo lane takes a sealed selected-evidence handoff and emits two RAG JSONLs, drawn as answer sheets whose every line ends in a citation marker, 119 reports each. Between the two lanes a dashed red connector is cut by a stop bar: neither branch opens the other's output. All five files were accepted by Evalbase."}
 
 [Open the reusable whole-system SVG](2026-competition-architecture/01-whole-system.svg){.figure-source}
 
@@ -126,7 +126,7 @@ suggest what an answer should cover and are never citable.
 
 # Planning stays one-shot {#planning}
 
-![One planner call, with no path from results back to planning.](2026-competition-architecture/03-bounded-deepseek-planning.svg){#fig-planning fig-alt="One DeepSeek V4 Flash request receives the complete narrative. The original lane remains. Zero to eight subnarratives may each propose one to three BM25 queries. Schema or semantic failure falls back to the original lane, and no retrieved result returns to the planner."}
+![The planner widens once, and never sees a result.](2026-competition-architecture/03-bounded-deepseek-planning.svg){#fig-planning fig-alt="The complete official narrative enters at the left and splits two ways. The upper path bypasses the planner entirely: the untouched narrative always survives as one query lane. The lower path makes one DeepSeek V4 Flash call, which may return between zero and eight subnarratives, each carrying 1-3 BM25 queries each, for at most 25 searches per topic including the original lane. A schema or semantic failure falls back to the original lane alone. A dashed red arc curves from the executed searches back toward the planner and is cut by a stop bar: no retrieved result ever returns to planning, so there is no search and replan loop."}
 
 [Open the reusable bounded-planning SVG](2026-competition-architecture/03-bounded-deepseek-planning.svg){.figure-source}
 
@@ -227,7 +227,7 @@ anything.
 
 # What Generation is allowed to see {#handoff}
 
-![What the handoff carries, and the five artifacts it bars.](2026-competition-architecture/06-generation-handoff-contract.svg){#fig-handoff fig-alt="The sealed generation handoff contains the exact narrative, 691 evidence groups across 119 topics, selected passages, advisory hints, allowed ClimbMix citation IDs, source receipts, and hashes. Single-pass and multi-stage generation authenticate it. The Retrieval TSV, full-text ZIP, qrels, gold nuggets, and RAGDoll scores are barred."}
+![One file crosses the boundary; five named artifacts stop at it.](2026-competition-architecture/06-generation-handoff-contract.svg){#fig-handoff fig-alt="A dashed vertical boundary runs down the middle. On the left, the sealed generation handoff manifest lists what it carries: 119 exact narratives, 691 evidence groups, the selected passages, the advisory claim hints, the allowed ClimbMix citation IDs, and the source receipts and hashes. A solid arrow carries it through an authentication gate to the right-hand side, where single-pass Sol and multi-stage Luna plus Sol sit. Below it, five artifacts each send a dashed red line toward the boundary and each line is cut by a stop bar before it arrives: the accepted Retrieval TSV, the source full-text ZIP, qrels, gold nuggets, and RAGDoll scores. Malformed, contradictory, non-canonical or unauthenticated state fails the load rather than arriving incomplete."}
 
 [Open the reusable handoff-contract SVG](2026-competition-architecture/06-generation-handoff-contract.svg){.figure-source}
 
@@ -257,7 +257,7 @@ output.
 
 # Single-pass RAG {#single-pass}
 
-![Sol writes once; local validation decides whether it ships.](2026-competition-architecture/07-single-pass-rag.svg){#fig-single-pass fig-alt="The authenticated handoff becomes one deterministic selected-evidence prompt for GPT-5.6 Sol. Sol uses medium reasoning, strict structured output, and a 12,000-token ceiling. Local validation checks exact narrative metadata, the allowed citation domain, reference uniqueness, exact-hint citations, and the 1,024-word ceiling before publishing rag26-ss1."}
+![One pass, one retry, used by two of the 119 topics.](2026-competition-architecture/07-single-pass-rag.svg){#fig-single-pass fig-alt="The authenticated handoff is rendered deterministically into one prompt for GPT-5.6 Sol, which runs at medium reasoning with strict structured output and a 12,000-token ceiling. Sol returns an answer object, which local code checks for the exact topic and narrative, the required metadata, the answer structure, unique references, the allowed citation domain, the exact-hint citation rules and the 1,024-word ceiling. A pass publishes; a rejection buys exactly one more attempt and no more. Below, a strip of 119 marks stands for the 119 topics, and only two of them are filled: two topics used the second attempt. The accepted file took 121 Sol calls, and its answers run from 203 to 749 words with 10 to 40 references."}
 
 [Open the reusable single-pass SVG](2026-competition-architecture/07-single-pass-rag.svg){.figure-source}
 
@@ -290,7 +290,7 @@ references.
 
 # Multi-stage RAG {#multi-stage}
 
-![Luna plans and screens, Sol writes, local code applies only what passed.](2026-competition-architecture/08-multistage-rag.svg){#fig-multi-stage fig-alt="Luna creates a narrative blueprint and audits each authenticated evidence group. Sol writes a structured draft, then may propose a bounded splice revision. Luna screens proposed operations for support, atomicity, materiality, redundancy, and replacement safety. Local code applies only accepted operations; malformed or rejected work preserves the validated draft. Final validation publishes rag26-ms1-final."}
+![Seven handoffs between three actors, in a single pass.](2026-competition-architecture/08-multistage-rag.svg){#fig-multi-stage fig-alt="Three horizontal lanes: Luna at the top, Sol in the middle, local code at the bottom. The same sealed evidence enters all three. Seven numbered steps zigzag between the lanes in order: Luna plans the narrative blueprint, Sol writes the structured draft, Luna audits each authenticated evidence group, local code merges the audits, Sol proposes a bounded splice revision, Luna screens each proposed operation against support, atomicity, materiality, redundancy and replacement safety, and local code applies only the operations that passed all five. The path runs left to right once and never loops back. If revision work is malformed, ambiguous or rejected, the already validated draft stands. The accepted run made 894 Luna calls and 264 Sol calls, 1,158 provider calls in all."}
 
 [Open the reusable multi-stage SVG](2026-competition-architecture/08-multistage-rag.svg){.figure-source}
 
@@ -331,7 +331,7 @@ from 531 to 1,011 words with 14 to 136 references.
 
 # Five accepted organizer files {#accepted-artifacts}
 
-![Five files through task-specific validation and an exact-hash gate.](2026-competition-architecture/09-accepted-submissions.svg){#fig-accepted fig-alt="Three Retrieval TSV files and two RAG JSONL files pass task-specific validation. Retrieval checks cover six fields, exact topics, dense ranks, finite non-increasing scores, unique ClimbMix document IDs, and stable run IDs. RAG uses organizer AutoJudge for schema, topics, narratives, citations, and word limits. SHA-256 comparison protects the exact accepted bytes."}
+![Five files, two validators, one exact-bytes gate.](2026-competition-architecture/09-accepted-submissions.svg){#fig-accepted fig-alt="Five file shapes on the left, grouped by task. Three Retrieval TSVs sit in the teal group, each 4,246 rows at depth 1 to 121, carrying their run identifiers and priority order. Two RAG JSONLs sit in the indigo group, each 119 valid reports. Each group feeds its own validator: the Retrieval files cross a structural check of six fields, exact topics, dense ranks, finite non-increasing scores, unique ClimbMix document IDs and a stable run ID; the RAG files cross organizer AutoJudge for schema, topics, narratives, citations and word limits. Both paths then meet one SHA-256 comparison against the submission ledger, and all five leave it marked accepted by Evalbase."}
 
 [Open the reusable accepted-submissions SVG](2026-competition-architecture/09-accepted-submissions.svg){.figure-source}
 

@@ -1,19 +1,173 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1050" role="img" aria-labelledby="single-title single-desc">
-  <title id="single-title">Single-pass Sol generation with bounded validation retry</title>
-  <desc id="single-desc">The authenticated selected-evidence handoff becomes one deterministic GPT-5.6 Sol request with medium reasoning, strict structured output, and a 12,000-token ceiling. Local validation enforces metadata, citations, exact hints, and 1,024 words. At most one semantic retry returns to Sol before accepted run rag26-ss1 is published.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 520" role="img" aria-labelledby="ss-title ss-desc">
+  <title id="ss-title">One pass, one retry, and the retry was almost never needed</title>
+  <desc id="ss-desc">The authenticated handoff is rendered deterministically into one prompt for GPT-5.6 Sol, which runs at medium reasoning with strict structured output and a 12,000-token ceiling. Sol returns an answer object, which local code checks for the exact topic and narrative, the required metadata, the answer structure, unique references, the allowed citation domain, the exact-hint citation rules and the 1,024-word ceiling. A pass publishes; a rejection buys exactly one more attempt and no more. Below, a strip of 119 marks stands for the 119 topics, and only two of them are filled: two topics used the second attempt. The accepted file took 121 Sol calls, and its answers run from 203 to 749 words with 10 to 40 references.</desc>
   <style>
-    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7;--ok:#277a45;--ok-soft:#ddf2e3}
-    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616;--ok:#82dda0;--ok-soft:#173c25}}
-    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:33px;font-weight:700}.label{font-size:27px;font-weight:700}.body{font-size:22px}.small{font-size:19px}.muted{fill:var(--muted)}.gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.gate{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:3}.flow{fill:none;stroke:var(--gen);stroke-width:3;marker-end:url(#arrow)}.retry{stroke:var(--adv);stroke-dasharray:12 8}
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--hair:#cdd8d1;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7;--stop:#b3261e;--stop-soft:#fbe4e2}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--hair:#2f3b35;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616;--stop:#f2b8b5;--stop-soft:#42211f}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .h{font-size:25px;font-weight:700}
+    .u{font-size:20px;font-weight:700}
+    .lab{font-size:18px;font-weight:650}
+    .s{font-size:16px;fill:var(--muted)}
+    .tiny{font-size:14px;fill:var(--muted)}
+    .mono{font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
+    .panel{fill:var(--panel);stroke:var(--hair);stroke-width:2}
+    .ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:2.5}
+    .gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:2.5}
+    .ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:2.5}
+    .adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:2.5}
+    .flow{fill:none;stroke:var(--line);stroke-width:2.5;marker-end:url(#a)}
+    .retflow{stroke:var(--ret)}
+    .genflow{stroke:var(--gen)}
+    .advflow{stroke:var(--adv);stroke-dasharray:7 5}
+    .barred{fill:none;stroke:var(--stop);stroke-width:2.5;stroke-dasharray:7 5}
+    .stopbar{stroke:var(--stop);stroke-width:5;stroke-linecap:round}
+    .sep{stroke:var(--hair);stroke-width:2}
+    .bound{stroke:var(--ret);stroke-width:3;stroke-dasharray:10 6}
   </style>
-  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
-  <rect width="800" height="1050" fill="var(--bg)"/><text class="title" x="400" y="55" text-anchor="middle">Single-pass: selected evidence → Sol → validate</text>
-  <path class="stage" d="M120 105H680V235H120Z"/><path d="M620 105V165H680" fill="var(--bg)" stroke="var(--line)" stroke-width="2"/><text class="label" x="400" y="157" text-anchor="middle">Authenticated handoff</text><text class="body muted" x="400" y="198" text-anchor="middle">119 exact topic contexts + citation domains</text>
-  <path class="flow" d="M400 235V300" vector-effect="non-scaling-stroke"/>
-  <rect class="gen" x="85" y="310" width="630" height="170" rx="9"/><text class="label" x="400" y="358" text-anchor="middle">openai/gpt-5.6-sol</text><text class="body" x="400" y="400" text-anchor="middle">medium reasoning • strict structured output</text><text class="body" x="400" y="440" text-anchor="middle">12,000-token ceiling • complete selected evidence</text>
-  <path class="flow" d="M400 480V550" vector-effect="non-scaling-stroke"/>
-  <path class="gate" d="M400 550L665 665L400 780L135 665Z"/><text class="label" x="400" y="635" text-anchor="middle">Local validation</text><text class="small" x="400" y="674" text-anchor="middle">exact narrative • allowed citations • unique references</text><text class="small" x="400" y="708" text-anchor="middle">exact hints • answer structure • ≤1,024 words</text>
-  <path class="flow retry" d="M135 665H55V395H85" vector-effect="non-scaling-stroke"/><text class="small muted" x="55" y="540" transform="rotate(-90 55 540)" text-anchor="middle">one semantic retry if needed</text>
-  <path class="flow" d="M400 780V850" vector-effect="non-scaling-stroke"/>
-  <rect class="ok" x="105" y="860" width="590" height="145" rx="9"/><text class="label" x="400" y="910" text-anchor="middle">rag26-ss1</text><text class="body" x="400" y="952" text-anchor="middle">119/119 valid • accepted by Evalbase</text><text class="small muted" x="400" y="985" text-anchor="middle">121 Sol calls • two topics used attempt two</text>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+
+  <rect width="1000" height="520" fill="var(--bg)"/>
+  <text class="h" x="40" y="46">One pass, one retry, and the retry was almost never needed</text>
+  <rect class="ret" x="40" y="100" width="190" height="76" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="135" y="132" text-anchor="middle">the handoff</text>
+  <text class="tiny" x="135" y="158" text-anchor="middle">rendered once, deterministically</text>
+  <path class="flow" d="M230 138H272" vector-effect="non-scaling-stroke"/>
+  <rect class="gen" x="272" y="92" width="230" height="92" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="387" y="124" text-anchor="middle">openai/gpt-5.6-sol</text>
+  <text class="tiny" x="387" y="150" text-anchor="middle">medium reasoning · strict output</text>
+  <text class="tiny" x="387" y="170" text-anchor="middle">12,000-token ceiling</text>
+  <path class="flow" d="M502 138H544" vector-effect="non-scaling-stroke"/>
+  <rect class="adv" x="544" y="92" width="236" height="92" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="662" y="124" text-anchor="middle">local validation</text>
+  <text class="tiny" x="662" y="150" text-anchor="middle">narrative · citations · references</text>
+  <text class="tiny" x="662" y="170" text-anchor="middle">1,024-word ceiling</text>
+  <path class="flow" d="M780 138H822" vector-effect="non-scaling-stroke"/>
+  <rect class="ok" x="822" y="110" width="140" height="56" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="892" y="144" text-anchor="middle">published</text>
+  <path class="flow advflow" d="M662 184V222H387V192" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="524" y="242" text-anchor="middle" fill="var(--adv)">one more attempt, and no more</text>
+  <line class="sep" x1="40" y1="296" x2="960" y2="296" vector-effect="non-scaling-stroke"/>
+  <text class="s" x="40" y="330">How often that second attempt was used:</text>
+  <rect x="40.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="55.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="70.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="86.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="101.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="117.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="132.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="147.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="163.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="178.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="194.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="209.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="224.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="240.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="255.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="271.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="286.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="301.8" y="360" width="9" height="20" rx="2" fill="var(--adv)"/>
+  <rect x="317.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="332.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="348.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="363.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="378.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="394.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="409.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="425.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="440.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="455.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="471.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="486.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="502.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="517.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="532.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="548.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="563.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="579.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="594.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="609.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="625.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="640.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="656.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="671.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="686.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="702.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="717.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="733.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="748.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="763.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="779.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="794.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="810.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="825.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="840.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="856.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="871.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="887.0" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="902.4" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="917.8" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="933.2" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="948.6" y="360" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="40.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="55.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="70.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="86.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="101.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="117.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="132.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="147.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="163.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="178.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="194.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="209.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="224.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="240.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="255.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="271.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="286.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="301.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="317.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="332.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="348.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="363.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="378.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="394.2" y="386" width="9" height="20" rx="2" fill="var(--adv)"/>
+  <rect x="409.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="425.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="440.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="455.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="471.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="486.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="502.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="517.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="532.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="548.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="563.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="579.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="594.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="609.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="625.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="640.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="656.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="671.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="686.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="702.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="717.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="733.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="748.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="763.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="779.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="794.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="810.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="825.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="840.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="856.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="871.6" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="887.0" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="902.4" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="917.8" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <rect x="933.2" y="386" width="9" height="20" rx="2" fill="none" stroke="var(--hair)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="40" y="432">119 topics · 2 used the second attempt · 121 Sol calls in all</text>
+  <text class="s" x="40" y="472">Answers run from 203 to 749 words with 10 to 40 references.</text>
 </svg>

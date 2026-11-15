@@ -1,25 +1,82 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1220" role="img" aria-labelledby="multi-title multi-desc">
-  <title id="multi-title">Bounded multi-stage Luna and Sol generation</title>
-  <desc id="multi-desc">Luna creates a narrative blueprint and audits authenticated evidence groups. Sol writes a valid draft and may propose a bounded splice revision. Luna screens operations for five safety dimensions. Local code applies only accepted operations or preserves the draft fallback, then validates and publishes accepted run rag26-ms1-final.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" role="img" aria-labelledby="ms-title ms-desc">
+  <title id="ms-title">Seven handoffs between three actors, in one pass</title>
+  <desc id="ms-desc">Three horizontal lanes: Luna at the top, Sol in the middle, local code at the bottom. The same sealed evidence enters all three. Seven numbered steps zigzag between the lanes in order: Luna plans the narrative blueprint, Sol writes the structured draft, Luna audits each authenticated evidence group, local code merges the audits, Sol proposes a bounded splice revision, Luna screens each proposed operation against support, atomicity, materiality, redundancy and replacement safety, and local code applies only the operations that passed all five. The path runs left to right once and never loops back. If revision work is malformed, ambiguous or rejected, the already validated draft stands. The accepted run made 894 Luna calls and 264 Sol calls, 1,158 provider calls in all.</desc>
   <style>
-    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7;--ok:#277a45;--ok-soft:#ddf2e3}
-    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616;--ok:#82dda0;--ok-soft:#173c25}}
-    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:33px;font-weight:700}.label{font-size:25px;font-weight:700}.body{font-size:21px}.small{font-size:18px}.muted{fill:var(--muted)}.gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:3}.flow{fill:none;stroke:var(--gen);stroke-width:3;marker-end:url(#arrow)}.dash{stroke:var(--adv);stroke-dasharray:12 8}
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--hair:#cdd8d1;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--ok:#277a45;--ok-soft:#ddf2e3;--adv:#91610d;--adv-soft:#faecc7;--stop:#b3261e;--stop-soft:#fbe4e2}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--hair:#2f3b35;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--ok:#82dda0;--ok-soft:#173c25;--adv:#f0c46f;--adv-soft:#433616;--stop:#f2b8b5;--stop-soft:#42211f}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+    .h{font-size:25px;font-weight:700}
+    .u{font-size:20px;font-weight:700}
+    .lab{font-size:18px;font-weight:650}
+    .s{font-size:16px;fill:var(--muted)}
+    .tiny{font-size:14px;fill:var(--muted)}
+    .mono{font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink)}
+    .panel{fill:var(--panel);stroke:var(--hair);stroke-width:2}
+    .ret{fill:var(--ret-soft);stroke:var(--ret);stroke-width:2.5}
+    .gen{fill:var(--gen-soft);stroke:var(--gen);stroke-width:2.5}
+    .ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:2.5}
+    .adv{fill:var(--adv-soft);stroke:var(--adv);stroke-width:2.5}
+    .flow{fill:none;stroke:var(--line);stroke-width:2.5;marker-end:url(#a)}
+    .retflow{stroke:var(--ret)}
+    .genflow{stroke:var(--gen)}
+    .advflow{stroke:var(--adv);stroke-dasharray:7 5}
+    .barred{fill:none;stroke:var(--stop);stroke-width:2.5;stroke-dasharray:7 5}
+    .stopbar{stroke:var(--stop);stroke-width:5;stroke-linecap:round}
+    .sep{stroke:var(--hair);stroke-width:2}
+    .bound{stroke:var(--ret);stroke-width:3;stroke-dasharray:10 6}
   </style>
-  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
-  <rect width="800" height="1220" fill="var(--bg)"/><text class="title" x="400" y="54" text-anchor="middle">Multi-stage: bounded coverage and edit safety</text>
-  <rect class="stage" x="120" y="95" width="560" height="90" rx="9"/><text class="label" x="400" y="150" text-anchor="middle">Authenticated selected-evidence handoff</text>
-  <path class="flow dash" d="M300 185V255" vector-effect="non-scaling-stroke"/><path class="flow dash" d="M500 185V255" vector-effect="non-scaling-stroke"/>
-  <rect class="adv" x="45" y="265" width="330" height="130" rx="9"/><text class="label" x="210" y="313" text-anchor="middle">Luna blueprint</text><text class="small" x="210" y="350" text-anchor="middle">narrative-anchored obligations</text><text class="small muted" x="210" y="378" text-anchor="middle">bounded plan + fallback normalization</text>
-  <rect class="adv" x="425" y="265" width="330" height="130" rx="9"/><text class="label" x="590" y="313" text-anchor="middle">Luna group audits</text><text class="small" x="590" y="350" text-anchor="middle">one per evidence group</text><text class="small muted" x="590" y="378" text-anchor="middle">691 across the full run</text>
-  <path class="flow" d="M210 395V455H400M590 395V455H400V490" vector-effect="non-scaling-stroke"/>
-  <rect class="gen" x="95" y="500" width="610" height="120" rx="9"/><text class="label" x="400" y="548" text-anchor="middle">Sol structured draft</text><text class="body muted" x="400" y="588" text-anchor="middle">validated before any revision can proceed</text>
-  <path class="flow" d="M400 620V680" vector-effect="non-scaling-stroke"/>
-  <rect class="gen" x="95" y="690" width="610" height="120" rx="9"/><text class="label" x="400" y="738" text-anchor="middle">Sol bounded splice proposal</text><text class="body muted" x="400" y="778" text-anchor="middle">keep draft or ≤6 indexed operations</text>
-  <path class="flow dash" d="M400 810V865" vector-effect="non-scaling-stroke"/>
-  <rect class="adv" x="75" y="875" width="650" height="125" rx="9"/><text class="label" x="400" y="920" text-anchor="middle">Optional Luna operation screen</text><text class="small" x="400" y="958" text-anchor="middle">support • atomicity • materiality • redundancy • replacement safety</text>
-  <path class="flow" d="M400 1000V1055" vector-effect="non-scaling-stroke"/>
-  <path class="stage" d="M400 1055L635 1120L400 1185L165 1120Z"/><text class="label" x="400" y="1113" text-anchor="middle">Local apply + validate</text><text class="small muted" x="400" y="1145" text-anchor="middle">safe subset or validated draft fallback</text>
-  <rect class="ok" x="580" y="1160" width="195" height="48" rx="24"/><text class="small" x="677" y="1191" text-anchor="middle">rag26-ms1-final ✓</text>
-  <path class="flow" d="M635 1120H677V1160" vector-effect="non-scaling-stroke"/>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+
+  <rect width="1000" height="560" fill="var(--bg)"/>
+  <text class="h" x="40" y="46">The work changes hands seven times, in one pass</text>
+  <text class="s" x="40" y="76">Local code owns every boundary; neither model can widen its own budget.</text>
+  <line class="sep" x1="190" y1="150" x2="960" y2="150" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="170" y="156" text-anchor="end" fill="var(--adv)">Luna</text>
+  <line class="sep" x1="190" y1="250" x2="960" y2="250" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="170" y="256" text-anchor="end" fill="var(--gen)">Sol</text>
+  <line class="sep" x1="190" y1="350" x2="960" y2="350" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="170" y="356" text-anchor="end" fill="var(--ret)">local code</text>
+  <rect class="adv" x="184" y="128" width="92" height="44" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="230" y="156" text-anchor="middle">plans</text>
+  <circle cx="184" cy="128" r="11" fill="var(--panel)" stroke="var(--hair)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="184" y="133" text-anchor="middle">1</text>
+  <path class="flow" d="M276 150C316 150 244 250 282 250" vector-effect="non-scaling-stroke"/>
+  <rect class="gen" x="284" y="228" width="92" height="44" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="330" y="256" text-anchor="middle">drafts</text>
+  <circle cx="284" cy="228" r="11" fill="var(--panel)" stroke="var(--hair)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="284" y="233" text-anchor="middle">2</text>
+  <path class="flow" d="M376 250C416 250 344 150 382 150" vector-effect="non-scaling-stroke"/>
+  <rect class="adv" x="384" y="128" width="92" height="44" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="430" y="156" text-anchor="middle">audits</text>
+  <circle cx="384" cy="128" r="11" fill="var(--panel)" stroke="var(--hair)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="384" y="133" text-anchor="middle">3</text>
+  <path class="flow" d="M476 150C516 150 444 350 482 350" vector-effect="non-scaling-stroke"/>
+  <rect class="ret" x="484" y="328" width="92" height="44" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="530" y="356" text-anchor="middle">merges</text>
+  <circle cx="484" cy="328" r="11" fill="var(--panel)" stroke="var(--hair)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="484" y="333" text-anchor="middle">4</text>
+  <path class="flow" d="M576 350C616 350 544 250 582 250" vector-effect="non-scaling-stroke"/>
+  <rect class="gen" x="584" y="228" width="92" height="44" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="630" y="256" text-anchor="middle">proposes</text>
+  <circle cx="584" cy="228" r="11" fill="var(--panel)" stroke="var(--hair)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="584" y="233" text-anchor="middle">5</text>
+  <path class="flow" d="M676 250C716 250 644 150 682 150" vector-effect="non-scaling-stroke"/>
+  <rect class="adv" x="684" y="128" width="92" height="44" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="730" y="156" text-anchor="middle">screens</text>
+  <circle cx="684" cy="128" r="11" fill="var(--panel)" stroke="var(--hair)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="684" y="133" text-anchor="middle">6</text>
+  <path class="flow" d="M776 150C816 150 764 350 802 350" vector-effect="non-scaling-stroke"/>
+  <rect class="ret" x="804" y="328" width="92" height="44" rx="8" vector-effect="non-scaling-stroke"/>
+  <text class="lab" x="850" y="356" text-anchor="middle">applies</text>
+  <circle cx="804" cy="328" r="11" fill="var(--panel)" stroke="var(--hair)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <text class="tiny" x="804" y="333" text-anchor="middle">7</text>
+  <text class="tiny" x="190" y="110">the same sealed evidence reaches all three lanes</text>
+  <rect class="panel" x="230" y="404" width="350" height="92" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="s" x="248" y="432">What bounds each hand</text>
+  <text class="tiny" x="248" y="456">≤ 6 audit cards per group · ≤ 3 proposed edits</text>
+  <text class="tiny" x="248" y="478">all five screens must pass · two Sol reservations</text>
+  <rect class="ok" x="610" y="404" width="350" height="92" rx="10" vector-effect="non-scaling-stroke"/>
+  <text class="s" x="628" y="432">If any of it fails</text>
+  <text class="tiny" x="628" y="456">the already validated draft stands</text>
+  <text class="tiny" x="628" y="478">894 Luna + 264 Sol = 1,158 provider calls</text>
 </svg>
