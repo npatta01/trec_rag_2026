@@ -421,7 +421,9 @@ for (const forbidden of ["Authorization:", "Bearer ", "rag2026-"]) {
 
 const agents = fs.readFileSync(path.join(reportsRoot, "..", "AGENTS.md"), "utf8");
 const normalizedAgents = agents.replace(/\s+/g, " ");
-const rootReadme = fs.readFileSync(path.join(reportsRoot, "..", "README.md"), "utf8");
+// The README is the short front door now; the project hub is where every
+// artifact, the canonical Quarto source included, has to stay reachable.
+const projectHub = fs.readFileSync(path.join(reportsRoot, "..", "index.html"), "utf8");
 
 const evaluationSignals = [
   "reports/2026-retrieval-nugget-coverage.html",
@@ -513,7 +515,7 @@ for (const target of [
   "reports/2026-competition-architecture.qmd",
 ]) {
   assert(agents.includes(target), `AGENTS.md should link ${target}`);
-  assert(rootReadme.includes(target), `README.md should link ${target}`);
+  assert(projectHub.includes(target), `the project hub should link ${target}`);
 }
 
 for (const signal of [

@@ -17,7 +17,7 @@ const html = fs.readFileSync(htmlPath, "utf8");
 const requiredSignals = [
   "TREC RAG Reports",
   "Reports Home",
-  "Final 2026 submission architecture",
+  "final 2026 submission architecture",
   "Frozen source → Retrieval submissions + RAG submissions",
   "Accepted submissions",
   "../index.html",
@@ -43,9 +43,9 @@ const requiredSignals = [
   "../experiment.md",
   "class=\"topbar\"",
   "class=\"hero\"",
-  "class=\"shell hero-grid\"",
-  "class=\"route-grid\"",
-  "class=\"report-card",
+  "class=\"shell topbar-inner\"",
+  "class=\"grid two\"",
+  "class=\"card ",
   "class=\"label",
   "class=\"button primary\"",
 ];
@@ -166,5 +166,16 @@ assert(
   !reportHrefs.some((href) => /comparison|side[- ]by[- ]side/i.test(href)),
   "reports index should not add a comparison or side-by-side report target",
 );
+
+// The talk follows rag2026-18, not rag2026-17, and the slide count moved once
+// already — so the page names the topic and leaves the count to the deck.
+assert(html.includes("rag2026-18"), "reports index should name the worked example");
+assert(!html.includes("rag2026-17"), "reports index should not name a topic the talk does not use");
+assert(!/\d+-slide/.test(html), "reports index should not pin a slide count that drifts");
+
+// Everything the hub owns is reachable from here in one hop.
+for (const href of ["../index.html", "../index.html#approach", "2026-trec-rag-talk.html", "2026-organizer-score-explorer.html"]) {
+  assert(html.includes(`href="${href}"`), `reports index should link ${href}`);
+}
 
 console.log("reports index smoke test passed");
