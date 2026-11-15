@@ -21,7 +21,7 @@ const required = [
   // the film, as a still that links to the player on the site: GitHub strips
   // <video> out of README markdown, so a clickable poster is the embed
   "reports/2026-trec-rag-approach-still.jpg",
-  `[▶ Watch the approach](${site}#approach)`,
+  `[▶ Watch it with sound](${site}#approach)`,
   `## [Project site →](${site})`,
   "[Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf)",
   "reports/2026-trec-rag-talk.html",
@@ -60,8 +60,14 @@ for (const target of links) {
   assert(fs.existsSync(path.join(root, target)), `README target missing: ${target}`);
 }
 
-// GitHub sanitizes <video> out of README markdown, so writing one would ship a
-// blank gap. Verified against api.github.com/markdown.
-assert(!/<video[\s>]/.test(source), "GitHub strips <video> from READMEs; link a still instead");
+// GitHub renders <video> in a README only when the src is one of its own
+// uploaded attachments; every other source is stripped and would ship a blank
+// gap. Checked against api.github.com/markdown and a live rendered README.
+const videos = [...source.matchAll(/<video[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
+assert(videos.length === 1, `README should carry exactly one player, found ${videos.length}`);
+assert(
+  videos[0].startsWith("https://github.com/user-attachments/assets/"),
+  `a README <video> src must be a GitHub attachment, found ${videos[0]}`,
+);
 
 console.log("README front-door contract passed");
