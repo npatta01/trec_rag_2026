@@ -34,6 +34,10 @@ from trec_rag.offline_evaluation import (
     JudgeSettings,
     build_evaluation_bundle,
 )
+from platform_support import (
+    REQUIRES_LINUX_PUBLICATION,
+    REQUIRES_PROCFS,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
@@ -228,6 +232,7 @@ def _local_hrefs(page: str) -> tuple[str, ...]:
     )
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_build_bundle_writes_summary_topics_and_manifest_with_matching_receipt(
     tmp_path: Path,
 ) -> None:
@@ -268,6 +273,7 @@ def test_build_bundle_writes_summary_topics_and_manifest_with_matching_receipt(
     )
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_is_deterministic_and_loads_run_data_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -350,6 +356,7 @@ def test_bundle_rejects_an_external_output_directory(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("failed_name", ("index.html", "bundle-manifest.json"))
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_write_failure_removes_only_owned_staging(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_name: str
 ) -> None:
@@ -373,6 +380,7 @@ def test_bundle_write_failure_removes_only_owned_staging(
     assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_manifest_is_written_last_and_all_links_resolve(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -476,6 +484,7 @@ def test_bundle_privacy_scans_the_frozen_index_bytes(
     "failure_point",
     ("topic-render", "summary-render", "directory-fsync", "rename", "hash"),
 )
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_failure_points_never_publish_a_partial_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
 ) -> None:
@@ -515,6 +524,7 @@ def test_bundle_failure_points_never_publish_a_partial_target(
     assert list(fixture.retrieval_output.glob(".partial-bundle.*.tmp")) == []
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_build_does_not_modify_source_artifacts(tmp_path: Path) -> None:
     fixture = build_run(tmp_path, (TopicSpec("alpha-topic", "alpha"),))
     before = {
@@ -535,6 +545,7 @@ def test_bundle_build_does_not_modify_source_artifacts(tmp_path: Path) -> None:
     assert after == before
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_makes_no_network_call_or_candidate_ledger_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -590,6 +601,7 @@ def test_bundle_cleanup_refuses_a_substituted_staging_directory(
     assert not target.exists()
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_cleanup_does_not_delete_substituted_foreign_guardian(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -659,6 +671,7 @@ def test_bundle_rejects_a_topic_replaced_after_initial_validation(
     assert foreign.read_text(encoding="utf-8") == "foreign topic bytes"
 
 
+@REQUIRES_PROCFS
 def test_bundle_rename_seam_publishes_pinned_payload_after_guardian_substitution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -694,6 +707,7 @@ def test_bundle_rename_seam_publishes_pinned_payload_after_guardian_substitution
     assert foreign_paths and foreign_paths[0].read_text(encoding="utf-8") == "must survive"
 
 
+@REQUIRES_PROCFS
 def test_bundle_rename_seam_refuses_a_replaced_payload_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -729,6 +743,7 @@ def test_bundle_rename_seam_refuses_a_replaced_payload_entry(
     assert foreign_payloads and (foreign_payloads[0] / "foreign.txt").read_text(encoding="utf-8") == "must survive"
 
 
+@REQUIRES_PROCFS
 def test_bundle_rename_primitive_rechecks_page_after_outer_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -799,6 +814,7 @@ def test_bundle_rename_refuses_a_recreated_target_parent(
     assert list(parent.iterdir()) == []
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_cleanup_quarantine_rejects_foreign_file_at_delete_seam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -840,6 +856,7 @@ def test_bundle_cleanup_quarantine_rejects_foreign_file_at_delete_seam(
     assert not target.exists()
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_cleanup_quarantine_rejects_foreign_directory_at_delete_seam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -882,6 +899,7 @@ def test_bundle_cleanup_quarantine_rejects_foreign_directory_at_delete_seam(
     "failed_path",
     ("index.html", "topics/alpha-topic.html", "bundle-manifest.json"),
 )
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_receipt_failure_still_cleans_registered_owned_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_path: str
 ) -> None:
@@ -902,6 +920,7 @@ def test_bundle_receipt_failure_still_cleans_registered_owned_files(
     assert list(fixture.retrieval_output.glob(f".{target.name}.*.tmp")) == []
 
 
+@REQUIRES_PROCFS
 def test_bundle_freezes_pages_before_late_pinned_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -938,6 +957,7 @@ def test_bundle_freezes_pages_before_late_pinned_validation(
 
 
 @pytest.mark.parametrize("mutation", ("addition", "replacement"))
+@REQUIRES_PROCFS
 def test_bundle_freezes_root_during_final_pinned_reconciliation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -991,6 +1011,7 @@ def test_bundle_freezes_root_during_final_pinned_reconciliation(
     assert not (target / "unlisted.txt").exists()
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_freezes_pages_before_success_receipt_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1024,6 +1045,7 @@ def test_bundle_freezes_pages_before_success_receipt_verification(
     assert mutation_errors == [PermissionError]
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_freezes_root_against_unlisted_file_during_receipt_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1058,6 +1080,7 @@ def test_bundle_freezes_root_against_unlisted_file_during_receipt_verification(
     }
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_freezes_topics_directory_during_receipt_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1090,6 +1113,7 @@ def test_bundle_freezes_topics_directory_during_receipt_verification(
     assert (target / "topics" / "alpha-topic.html").is_file()
 
 
+@REQUIRES_PROCFS
 def test_bundle_closes_its_page_fds_before_validation_and_freeze(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1116,6 +1140,7 @@ def test_bundle_closes_its_page_fds_before_validation_and_freeze(
     assert observed_page_fds == []
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_receipt_verification_reuses_prevalidated_hashes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1136,6 +1161,7 @@ def test_bundle_receipt_verification_reuses_prevalidated_hashes(
 
 
 @pytest.mark.parametrize("substitute", (False, True))
+@REQUIRES_PROCFS
 def test_bundle_partial_write_failure_keeps_foreign_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, substitute: bool
 ) -> None:
@@ -1173,6 +1199,7 @@ def test_bundle_partial_write_failure_keeps_foreign_replacement(
         assert list(fixture.retrieval_output.glob(f".{target.name}.*.tmp")) == []
 
 
+@REQUIRES_PROCFS
 def test_bundle_publication_parent_fd_closes_on_libc_configuration_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1233,6 +1260,7 @@ def test_bundle_rejects_broken_relative_cross_page_fragment(
     assert not target.exists()
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_link_validation_parses_each_page_once_per_phase(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1270,6 +1298,7 @@ def test_bundle_link_validation_parses_each_page_once_per_phase(
     assert feed_count == 3
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_rejects_a_late_empty_target_without_overwriting_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1311,6 +1340,7 @@ def test_bundle_rejects_a_late_empty_target_without_overwriting_it(
     assert list(fixture.retrieval_output.glob(".late-target.*.tmp")) == []
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_rename_failure_refreezes_staged_payload_before_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1351,6 +1381,7 @@ def test_bundle_rename_failure_refreezes_staged_payload_before_cleanup(
     assert list(fixture.retrieval_output.glob(".injected-rename-failure.*.tmp")) == []
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_keeps_complete_target_when_post_rename_fsync_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1375,6 +1406,7 @@ def test_bundle_keeps_complete_target_when_post_rename_fsync_fails(
         )
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_reports_parent_reopen_failure_after_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1398,6 +1430,7 @@ def test_bundle_reports_parent_reopen_failure_after_publication(
     assert (target / "bundle-manifest.json").is_file()
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_does_not_retain_topic_render_buffer_during_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1481,6 +1514,7 @@ def test_summary_projection_projects_only_safe_counts_and_attention_state(
     assert "docid" not in {field.name for field in fields(summary.topics[0])}
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_accepted_source_debug_bundle_reports_rag_output_supplied(tmp_path: Path) -> None:
     fixture = build_accepted_run(
         tmp_path,

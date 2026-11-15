@@ -17,6 +17,7 @@ from trec_rag.topic_dispatch import (
     dispatch_topics,
     read_topic_receipt,
 )
+from platform_support import REQUIRES_FORK_START_METHOD
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -440,6 +441,7 @@ def test_dispatch_receipt_rejects_a_records_database_from_another_run(
         competition_retrieval._topic_completion_for_dispatch(config, topic)
 
 
+@REQUIRES_FORK_START_METHOD
 def test_real_production_worker_crosses_process_boundary_with_pinned_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

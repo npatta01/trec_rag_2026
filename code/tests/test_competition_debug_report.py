@@ -36,6 +36,10 @@ from trec_rag.generation_handoff import (
     serialize_generation_handoff,
 )
 from trec_rag.topics import Topic
+from platform_support import (
+    REQUIRES_LINUX_PUBLICATION,
+    REQUIRES_PROCFS,
+)
 
 
 def _json_bytes(value: object) -> bytes:
@@ -4318,6 +4322,7 @@ def test_cli_emits_one_compact_stable_json_receipt(tmp_path: Path, capsys: pytes
     assert target.read_text(encoding="utf-8").startswith("<!doctype html>")
 
 
+@REQUIRES_LINUX_PUBLICATION
 def test_bundle_cli_emits_one_compact_stable_json_receipt(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -4518,6 +4523,7 @@ def test_atomic_success_directory_fsyncs_after_backup_unlink(
     assert list(retrieval_output.glob(".competition_debug_report.html.*.bak")) == []
 
 
+@REQUIRES_PROCFS
 def test_atomic_cleanup_preserves_recovery_when_first_recovery_copy_fsync_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

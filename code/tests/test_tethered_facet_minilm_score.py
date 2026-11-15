@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import trec_rag.tethered_facet_minilm_score as module
+from platform_support import REQUIRES_RERANKER_DEPENDENCIES
 
 
 class _ScoreCache:
@@ -44,6 +45,7 @@ class _Runner:
         return [0.25] * len(rows)
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_local_scoring_uses_score_many_and_bounded_lookups(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -5,28 +5,43 @@ Reusable Python helpers for repository notebooks and experiments.
 ## Where the tests run
 
 The pipeline was built and run on Linux, and parts of it require Linux by
-design. `pytest` is green there. On macOS most of the suite passes, but these
-failures are expected and are not regressions:
+design. `pytest` is green on both Linux and macOS; what cannot run on macOS is
+skipped rather than failed, and each skip names what is missing.
+[`code/tests/platform_support.py`](../tests/platform_support.py) holds those
+conditions, and every one of them is false on a Linux host, so nothing is
+hidden there.
 
-- **Publication needs Linux.** `competition_retrieval._rename_directory_noreplace`
+- **`REQUIRES_LINUX_PUBLICATION`.** `competition_retrieval._rename_directory_noreplace`
   needs `renameat2`, and `competition_debug_bundle` refuses a non-Linux host
   outright, both so a directory can be published without replacing anything
   already at the destination. macOS offers `renameatx_np` with `RENAME_EXCL`,
   which nothing here uses yet.
-- **The reranker needs a Linux x86_64 host.** `transformers` and
+- **`REQUIRES_RERANKER_DEPENDENCIES`.** `transformers` and
   `sentence-transformers` carry
   `sys_platform == 'linux' and platform_machine == 'x86_64'` markers in
-  `pyproject.toml`, so they are never installed elsewhere and tests that import
-  them fail.
-- **Some tests read `/proc/self/fd` themselves** to name the file behind a
-  descriptor. The equivalent on macOS is `fcntl` `F_GETPATH`.
-- **Temporary paths cross a symlink.** macOS puts `tmp_path` under `/var`,
-  which is a link to `/private/var`, and the bundle validators reject any path
-  component that is a symbolic link.
+  `pyproject.toml`, so local reranking is only installable on a Linux x86_64
+  host.
+- **`REQUIRES_BASH_4`.** The shard wrapper scripts under `code/tools/` use
+  `declare -A`, which needs bash 4. macOS ships bash 3.2, so these are the one
+  group you can recover locally: install a newer bash and put it ahead of
+  `/bin` on `PATH`.
+- **`REQUIRES_PROCFS`.** A few tests name the file behind a descriptor by
+  reading `/proc/self/fd`. The macOS equivalent is `fcntl` `F_GETPATH`.
+- **`REQUIRES_FORK_START_METHOD`.** Two tests need a child to inherit state.
+  macOS defaults `multiprocessing` to `spawn`, and forking a process that
+  already holds threads segfaults there.
 
-Opening a topic database is not on that list: `topic_records` reaches the
-hashed inode through `/proc/self/fd` where it exists and `/dev/fd` otherwise,
-so the same inode binding holds on both platforms.
+One group is marked `xfail(strict=True)` rather than skipped, because it looks
+like a real bug rather than a platform limit: the bundle and segmentation
+validators reject any path component that is a symbolic link and compare
+`realpath` output against an unresolved root, so they fail wherever the
+temporary directory sits behind a symlink — macOS puts it under `/var`, a link
+to `/private/var`. Strict keeps it honest: fixing it turns the marker into a
+failure instead of silence.
+
+Opening a topic database is on neither list: `topic_records` reaches the hashed
+inode through `/proc/self/fd` where it exists and `/dev/fd` otherwise, so the
+same inode binding holds on both platforms.
 
 ## Reusable tracing modules
 

@@ -43,6 +43,7 @@ from trec_rag.topic_dispatch import (
     TopicJobReceipt,
     publish_topic_receipt,
 )
+from platform_support import XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 
 
 _ENDPOINT = "https://pyserini.test/v1/climbmix-400b/search"
@@ -544,6 +545,7 @@ def _run_merged_offline_replay(
     return job.topic_root
 
 
+@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_online_bundle_merge_supports_a_fresh_zero_work_offline_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -587,6 +589,7 @@ def test_online_bundle_merge_supports_a_fresh_zero_work_offline_replay(
         assert counters["model_batches"] == 0
 
 
+@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_pack_validation_uses_the_production_staged_offline_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -624,6 +627,7 @@ def test_pack_validation_uses_the_production_staged_offline_runner(
     )
 
 
+@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_pack_self_verification_preserves_full_official_topics_identity(
     tmp_path: Path,
 ) -> None:
@@ -646,6 +650,7 @@ def test_pack_self_verification_preserves_full_official_topics_identity(
     ).hexdigest()
 
 
+@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_verify_legacy_singleton_bundle_without_topics_member_uses_fallback(
     tmp_path: Path,
 ) -> None:
@@ -662,6 +667,7 @@ def test_verify_legacy_singleton_bundle_without_topics_member_uses_fallback(
     assert all(member.kind != "topics" for member in verified.members)
 
 
+@XFAIL_SYMLINKED_TEMPORARY_DIRECTORY
 def test_legacy_fallback_does_not_replace_multi_topic_identity(
     tmp_path: Path,
 ) -> None:

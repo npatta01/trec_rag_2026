@@ -15,6 +15,7 @@ from trec_rag.all_topic_tethered_score import (
     run_scores,
 )
 from trec_rag.rerank_score_cache import GlobalScoreCache
+from platform_support import REQUIRES_RERANKER_DEPENDENCIES
 
 
 def _sha(text: str) -> str:
@@ -134,6 +135,7 @@ def test_raw_scores_never_normalize_across_queries() -> None:
     assert _percentiles(rows, "f1") == [0.5, 0.5]
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_preflight_has_no_model_load() -> None:
     plan = build_score_plan(
         _union(), _manifest(), backend=_TokenizerOnly(), cache=_EmptyCache()
@@ -152,6 +154,7 @@ def test_preflight_has_no_model_load() -> None:
     assert plan["cache_miss_count"] == 3
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_preflight_reuses_one_facet_pair_even_when_original_also_retrieved_it() -> None:
     plan = build_score_plan(
         _union(), _manifest(), backend=_TokenizerOnly(), cache=_EmptyCache()
@@ -166,6 +169,7 @@ def test_percentiles_reject_duplicate_query_document_identity() -> None:
         percentile_features(rows)
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_explicitly_authorized_historical_topic_uses_same_window_policy() -> None:
     manifest = _manifest()
     manifest["topic_ids"] = ["144"]
@@ -180,6 +184,7 @@ def test_explicitly_authorized_historical_topic_uses_same_window_policy() -> Non
     assert {row["topic_id"] for row in plan["windows"]} == {"144"}
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_topic_outside_experiment_allowlist_is_rejected() -> None:
     manifest = _manifest()
     manifest["topic_ids"] = ["999"]
@@ -193,6 +198,7 @@ def test_topic_outside_experiment_allowlist_is_rejected() -> None:
         )
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_authenticated_union_accepts_normalized_duplicate_text_provenance() -> None:
     union = _union()
     union[0]["stream_provenance"][1]["text_sha256"] = _sha("document  passage")  # type: ignore[index]
@@ -202,6 +208,7 @@ def test_authenticated_union_accepts_normalized_duplicate_text_provenance() -> N
     assert plan["pair_count"] == 3
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_repeated_query_identities_tokenize_the_document_only_once() -> None:
     backend = _TokenizerOnly()
     build_score_plan(_union(), _manifest(), backend=backend, cache=_EmptyCache())
@@ -230,6 +237,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text("".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows))
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_run_is_resumable_without_mutating_shared_cache(tmp_path, monkeypatch) -> None:
     scoring = tmp_path / "scoring"
     scoring.mkdir()
@@ -312,6 +320,7 @@ def _refresh_terminal_seal(scoring: Path) -> None:
 
 
 @pytest.mark.parametrize("artifact", ["document_scores.jsonl", "features.jsonl"])
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_verify_recomputes_aggregates_and_features(
     tmp_path, monkeypatch, artifact
 ) -> None:
@@ -348,6 +357,7 @@ def test_verify_recomputes_aggregates_and_features(
         module.verify_scores(scoring)
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_semantic_replay_rejects_derived_query_and_window_drift(tmp_path) -> None:
     scoring = tmp_path / "scoring"
     scoring.mkdir()
@@ -399,6 +409,7 @@ def test_semantic_replay_rejects_derived_query_and_window_drift(tmp_path) -> Non
         )
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_terminal_publication_recovers_after_interruption(tmp_path, monkeypatch) -> None:
     scoring = tmp_path / "scoring"
     scoring.mkdir()
@@ -433,6 +444,7 @@ def test_terminal_publication_recovers_after_interruption(tmp_path, monkeypatch)
     assert module.verify_scores(scoring)["verified"] is True
 
 
+@REQUIRES_RERANKER_DEPENDENCIES
 def test_create_and_semantically_verify_preflight_end_to_end(
     tmp_path, monkeypatch
 ) -> None:
