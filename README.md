@@ -14,7 +14,8 @@ through the pipeline.
 ## [Project site →](https://npatta01.github.io/trec_rag_2026/)
 
 [Paper (PDF)](output/pdf/2026-trec-rag-paper.pdf) ·
-[Conference talk](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-talk.html)
+[Conference talk (HTML)](https://npatta01.github.io/trec_rag_2026/reports/2026-trec-rag-talk.html) ·
+[Slides (PDF, 31 pages)](reports/2026-trec-rag-talk.pdf)
 
 ## How the system works
 
