@@ -1847,6 +1847,19 @@ def _consume_member(
         )
 
 
+def _temporary_root(temporary: str) -> Path:
+    """Return the real path of a temporary directory this module created.
+
+    `tempfile` reports a macOS temporary directory under `/var`, which is a
+    symlink to `/private/var`.  Paths derived from such a root are compared
+    against resolved paths with `relative_to`, which raises once the two
+    spellings disagree, so an unresolved root makes a bundle look unportable on
+    a host whose temporary directory sits behind a link. Resolving once, here,
+    keeps one spelling throughout.
+    """
+    return Path(temporary).resolve()
+
+
 def _verify_archive(
     archive_path: Path,
     receipt: BundleReceipt,
@@ -2536,7 +2549,7 @@ def _verify_receipted_archive(
         receipt,
     )
     with tempfile.TemporaryDirectory(prefix="trec-rag-bundle-verify-") as temporary:
-        extraction_root = Path(temporary)
+        extraction_root = _temporary_root(temporary)
         staged_experiment, staged_config_sha256, staged_members = _verify_archive(
             archive_path,
             receipt,

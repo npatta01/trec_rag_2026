@@ -67,6 +67,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CANDIDATE_ID = re.compile(r"^ecn1_[0-9a-f]{64}$")
 _CANDIDATE_KINDS = frozenset({"exact_sentence", "exact_sentence_pair"})
 _HASH_CHUNK_BYTES = 1 << 20
+_DESCRIPTOR_PATHS = ("/proc/self/fd/{}", "/dev/fd/{}")
 _BUILDER_BATCH_CANDIDATES = 256
 
 _SCOPED_TABLES = (
@@ -759,21 +760,30 @@ def _descriptor_receipt(descriptor: int, label: str) -> tuple[str, int]:
 
 
 def _connect_readonly_descriptor(descriptor: int) -> sqlite3.Connection:
-    uri = f"file:/proc/self/fd/{descriptor}?mode=ro&immutable=1"
-    database: sqlite3.Connection | None = None
-    try:
-        database = sqlite3.connect(uri, uri=True, check_same_thread=False)
-        database.execute("PRAGMA foreign_keys=ON")
-        database.execute("PRAGMA query_only=ON")
-        database.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
-        return database
-    except (OSError, sqlite3.Error) as exc:
-        if database is not None:
-            try:
-                database.close()
-            except sqlite3.Error:
-                pass
-        raise TopicRecordsIntegrityError("unable to open topic database") from exc
+    # Hand SQLite a path to the open descriptor rather than to the file name, so
+    # the connection reads the same inode the caller already hashed and a path
+    # replaced in between cannot swap the bytes underneath us.  Linux publishes
+    # those paths under /proc/self/fd; Darwin and the other BSDs have no /proc
+    # and publish the same binding through the fdesc filesystem at /dev/fd.
+    # /proc stays first so hosts that have it keep their existing behaviour.
+    failure: Exception | None = None
+    for template in _DESCRIPTOR_PATHS:
+        uri = f"file:{template.format(descriptor)}?mode=ro&immutable=1"
+        database: sqlite3.Connection | None = None
+        try:
+            database = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            database.execute("PRAGMA foreign_keys=ON")
+            database.execute("PRAGMA query_only=ON")
+            database.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+            return database
+        except (OSError, sqlite3.Error) as exc:
+            if database is not None:
+                try:
+                    database.close()
+                except sqlite3.Error:
+                    pass
+            failure = exc
+    raise TopicRecordsIntegrityError("unable to open topic database") from failure
 
 
 def _copy_descriptor(source: int, destination: Path) -> None:

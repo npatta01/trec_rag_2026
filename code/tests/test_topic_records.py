@@ -2278,6 +2278,45 @@ def test_open_hashes_and_connects_to_the_same_database_inode(
         records.close()
 
 
+def test_descriptor_connect_binds_to_the_inode_on_this_platform(
+    tmp_path: Path,
+) -> None:
+    """The descriptor path must reach the open inode, not the file name.
+
+    Linux publishes those paths under /proc/self/fd and Darwin under /dev/fd, so
+    a host missing the first has to reach the second or every topic open fails.
+    Whichever one answers, replacing the path after the descriptor is open must
+    not change what the connection reads.
+    """
+    database = tmp_path / "records.sqlite3"
+    original = sqlite3.connect(database)
+    original.execute("CREATE TABLE marker(value TEXT)")
+    original.execute("INSERT INTO marker VALUES ('original')")
+    original.commit()
+    original.close()
+
+    descriptor = os.open(database, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        impostor = tmp_path / "impostor.sqlite3"
+        other = sqlite3.connect(impostor)
+        other.execute("CREATE TABLE marker(value TEXT)")
+        other.execute("INSERT INTO marker VALUES ('impostor')")
+        other.commit()
+        other.close()
+        os.replace(impostor, database)
+        assert os.stat(database).st_ino != os.fstat(descriptor).st_ino
+
+        connection = topic_records_module._connect_readonly_descriptor(descriptor)
+        try:
+            assert connection.execute("SELECT value FROM marker").fetchone() == (
+                "original",
+            )
+        finally:
+            connection.close()
+    finally:
+        os.close(descriptor)
+
+
 def test_open_handle_stays_bound_after_database_path_replacement(
     tmp_path: Path,
 ) -> None:

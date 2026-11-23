@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 import yaml
+from platform_support import REQUIRES_BASH_4
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -109,6 +110,7 @@ def test_launcher_never_creates_transport_commit_or_mutates_checked_in_template(
     assert ".env.local" in body
 
 
+@REQUIRES_BASH_4
 def test_wrapper_preflight_validates_exact_plan_digest_and_unique_topics(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     (checkout / "code/tools").mkdir(parents=True)
@@ -288,6 +290,7 @@ printf 'uv-sync\\n' >>"$FAKE_RUNTIME/events.log"
     return checkout, plan, env
 
 
+@REQUIRES_BASH_4
 def test_wrapper_runs_topics_sequentially_and_publishes_marker_last(tmp_path: Path) -> None:
     checkout, plan, env = _fake_agentic_checkout(tmp_path)
     result = _run(
@@ -309,6 +312,7 @@ def test_wrapper_runs_topics_sequentially_and_publishes_marker_last(tmp_path: Pa
     assert (tmp_path / "runtime/remote/rag2026-1/bundle-complete.json").exists()
 
 
+@REQUIRES_BASH_4
 def test_wrapper_failure_preserves_prior_topic_and_writes_safe_receipt(tmp_path: Path) -> None:
     checkout, plan, env = _fake_agentic_checkout(tmp_path, fail_topic="rag2026-1")
     result = _run(
@@ -328,6 +332,7 @@ def test_wrapper_failure_preserves_prior_topic_and_writes_safe_receipt(tmp_path:
     assert "secret" not in receipts[0].read_text()
 
 
+@REQUIRES_BASH_4
 def test_wrapper_keeps_output_namespace_empty_until_worker_installs_plan(tmp_path: Path) -> None:
     checkout, plan, env = _fake_agentic_checkout(tmp_path, fail_topic="rag2026-0")
     result = _run(
@@ -345,6 +350,7 @@ def test_wrapper_keeps_output_namespace_empty_until_worker_installs_plan(tmp_pat
     assert (tmp_path / "runtime/remote/task-0/failure-receipt.json").is_file()
 
 
+@REQUIRES_BASH_4
 def test_launcher_runs_dstack_from_transport_directory_for_preview(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     for relative in (
@@ -443,6 +449,7 @@ printf 'fake-preview-ok\\n'
     assert "fake-preview-ok" in result.stdout
 
 
+@REQUIRES_BASH_4
 def test_wrapper_bootstraps_locked_environment_before_using_venv(tmp_path: Path) -> None:
     checkout, plan, env = _fake_agentic_checkout(tmp_path)
     runtime = tmp_path / "runtime"
@@ -488,6 +495,7 @@ chmod 0755 .venv/bin/python .venv/bin/hf
     ]
 
 
+@REQUIRES_BASH_4
 def test_wrapper_prefetches_pinned_mixedbread_before_topic_execution(tmp_path: Path) -> None:
     checkout, plan, env = _fake_agentic_checkout(tmp_path)
     result = _run(

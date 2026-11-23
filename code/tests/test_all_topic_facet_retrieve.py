@@ -29,6 +29,7 @@ from trec_rag.all_topic_facet_retrieve import (
     verify_retrieval,
 )
 from trec_rag.det_sparse_ledger import RawTransportResponse
+from platform_support import REQUIRES_FORK_START_METHOD
 
 
 TOPICS = ("1", "2")
@@ -921,6 +922,7 @@ def test_process_death_leaves_shared_pending_claim_nonretryable(tmp_path: Path) 
     assert replacement.identities == []
 
 
+@REQUIRES_FORK_START_METHOD
 def test_fresh_process_limiter_sessions_share_sqlite_and_grant_ledger(
     tmp_path: Path,
 ) -> None:
