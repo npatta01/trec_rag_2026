@@ -1,0 +1,13 @@
+{
+  "average_prompt_tokens": 4241.4688636363635,
+  "max_length": 8192,
+  "maximum_length_rows": 4396,
+  "maximum_prompt_tokens": 8192,
+  "median_prompt_tokens": 3629,
+  "model": "Qwen/Qwen3-Reranker-8B",
+  "p90_prompt_tokens": 8192,
+  "p95_prompt_tokens": 8192,
+  "rows": 22000,
+  "schema_version": "qwen-pointwise-token-estimate-v1",
+  "total_prompt_tokens": 93312315
+}

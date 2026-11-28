@@ -1,0 +1,16 @@
+{
+  "average_prompt_tokens": 2210.625,
+  "backend": "vllm-generative-scoring-local",
+  "dtype": "bfloat16",
+  "elapsed_seconds": 6.2612820070000055,
+  "model": "Qwen/Qwen3-Reranker-8B",
+  "output_path": "/mnt/c/dev/trec_rag/cache/reranker/organizer_qwen3_8b_bf16/qwen3_reranker_8b_bf16_smoke_scores.jsonl",
+  "projected_seconds_for_requested_rows": 6.2612820070000055,
+  "prompt_tokens": 17685,
+  "prompt_tokens_per_second": 2824.5014328101615,
+  "request_count": 1,
+  "rows_preexisting": 0,
+  "rows_requested": 8,
+  "rows_scored_this_invocation": 8,
+  "schema_version": "local-pointwise-runtime-v1"
+}
